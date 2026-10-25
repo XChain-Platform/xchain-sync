@@ -406,6 +406,10 @@ function addWebSocketAndAccessConfig(config){
     config['MAX_ROLLBACK_DEPTH'] = parseIntMin1(process.env.MAX_ROLLBACK_DEPTH, 100);
     config['MAX_ROLLBACK_DEPTH_EXPLICIT'] = process.env.MAX_ROLLBACK_DEPTH !== undefined;
 
+    // Maximum chain-time window for a quorum-authorized retroactive rewind.
+    config['RETROACTIVE_REWIND_CAP_HOURS'] = parseIntMin1(
+        process.env.RETROACTIVE_REWIND_CAP_HOURS, 72);
+
     // Security: Reject blocks on cross-source verification timeout (instead of applying from primary)
     config['HASH_CONFIRM_STRICT'] = (process.env.HASH_CONFIRM_STRICT || '').toLowerCase() === 'true';
 }

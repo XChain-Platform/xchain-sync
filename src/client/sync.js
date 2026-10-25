@@ -40,6 +40,7 @@ const { decoderLinkBroken, decoderLinkState } = require('./decoder_link');
 const { classDigests } = require('./state_hash_classes');
 const verifiedTip = require('./verified_tip');
 const haltPersistence = require('./halt_persistence');
+const { retroactiveCapBlocks, admitRetroactiveRewind } = require('./retroactive_admission');
 const replicatedTables = require('../schema/replicated_tables');
 const tableLifecycle = require('../table_lifecycle');
 const { SCHEMA_VERSION } = require('../schema/version');
@@ -3338,8 +3339,8 @@ class ClientSync {
     // rollback itself fails), so the DB tip actually moves and the follow-up catch-up
     // resolves since = <forked height>. incrementalCatchUp refuses while _halted, so a
     // rollback that failed closed can never be followed by an advance.
-    async rewindForkedHead(blockIndex){
-        await this.handleReorg({ block_index: blockIndex });
+    async rewindForkedHead(blockIndex, retroactiveReports, retroactive){
+        await this.handleReorg({ block_index: blockIndex, retroactive }, retroactiveReports);
         await this.incrementalCatchUp(this.lastAppliedBlock + 1);
     }
 
@@ -4871,16 +4872,20 @@ class ClientSync {
             this.sources.slice(0, 1), 'reorg-rollback-failed');
     }
 
-    async handleReorg(event){
+    async handleReorg(event, retroactiveReports){
         getLogger().info('Reorg event received for ' + this.chain + '/' + this.network + ' at block ' + event.block_index);
 
         if(this.ignoreReorgWithoutTip(event)) return;
         if(this.ignoreReorgAboveTip(event)) return;
 
-        let depth = this.rollbackGuard.depthFor(this.lastAppliedBlock, event.block_index);
+        const depth = this.rollbackGuard.depthFor(this.lastAppliedBlock, event.block_index);
         if(depth > this.maxRollbackDepth){
-            await this.haltForExcessiveRollback(event, depth);
-            return;
+            const admission = this.retroactiveReorgAdmission(event, depth, retroactiveReports);
+            if(!admission.admit){
+                if(admission.reason === 'no_quorum' && retroactiveReports) return;
+                await this.haltForExcessiveRollback(event, depth);
+                return;
+            }
         }
 
         try {
@@ -4891,40 +4896,93 @@ class ClientSync {
         this.prunePendingReorgs();
     }
 
-    // Gate a source-reported reorg exactly as handleBlockQuorum gates a block: drop an
-    // evicted source's report, unwind once a quorum reports the same height, and leave a
-    // lone report to the confirmation timeout. `rewind` marks a re-delivered forked head,
-    // which re-fetches the tip after the unwind (rewindForkedHead).
+    // Require matching quorum evidence for deep retroactive reports rather than
+    // letting the confirmation timeout unwind from one source. `rewind` marks a
+    // re-delivered forked head, which re-fetches the tip after the unwind.
     async handleSourceReorg(event, sourceIndex, rewind){
         if(this._evictedSources.has(sourceIndex)){
             getLogger().warn('Ignoring reorg at block ' + event.block_index + ' from evicted source ' +
                 (this.sources[sourceIndex] || ('#' + sourceIndex)) + ' for ' + this.chain + '/' + this.network);
             return;
         }
-        if(sourceIndex === undefined || sourceIndex === null || !this.sourceReorgQuorumActive())
+        if(sourceIndex === undefined || sourceIndex === null)
             return this.applyAgreedReorg({ event, rewind: !!rewind });
         if(this.ignoreReorgWithoutTip(event) || this.ignoreReorgAboveTip(event)) return;
 
-        let entry = this.recordReorgVote(event, sourceIndex, rewind);
+        const depth = this.rollbackGuard.depthFor(this.lastAppliedBlock, event.block_index);
+        const retroactiveQuorumRequired = depth > this.maxRollbackDepth && !!event.retroactive &&
+            this.activeSourceCount() > 1;
+        if(!this.sourceReorgQuorumActive() && !retroactiveQuorumRequired){
+            const entry = { event, rewind: !!rewind, reports: new Map() };
+            this.recordReorgReport(entry, event, sourceIndex);
+            return this.applyAgreedReorg(entry);
+        }
+
+        const entry = this.recordReorgVote(event, sourceIndex, rewind);
         if(this.activeReorgVotes(entry) >= this.effectiveQuorum()){
+            if(depth > this.maxRollbackDepth){
+                const admission = this.retroactiveReorgAdmission(event, depth,
+                    this.activeRetroactiveReports(entry));
+                if(admission.reason === 'no_quorum'){
+                    if(entry.timer) clearTimeout(entry.timer);
+                    entry.timer = null;
+                    return;
+                }
+                entry.event = event;
+            }
             this.clearPendingReorg(event.block_index);
             getLogger().info('Reorg at block ' + event.block_index + ' confirmed by ' +
                 this.activeReorgVotes(entry) + ' source(s); unwinding');
             return this.applyAgreedReorg(entry);
         }
-        this.armReorgQuorumTimer(event.block_index);
+        if(depth <= this.maxRollbackDepth || !this.entryHasRetroactiveReport(entry))
+            this.armReorgQuorumTimer(event.block_index);
     }
 
     recordReorgVote(event, sourceIndex, rewind){
-        let height = event.block_index;
+        const height = event.block_index;
         let entry = this._pendingReorgs.get(height);
         if(!entry){
-            entry = { votes: new Set(), timer: null, event, rewind: false };
+            entry = { votes: new Set(), timer: null, event, rewind: false, reports: new Map() };
             this._pendingReorgs.set(height, entry);
         }
         entry.votes.add(sourceIndex);
+        this.recordReorgReport(entry, event, sourceIndex);
         if(rewind) entry.rewind = true;
         return entry;
+    }
+
+    recordReorgReport(entry, event, sourceIndex){
+        if(!entry.reports) entry.reports = new Map();
+        const retroactive = event && event.retroactive;
+        entry.reports.set(sourceIndex, {
+            source: sourceIndex,
+            target: retroactive && retroactive.target,
+            rules_to: retroactive && retroactive.rules_to
+        });
+    }
+
+    activeRetroactiveReports(entry){
+        if(!entry || !entry.reports) return [];
+        return [...entry.reports.values()].filter(report => !this._evictedSources.has(report.source));
+    }
+
+    entryHasRetroactiveReport(entry){
+        return this.activeRetroactiveReports(entry).some(report =>
+            report.target !== undefined || report.rules_to !== undefined);
+    }
+
+    retroactiveReorgAdmission(event, depth, reports){
+        const retroactive = event && event.retroactive &&
+            event.retroactive.target === event.block_index ? event.retroactive : null;
+        return admitRetroactiveRewind({
+            depth,
+            capBlocks: retroactiveCapBlocks(this.coinTicker,
+                this.config['RETROACTIVE_REWIND_CAP_HOURS'] || 72),
+            retroactive,
+            reports: reports || [],
+            quorum: this.effectiveQuorum()
+        });
     }
 
     // Count only votes from sources still active, as the block tally does.
@@ -4954,8 +5012,9 @@ class ClientSync {
     }
 
     async applyAgreedReorg(entry){
-        if(entry.rewind) await this.rewindForkedHead(entry.event.block_index);
-        else await this.handleReorg(entry.event);
+        if(entry.rewind) await this.rewindForkedHead(entry.event.block_index,
+            this.activeRetroactiveReports(entry), entry.event.retroactive);
+        else await this.handleReorg(entry.event, this.activeRetroactiveReports(entry));
     }
 
     armReorgQuorumTimer(height){
