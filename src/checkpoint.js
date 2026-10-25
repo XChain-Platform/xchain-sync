@@ -134,6 +134,27 @@ function isWeightedEntry(v){
     return Number.isFinite(w) && w >= 0;
 }
 
+function verifiedSigners(checkpoint, qualified, canonical){
+    let sigs = checkpoint.validator_signatures;
+    if (typeof sigs === 'string'){
+        try { sigs = JSON.parse(sigs); } catch (e) {
+            console.warn('[checkpoint] malformed validator_signatures at checkpoint_seq ' +
+                          (checkpoint && checkpoint.checkpoint_seq) + '; treating as zero signatures (fail-closed):', e.message);
+            sigs = [];
+        }
+    }
+    if (!Array.isArray(sigs)) sigs = [];
+
+    let validSigs = 0, seen = new Set(), validSigners = [];
+    for (let s of sigs){
+        let pk  = String(s && s.pubkey || '').toLowerCase();
+        let sig = String(s && s.sig || '');
+        if (!pk || seen.has(pk) || !qualified.has(pk)) continue;
+        if (verifySignature(canonical, sig, pk)){ seen.add(pk); validSigs++; validSigners.push(pk); }
+    }
+    return { validSigs, validSigners };
+}
+
 // Verify a checkpoint against the `oracle_publish` set qualified at its snapshot_block
 // (typically the explorer verify endpoint's `validators`, or an independently fetched
 // set). Each validator entry is either a bare 64-hex pubkey, in the legacy count regime,
@@ -167,27 +188,7 @@ function verifyCheckpoint(checkpoint, validators){
     if (commitmentMissing(checkpoint))
         return { valid: false, validSigs: 0, quorum: quorum, weighted: weighted, canonical: canonical };
 
-    let sigs = checkpoint.validator_signatures;
-    if (typeof sigs === 'string'){
-        try { sigs = JSON.parse(sigs); } catch (e) {
-            console.warn('[checkpoint] malformed validator_signatures at checkpoint_seq ' +
-                          (checkpoint && checkpoint.checkpoint_seq) + '; treating as zero signatures (fail-closed):', e.message);
-            sigs = [];
-        }
-    }
-    if (!Array.isArray(sigs)) sigs = [];
-
-    let validSigs = 0, seen = new Set(), validSigners = [];
-    for (let s of sigs){
-        let pk  = String(s && s.pubkey || '').toLowerCase();
-        let sig = String(s && s.sig || '');
-        if (!pk || seen.has(pk) || !qualified.has(pk)) continue;
-        // Only mark a pubkey "seen" once its signature actually verifies. Marking on
-        // first encounter would let a garbage-then-valid pair of entries for the same
-        // qualified validator suppress the real signature (order-dependent quorum
-        // under-count), which fails a legitimately-quorate checkpoint closed.
-        if (verifySignature(canonical, sig, pk)){ seen.add(pk); validSigs++; validSigners.push(pk); }
-    }
+    let { validSigs, validSigners } = verifiedSigners(checkpoint, qualified, canonical);
 
     let valid;
     if (weighted){
