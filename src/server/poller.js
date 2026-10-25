@@ -37,6 +37,12 @@ const { collectRedrivenValidatorRewards } = require('./recovery_rewards');
 const { collectDerivedAnchorRewards } = require('./derived_rewards');
 const { validatorRewardKey } = require('./reward_identity');
 const seedReorgWindow = require('./poller/reorg_window_seed');
+const {
+    rulesFromMarker,
+    retroactiveFromRules,
+    retroactiveForkPoint,
+    withRetroactive
+} = require('./poller/retroactive_rewind');
 const TransparencyLog = require('./transparency_log');
 const { activationDelayBlocks, coinTicker } = require('../consensus-constants');
 const { isStateCommitmentActive } = require('../consensus/gates/state_commitment_gate');
@@ -442,7 +448,10 @@ class ServerPoller {
         // A falling tip can expose replacement content below the new height, so the
         // recorded window identifies the true fork instead of treating currentBlock + 1
         // as authoritative, keeping the rollback deep enough for joined hashes.
-        let forkBlock = await this.resolveForkPoint(currentBlock + 1);
+        const walkBackForkBlock = await this.resolveForkPoint(currentBlock + 1);
+        const marker = await this.db.getSourceReplayMarker();
+        const retroactive = retroactiveFromRules(rulesFromMarker(marker));
+        const forkBlock = retroactiveForkPoint(retroactive, walkBackForkBlock);
         logger.info('Reorg detected for ' + this.chain + '/' + this.network + '/' + this.dbType + ': block went from ' + this.lastPolledBlock + ' to ' + currentBlock + ' (fork at ' + forkBlock + ')');
         if(this.transparencyLog)
             await this.transparencyLog.pruneFrom(forkBlock);
@@ -450,7 +459,7 @@ class ServerPoller {
         // The broadcast occurs only after transparency cleanup succeeds. Any cleanup
         // error leaves the cursor untouched, allowing the enclosing poll loop to retry
         // the complete prune, notification, cursor, hash and status sequence.
-        this.broadcastReorg(forkBlock);
+        this.broadcastReorg(forkBlock, retroactive);
         this.lastPolledBlock = forkBlock - 1;
         // The source hash is a fallback when the bounded recorded window has no entry.
         this.lastPolledBlockHash = this.recentBroadcastHashes.has(this.lastPolledBlock)
@@ -459,19 +468,21 @@ class ServerPoller {
         await this.updateStatus();
     }
 
-    broadcastReorg(forkBlock){
+    broadcastReorg(forkBlock, retroactive = null){
         // A reorg voids the lookup id ceiling read on the old branch; the next batch re-reads it.
         this.contentParityIdCeiling = null;
         // block_index identifies the first orphaned height, so a subscriber removes
         // that height and every successor before accepting replacement block events.
         // dbType routes the rollback when one subscriber follows both database tracks.
-        this.broadcaster.broadcast(this.chain, this.network, {
+        const event = {
             type: 'reorg',
             chain: this.chain,
             network: this.network,
             dbType: this.dbType,
             block_index: forkBlock
-        });
+        };
+        this.broadcaster.broadcast(this.chain, this.network,
+            withRetroactive(event, retroactive));
     }
 
     async streamNewBlocks(currentBlock){
