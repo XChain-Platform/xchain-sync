@@ -18,7 +18,7 @@ const {
     admitRetroactiveRewind,
 } = require('../../../src/client/retroactive_admission');
 
-describe('Retroactive admission rules @regression', function(){
+function registerCapBlockTests(){
     describe('retroactiveCapBlocks', function(){
         it('freezes the block intervals used by the cap', function(){
             assert.deepStrictEqual(RETROACTIVE_BLOCK_SECONDS, {BTC: 600, LTC: 150, DOGE: 60});
@@ -44,7 +44,9 @@ describe('Retroactive admission rules @regression', function(){
             assert.throws(() => retroactiveCapBlocks('BTC', Infinity), /finite positive/);
         });
     });
+}
 
+function registerAdmissionTests(){
     describe('admitRetroactiveRewind', function(){
         const retroactive = {target: 500, rules_to: 'rules-1'};
         const report = (source, target = 500, rulesTo = 'rules-1') => ({
@@ -87,4 +89,9 @@ describe('Retroactive admission rules @regression', function(){
             );
         });
     });
+}
+
+describe('Retroactive admission rules @regression', function(){
+    registerCapBlockTests();
+    registerAdmissionTests();
 });
