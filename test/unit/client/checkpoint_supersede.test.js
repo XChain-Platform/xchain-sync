@@ -52,6 +52,23 @@ function sign(cp, signer){
     return cp;
 }
 
+// A ClientSync stub whose range fetch returns `range` and whose attestation of
+// the `diverging` step reports a divergence, recording each step it attests.
+function syncOverRange(range, diverging, visited){
+    return Object.assign(Object.create(ClientSync.prototype), {
+        chain: 'BTC', coinTicker: 'BTC', network: 'regtest', lastAppliedBlock: 120,
+        config: {}, sources: ['source'],
+        checkpointRootsMatchLocal: async () => ({ status: 'match', mismatches: [] }),
+        fetchCheckpointRange: async () => ({ chain: range }),
+        attestRotationStep: async (next) => {
+            visited.push(next.checkpoint_seq);
+            if(next === diverging)
+                return { verdict: 'divergence', mismatches: [{ field: 'checkpoint_quorum' }] };
+            return null;
+        },
+    });
+}
+
 describe('Checkpoint supersession @regression', function(){
     it('verifies a superseding checkpoint with the gated suffix inside the EQUIV wrapper', function(){
         const signer = makeSigner();
@@ -101,18 +118,7 @@ describe('Checkpoint supersession @regression', function(){
             supersedes_from: 100, rules_digest: RULES_DIGEST,
         });
         const visited = [];
-        const sync = Object.assign(Object.create(ClientSync.prototype), {
-            chain: 'BTC', coinTicker: 'BTC', network: 'regtest', lastAppliedBlock: 120,
-            config: {}, sources: ['source'],
-            checkpointRootsMatchLocal: async () => ({ status: 'match', mismatches: [] }),
-            fetchCheckpointRange: async () => ({ chain: [superseded, superseder] }),
-            attestRotationStep: async (next) => {
-                visited.push(next.checkpoint_seq);
-                if(next === superseded)
-                    return { verdict: 'divergence', mismatches: [{ field: 'checkpoint_quorum' }] };
-                return null;
-            },
-        });
+        const sync = syncOverRange([superseded, superseder], superseded, visited);
 
         const result = await sync.followCheckpointForward(superseder, seed, 'source');
 

@@ -58,6 +58,12 @@
       "sync boot consensus-pin verification skips on the (currently null) mainnet pin",
       "sync boot consensus-pin verification the pin check runs before the express app is built"
     ],
+    "03eb3ea97885caff": [
+      "Checkpoint supersession @regression follow-forward advances past a superseded step without a divergence halt",
+      "Checkpoint supersession @regression keeps a plain checkpoint byte-identical to the pre-supersession canonical",
+      "Checkpoint supersession @regression refuses supersession fields below the activation gate",
+      "Checkpoint supersession @regression verifies a superseding checkpoint with the gated suffix inside the EQUIV wrapper"
+    ],
     "0599390bc2b2bb5e": [
       "ClientSync indexer continuity with a null tip hash row handleBlock does not apply a gapped block over the missing range",
       "ClientSync indexer continuity with a null tip hash row lets the contiguous block through without a catch-up",
@@ -4876,8 +4882,8 @@
   },
   "scripts": {
     "test": {
-      "fileCount": 406,
-      "titleCount": 3184,
+      "fileCount": 407,
+      "titleCount": 3188,
       "files": {
         "test/unit/anchor_fold_state_hash_twin.test.js": "4fbe28f32fa63c5b",
         "test/unit/anchor_recovery_field_twin.test.js": "6c93dad4cd12104b",
@@ -4947,6 +4953,7 @@
         "test/unit/checkpoint_twin.test.js": "91d191912b3539d2",
         "test/unit/client/archive_reset_predicate.test.js": "a54f9a2821a10c99",
         "test/unit/client/attest_rotation_burial.test.js": "fa858c545e51d96c",
+        "test/unit/client/checkpoint_supersede.test.js": "03eb3ea97885caff",
         "test/unit/client/commit_without_open_transaction.test.js": "1ad311d10965d7a2",
         "test/unit/client/decoder_catchup_skip_lookups_fork.test.js": "1474f342de739548",
         "test/unit/client/decoder_link.test.js": "fb1e3a01b1150f54",
@@ -5574,8 +5581,8 @@
       }
     },
     "test:regression": {
-      "fileCount": 123,
-      "titleCount": 959,
+      "fileCount": 124,
+      "titleCount": 963,
       "files": {
         "test/unit/balance_helpers.test.js": "b146f330faa567f9",
         "test/unit/block_hasher.test.js": "207951e050b87331",
@@ -5588,6 +5595,7 @@
         "test/unit/checkpoint_quorum_flag_day.test.js": "7a4688817472b50c",
         "test/unit/checkpoint_twin.test.js": "91d191912b3539d2",
         "test/unit/client/attest_rotation_burial.test.js": "fa858c545e51d96c",
+        "test/unit/client/checkpoint_supersede.test.js": "03eb3ea97885caff",
         "test/unit/client/retroactive_admission_rules.test.js": "9c2f2fc0c7d4d97f",
         "test/unit/client/supersede_follow_rules.test.js": "b319a915af6e45c2",
         "test/unit/client/supersede_suffix_bytes.test.js": "b81ba4875b2734c9",
