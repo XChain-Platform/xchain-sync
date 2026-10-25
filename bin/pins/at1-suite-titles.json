@@ -3270,6 +3270,16 @@
       "ClientSync.verifyRecompute passes the coin ticker to the collation gate @regression keeps the legacy folding collation one block below the activation height",
       "ClientSync.verifyRecompute passes the coin ticker to the collation gate @regression pins COLLATE utf8_bin at the BTC:mainnet activation height for a \"bitcoin\" replica"
     ],
+    "b319a915af6e45c2": [
+      "Supersede follow rules @regression compares JSON string sequence and height fields as numbers",
+      "Supersede follow rules @regression does not mutate the input range",
+      "Supersede follow rules @regression drops a superseded step while retaining its superseder",
+      "Supersede follow rules @regression ignores a superseder whose checkpoint_seq is lower than the step",
+      "Supersede follow rules @regression returns a plain range whole, in order, in a new array",
+      "Supersede follow rules @regression returns the lowest checkpoint_seq of two later superseders",
+      "Supersede follow rules @regression supersedes steps at and above supersedes_from but not below it",
+      "Supersede follow rules @regression throws a TypeError when bindingSteps receives a non-array"
+    ],
     "b322c258a69bf24a": [
       "TransparencyLog re-commit after a reorg into pruned leaves re-commits a reorged epoch whose leaves are all still present",
       "TransparencyLog re-commit after a reorg into pruned leaves refuses to re-commit an epoch whose leaves no longer reach its committed start",
@@ -4843,8 +4853,8 @@
   },
   "scripts": {
     "test": {
-      "fileCount": 403,
-      "titleCount": 3157,
+      "fileCount": 404,
+      "titleCount": 3165,
       "files": {
         "test/unit/anchor_fold_state_hash_twin.test.js": "4fbe28f32fa63c5b",
         "test/unit/anchor_recovery_field_twin.test.js": "6c93dad4cd12104b",
@@ -4922,6 +4932,7 @@
         "test/unit/client/rollback_guard_persist.test.js": "a04e314cf3df2081",
         "test/unit/client/rollback_guard_startup_halt.test.js": "9cfd853f2e4d2fa3",
         "test/unit/client/rollback_maturity_escrow_release.test.js": "6a3241c076e978ef",
+        "test/unit/client/supersede_follow_rules.test.js": "b319a915af6e45c2",
         "test/unit/client_applier.test.js": "84a5d698b7b87edc",
         "test/unit/client_applier.test/01_apply_full_snapshot.test.js": "9585280fe939c0f5",
         "test/unit/client_applier.test/02_apply_incremental_snapshot.test.js": "4647d4059a28745e",
@@ -5538,8 +5549,8 @@
       }
     },
     "test:regression": {
-      "fileCount": 120,
-      "titleCount": 932,
+      "fileCount": 121,
+      "titleCount": 940,
       "files": {
         "test/unit/balance_helpers.test.js": "b146f330faa567f9",
         "test/unit/block_hasher.test.js": "207951e050b87331",
@@ -5553,6 +5564,7 @@
         "test/unit/checkpoint_twin.test.js": "91d191912b3539d2",
         "test/unit/client/attest_rotation_burial.test.js": "fa858c545e51d96c",
         "test/unit/client/retroactive_admission_rules.test.js": "9c2f2fc0c7d4d97f",
+        "test/unit/client/supersede_follow_rules.test.js": "b319a915af6e45c2",
         "test/unit/client_applier.test/01_apply_full_snapshot.test.js": "1050d45e360d00f4",
         "test/unit/client_rollback.test/08_full_name_coin_mirror_deletes.test.js": "b5569f083adae37c",
         "test/unit/client_rollback.test/09_rollcall_unwind_schema_gap.test.js": "20777f1ed1f0fe9f",
