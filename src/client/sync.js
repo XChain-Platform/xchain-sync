@@ -47,6 +47,7 @@ const { SCHEMA_VERSION } = require('../schema/version');
 const { activationDelayBlocks, gasTickSymbol, coinTicker, btcStakeCapabilities, VALIDATOR_QUERY_LIMIT } = require('../consensus-constants');
 const { bootstrapDepthKey } = require('../config');
 const checkpointVerifier = require('../checkpoint');
+const supersedeFollow = require('./supersede_follow');
 const M = require('../merkle');
 const { getPinnedValidators, getPinnedCheckpoint, checkpointQuorumEnabled } = require('./pinned_validators');
 // Resolved at each call site rather than bound once: the shim is installed by the
@@ -4734,7 +4735,7 @@ class ClientSync {
             if(fetched.verdict) return fetched;
 
             let advanced = false;
-            for(let next of fetched.chain){
+            for(let next of supersedeFollow.bindingSteps(fetched.chain)){
                 if(typeof next.block_index !== 'number' || next.block_index <= trusted.block_index) continue;
                 let stop = await this.attestRotationStep(next, trusted);
                 if(stop) return stop;

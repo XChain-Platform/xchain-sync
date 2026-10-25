@@ -28,12 +28,17 @@
 const crypto = require('crypto');
 const eq     = require('./consensus/equivocation_header.js');
 const swq    = require('./consensus/stake_weighted_quorum.js');
+const supersede = require('./client/supersede_suffix.js');
 // The CHECKPOINT_COMMITMENT flag day is a registry row read by its literal key (W5);
 // the predicate is activeAt over the checkpoint's BTC-anchored snapshot_block.
 const { activeAt } = require('./consensus/gate_registry');
 const CHECKPOINT_COMMITMENT_KEY = 'checkpoint_commitment_activation.CHECKPOINT_COMMITMENT_ACTIVATION';
+const CHECKPOINT_SUPERSEDE_KEY = 'checkpoint_supersede_activation.CHECKPOINT_SUPERSEDE_ACTIVATION';
 function isCheckpointCommitmentActive(snapshotBlock, network){
     return activeAt(CHECKPOINT_COMMITMENT_KEY, network, null, snapshotBlock, null);
+}
+function isCheckpointSupersedeActive(snapshotBlock, network){
+    return activeAt(CHECKPOINT_SUPERSEDE_KEY, network, null, snapshotBlock, null);
 }
 
 // ASN.1 DER prefix for Ed25519 SPKI. Mirrors the hub's ValidatorIdentity and
@@ -61,6 +66,8 @@ function canonicalCheckpoint(cp){
        cp.state_root_version != null && cp.block_merkle_version != null)
         raw += '|' + [String(cp.state_root).toLowerCase(), String(cp.state_root_version),
                       String(cp.block_merkle_root).toLowerCase(), String(cp.block_merkle_version)].join('|');
+    if(isCheckpointSupersedeActive(cp.snapshot_block, cp.network))
+        raw += supersede.supersedeSuffix(cp);
     // An ANCHOR v3 wrapper section is signed over its folded archive as well (the hub's
     // foldArchiveCanonical): the batch fields follow the roots and the round id gains the seq.
     const fold = cp.fold_archive;
@@ -109,6 +116,11 @@ function commitmentActive(cp){
     return !!cp && isCheckpointCommitmentActive(cp.snapshot_block, cp.network);
 }
 
+function supersedeDisallowed(cp){
+    return supersede.hasSupersedeFields(cp) &&
+        !isCheckpointSupersedeActive(cp.snapshot_block, cp.network);
+}
+
 // Does one validator entry carry the stake fields the weighted regime requires?
 // Blank source and a missing, blank or nonnumeric weight are all disqualifying.
 // meetsStakeThreshold also fails closed on each of these (its decimal check is the
@@ -120,6 +132,27 @@ function isWeightedEntry(v){
     if(v.weight === null || v.weight === undefined || String(v.weight).trim() === '') return false;
     let w = Number(v.weight);
     return Number.isFinite(w) && w >= 0;
+}
+
+function verifiedSigners(checkpoint, qualified, canonical){
+    let sigs = checkpoint.validator_signatures;
+    if (typeof sigs === 'string'){
+        try { sigs = JSON.parse(sigs); } catch (e) {
+            console.warn('[checkpoint] malformed validator_signatures at checkpoint_seq ' +
+                          (checkpoint && checkpoint.checkpoint_seq) + '; treating as zero signatures (fail-closed):', e.message);
+            sigs = [];
+        }
+    }
+    if (!Array.isArray(sigs)) sigs = [];
+
+    let validSigs = 0, seen = new Set(), validSigners = [];
+    for (let s of sigs){
+        let pk  = String(s && s.pubkey || '').toLowerCase();
+        let sig = String(s && s.sig || '');
+        if (!pk || seen.has(pk) || !qualified.has(pk)) continue;
+        if (verifySignature(canonical, sig, pk)){ seen.add(pk); validSigs++; validSigners.push(pk); }
+    }
+    return { validSigs, validSigners };
 }
 
 // Verify a checkpoint against the `oracle_publish` set qualified at its snapshot_block
@@ -144,6 +177,9 @@ function verifyCheckpoint(checkpoint, validators){
     // same gating the canonical signing string already applies for the equiv header.
     let weighted = swq.isStakeWeightedQuorumActive(checkpoint && checkpoint.snapshot_block, checkpoint && checkpoint.network);
 
+    if (supersedeDisallowed(checkpoint))
+        return { valid: false, validSigs: 0, quorum: quorum, weighted: weighted, canonical: canonical };
+
     // Post-activation a checkpoint MUST carry the commitment fields. canonicalCheckpoint's
     // all-four-present guard is correct there (its bytes must match the hub, indexer and
     // explorer), but it lets a ROOTLESS post-flag-day row fall back to the legacy preimage
@@ -152,27 +188,7 @@ function verifyCheckpoint(checkpoint, validators){
     if (commitmentMissing(checkpoint))
         return { valid: false, validSigs: 0, quorum: quorum, weighted: weighted, canonical: canonical };
 
-    let sigs = checkpoint.validator_signatures;
-    if (typeof sigs === 'string'){
-        try { sigs = JSON.parse(sigs); } catch (e) {
-            console.warn('[checkpoint] malformed validator_signatures at checkpoint_seq ' +
-                          (checkpoint && checkpoint.checkpoint_seq) + '; treating as zero signatures (fail-closed):', e.message);
-            sigs = [];
-        }
-    }
-    if (!Array.isArray(sigs)) sigs = [];
-
-    let validSigs = 0, seen = new Set(), validSigners = [];
-    for (let s of sigs){
-        let pk  = String(s && s.pubkey || '').toLowerCase();
-        let sig = String(s && s.sig || '');
-        if (!pk || seen.has(pk) || !qualified.has(pk)) continue;
-        // Only mark a pubkey "seen" once its signature actually verifies. Marking on
-        // first encounter would let a garbage-then-valid pair of entries for the same
-        // qualified validator suppress the real signature (order-dependent quorum
-        // under-count), which fails a legitimately-quorate checkpoint closed.
-        if (verifySignature(canonical, sig, pk)){ seen.add(pk); validSigs++; validSigners.push(pk); }
-    }
+    let { validSigs, validSigners } = verifiedSigners(checkpoint, qualified, canonical);
 
     let valid;
     if (weighted){
