@@ -1730,6 +1730,14 @@
       "protocolAddressRoles cross-repo byte-identity (consensus) @regression passes a non-special address through unchanged on both sides",
       "protocolAddressRoles cross-repo byte-identity (consensus) @regression snapshot equals the indexer config-derived ROLE_BY_ADDRESS"
     ],
+    "5ec1d1fcf63396f6": [
+      "served checkpoint final (sync twin) fetchAndVerifyCheckpoint reports final false inside the window and true once replayed",
+      "served checkpoint final (sync twin) keeps final when the verdict is judged against a supplied set",
+      "served checkpoint final (sync twin) passes final false through for a height inside an open replay window",
+      "served checkpoint final (sync twin) passes final true through once the window has replayed",
+      "served checkpoint final (sync twin) reads an absent final as true, the answer of an explorer that predates the field",
+      "served checkpoint final (sync twin) reads any present value other than true as not final"
+    ],
     "5ff54077cc3ba86f": [
       "ClientSync: incrementalCatchUp coalescing calls runIncrementalCatchUp once when no in-flight",
       "ClientSync: incrementalCatchUp coalescing does not re-run when pending but no progress was made",
@@ -4884,8 +4892,8 @@
   },
   "scripts": {
     "test": {
-      "fileCount": 407,
-      "titleCount": 3190,
+      "fileCount": 408,
+      "titleCount": 3196,
       "files": {
         "test/unit/anchor_fold_state_hash_twin.test.js": "4fbe28f32fa63c5b",
         "test/unit/anchor_recovery_field_twin.test.js": "6c93dad4cd12104b",
@@ -5085,6 +5093,7 @@
         "test/unit/consensus/gate_registry.test.js": "29c7591a9edf1c0f",
         "test/unit/consensus/index_map_every_network.test.js": "f6fbd3a44c9a1195",
         "test/unit/consensus/regtest_env_twin.test.js": "cbad35bf1daff99f",
+        "test/unit/consensus/served_checkpoint_final.test.js": "5ec1d1fcf63396f6",
         "test/unit/consensus/stake_weight_collation_twin.test.js": "c4195dde3aa9c82f",
         "test/unit/consensus/state_hash_fold_twin.test.js": "7bdc44c60cb9418e",
         "test/unit/consensus_pin_boot.test.js": "03d0b8b6f4107f85",
