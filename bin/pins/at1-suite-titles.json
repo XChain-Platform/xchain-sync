@@ -69,18 +69,6 @@
       "ClientSync indexer continuity with a null tip hash row lets the contiguous block through without a catch-up",
       "ClientSync indexer continuity with a null tip hash row routes a gapped block to catch-up from the height after the tip"
     ],
-    "06bf2b9ac933792b": [
-      "armed map v2: falsification on temp trees a copied tree reads the same v2 as this checkout, so the harness measures the real thing",
-      "armed map v2: falsification on temp trees a deleted registry row makes boot throw, v2 UNREADABLE and the completeness suite red",
-      "armed map v2: falsification on temp trees a shared row outside sync membership does not move the sync fingerprint",
-      "armed map v2: falsification on temp trees does not move under the regtest venue arming environment (no sync carrier reads it)",
-      "armed map v2: falsification on temp trees holds under a comment, a registry reformat, a carrier rename and a move",
-      "armed map v2: falsification on temp trees keeps all six shared row files byte-identical to the indexer canonical blobs",
-      "armed map v2: falsification on temp trees moves when a pinned testnet height reverts to NOT-YET-PINNED (null)",
-      "armed map v2: falsification on temp trees moves when one committed height changes, and names that row alone",
-      "armed map v2: falsification on temp trees pins all six shared row files to the indexer canonical byte digests",
-      "armed map v2: falsification on temp trees reads the same value without node_modules because every registry row is local data"
-    ],
     "07811aa22e123504": [
       "bin/markets-id-parity fetch reads markets at the tip and pages every ticker",
       "bin/markets-id-parity fetch refuses a source with no polled height instead of pulling since/0",
@@ -1506,6 +1494,20 @@
       "/status unverified recompute count is null when the sync state cannot be read",
       "/status unverified recompute count is zero with no last block when nothing was recorded",
       "/status unverified recompute count publishes the durable count and last block"
+    ],
+    "539d6b3950313f10": [
+      "armed map v2: falsification on temp trees a copied tree reads the same v2 as this checkout, so the harness measures the real thing",
+      "armed map v2: falsification on temp trees a deleted registry row makes boot throw, v2 UNREADABLE and the completeness suite red",
+      "armed map v2: falsification on temp trees a shared row outside sync membership does not move the sync fingerprint",
+      "armed map v2: falsification on temp trees arming the archive roll-call presence testnet sentinel does not move the sync fingerprint",
+      "armed map v2: falsification on temp trees arming the checkpoint supersede testnet sentinel moves the sync fingerprint and names that row alone",
+      "armed map v2: falsification on temp trees does not move under the regtest venue arming environment (no sync carrier reads it)",
+      "armed map v2: falsification on temp trees holds under a comment, a registry reformat, a carrier rename and a move",
+      "armed map v2: falsification on temp trees keeps all six shared row files byte-identical to the indexer canonical blobs",
+      "armed map v2: falsification on temp trees moves when a pinned testnet height reverts to NOT-YET-PINNED (null)",
+      "armed map v2: falsification on temp trees moves when one committed height changes, and names that row alone",
+      "armed map v2: falsification on temp trees pins all six shared row files to the indexer canonical byte digests",
+      "armed map v2: falsification on temp trees reads the same value without node_modules because every registry row is local data"
     ],
     "54140585946817e9": [
       "ClientApplier schema_migrations classification full snapshot leaves the ledger alone when only the local enumeration lists it",
@@ -4883,7 +4885,7 @@
   "scripts": {
     "test": {
       "fileCount": 407,
-      "titleCount": 3188,
+      "titleCount": 3190,
       "files": {
         "test/unit/anchor_fold_state_hash_twin.test.js": "4fbe28f32fa63c5b",
         "test/unit/anchor_recovery_field_twin.test.js": "6c93dad4cd12104b",
@@ -5077,7 +5079,7 @@
         "test/unit/consensus/archive_invalid_every_network.test.js": "31ee6c76f3ff525b",
         "test/unit/consensus/armed_map/canonical.test.js": "e03eeb17175d1023",
         "test/unit/consensus/armed_map/completeness.test.js": "be8349064e8f7983",
-        "test/unit/consensus/armed_map/falsification.test.js": "06bf2b9ac933792b",
+        "test/unit/consensus/armed_map/falsification.test.js": "539d6b3950313f10",
         "test/unit/consensus/armed_map/fingerprint.test.js": "5560ded00c05d876",
         "test/unit/consensus/consensus_bound_rows.test.js": "90c1f2553733ccb7",
         "test/unit/consensus/gate_registry.test.js": "29c7591a9edf1c0f",

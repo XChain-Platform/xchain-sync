@@ -1,10 +1,11 @@
 {
-  "armed_map_fingerprint": "1e9ce606025c86eca999aa3bec9d7154439bc9ab1ec996025c4621a02f4c3e05",
+  "armed_map_fingerprint": "20a5d36e6c97638e6775896c0d758ceb384cd02e7211dba9fdd34659cb2345ff",
   "armed_map_fingerprint_version": 2,
   "armedMapRows": {
     "archive_rollback_author_scope_activation.ARCHIVE_AUTHOR_SCOPE_JOIN_SQL": "c8b6c1753f86fb65689fbc5d72f001e9467d5553a91895a21c9cf48d643e8895",
     "archive_rollback_author_scope_activation.ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION": "836a49c98ea3f001fac17d3a831f71792f76aaa9f6853f06da929bcdc70aa69e",
     "checkpoint_commitment_activation.CHECKPOINT_COMMITMENT_ACTIVATION": "1450d2dd4426997367731e5e4319fda5ace64a4a210ed561e7e85d78aa568d83",
+    "checkpoint_supersede_activation.CHECKPOINT_SUPERSEDE_ACTIVATION": "761fec51661f92869757d28388e8cd9f529c8afe8d5d3ee74cf4d5447c9e7c1a",
     "consensus-constants.ACTIVATION_DELAY_BLOCKS_BY_COIN": "45244de8d1fcca9378f43477b7b255a71a7c2d45c7d9016c6ec33ffbb9a3e2cb",
     "consensus-constants.BTC_STAKE_CAPABILITIES": "a4ce5ddab357e4e71e4e5fe3f5b56665191c1e7a7458d77e7480d742917f9a4c",
     "consensus-constants.GAS_TICK": "89ea3e0f234780ff4c05e114707ab76d4a7d22e69148ff9bd2d6a36e85a5d691",
@@ -44,7 +45,7 @@
     "swq_source_cap_activation.SWQ_SOURCE_CAP_ACTIVATION": "d9105d53199963f94287f25b3d87d1e625b77d56ac8baab6d6ee64029b0fae74",
     "train_activation.TRAIN_ACTIVATION": "1f7b8f196149e0bf068bfc430c6355a65788333e1eb2952c52462f0aa3526a6e"
   },
-  "armed_map_rows": 41,
+  "armed_map_rows": 42,
   "carrier_logic_digest": "a7ba304796d036bfdbb9b001c9478ad38ae86822f6716be14f25a1b17203544b",
   "vendoredCoins": {
     "src/coins/BTC.js": "6868afc2d18911ba112234c980c094fda71cfc3e744a00f493def781c7610f8d",

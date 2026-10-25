@@ -227,9 +227,9 @@ describe('armed map v2: falsification on temp trees', function () {
     before(readBaseline);
     after(removeTrees);
 
-    it('arming the checkpoint supersede testnet sentinel does not move the sync fingerprint', function () {
-        // The row only registers the gate; no sync rule reads it yet, so it stays outside sync
-        // membership when a cut arms it.
+    it('arming the checkpoint supersede testnet sentinel moves the sync fingerprint and names that row alone', function () {
+        // checkpoint.js reads the row to decide whether a checkpoint carries the SUPERSEDE suffix,
+        // so a cut that arms it changes which checkpoints this replica accepts.
         const root = tree();
         edit(root, 'src/consensus/gate_registry/shared_rows_5.js',
             "addGate('checkpoint_supersede_activation.CHECKPOINT_SUPERSEDE_ACTIVATION', 'height', { mainnet: UNPINNED, 'BTC:testnet': UNARMED,",
@@ -238,8 +238,8 @@ describe('armed map v2: falsification on temp trees', function () {
         assert.strictEqual(get('checkpoint_supersede_activation.CHECKPOINT_SUPERSEDE_ACTIVATION')['BTC:testnet'],
             9999999999, 'the shipped row is on the UNARMED sentinel');
         const after = readV2(root);
-        assert.strictEqual(after.hex, baseline.hex);
-        assert.ok(!Object.keys(after.rows).some((k) => k.startsWith('checkpoint_supersede_activation.')));
+        assert.notStrictEqual(after.hex, baseline.hex);
+        assert.deepStrictEqual(movedRows(baseline, after), ['checkpoint_supersede_activation.CHECKPOINT_SUPERSEDE_ACTIVATION']);
     });
 });
 
