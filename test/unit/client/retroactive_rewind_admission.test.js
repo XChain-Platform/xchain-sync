@@ -63,17 +63,13 @@ function makeSync(lastAppliedBlock = 500){
 }
 
 describe('ClientSync retroactive rewind admission @regression', function(){
-    let clock;
-
     beforeEach(function(){
         sinon.stub(console, 'log');
         sinon.stub(console, 'warn');
         sinon.stub(console, 'error');
-        clock = sinon.useFakeTimers();
     });
 
     afterEach(function(){
-        clock.restore();
         sinon.restore();
     });
 
@@ -89,6 +85,22 @@ describe('ClientSync retroactive rewind admission @regression', function(){
         assert.deepStrictEqual(db.setSyncState.firstCall.args,
             ['verified_tip:indexer', '99', { rethrow: true }]);
         assert.strictEqual(db.setSyncState.firstCall.calledBefore(rollback.rollback.firstCall), true);
+    });
+});
+
+describe('ClientSync retroactive rewind admission @regression', function(){
+    let clock;
+
+    beforeEach(function(){
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'warn');
+        sinon.stub(console, 'error');
+        clock = sinon.useFakeTimers();
+    });
+
+    afterEach(function(){
+        clock.restore();
+        sinon.restore();
     });
 
     it('leaves a lone in-cap retroactive report unapplied after the normal timeout', async function(){

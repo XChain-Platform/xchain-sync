@@ -4896,10 +4896,8 @@ class ClientSync {
         this.prunePendingReorgs();
     }
 
-    // Gate a source-reported reorg exactly as handleBlockQuorum gates a block: drop an
-    // evicted source's report, unwind once a quorum reports the same height, and leave an
-    // ordinary lone report to the confirmation timeout. A deep retroactive report waits
-    // for matching quorum evidence without a timeout fallback. `rewind` marks a
+    // Require matching quorum evidence for deep retroactive reports rather than
+    // letting the confirmation timeout unwind from one source. `rewind` marks a
     // re-delivered forked head, which re-fetches the tip after the unwind.
     async handleSourceReorg(event, sourceIndex, rewind){
         if(this._evictedSources.has(sourceIndex)){
