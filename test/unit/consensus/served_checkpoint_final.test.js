@@ -8,12 +8,9 @@
 // This file is part of XChain Platform. Licensed under the GNU Affero
 // General Public License v3.0 or later; see LICENSE.md.
 
-// The explorer verify endpoint says whether a checkpointed height sits inside an
-// open retroactive replay window (`final`). This vendored copy of the SDK verifier
-// must carry that answer through to its caller as the SDK does, so a replica can tell
-// a checkpoint that may still be superseded from one that is settled. Signature
-// validity and finality are independent: a well-signed checkpoint inside the window
-// is valid and not final.
+// This vendored copy of the SDK verifier passes the verify endpoint's `final` through
+// as the SDK does, so a replica can tell a checkpoint inside an open replay window from
+// a settled one. Finality is independent of signatures.
 
 const assert = require('assert');
 const crypto = require('crypto');
