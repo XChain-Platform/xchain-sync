@@ -4627,6 +4627,20 @@
     "f430775685805247": [
       "Boundary: HubClient Port Parsing getIndexerConfigs integration falls back to port when db_port absent"
     ],
+    "f44976730d0c0734": [
+      "Database source replay marker reader @regression passes the connection through and returns only canonical marker fields",
+      "Database source replay marker reader @regression propagates a rejected source read",
+      "Database source replay marker reader @regression queries the newest CONSENSUS_RETRO_REPLAY event once with a strict read",
+      "Database source replay marker reader @regression rejects a state outside pending, replaying, or replayed",
+      "Database source replay marker reader @regression rejects a target that is not a non-negative safe integer",
+      "Database source replay marker reader @regression rejects data that is not JSON",
+      "Database source replay marker reader @regression rejects replay_to below target or not an integer",
+      "Database source replay marker reader @regression rejects rules_from that is not lowercase 64-character hex",
+      "Database source replay marker reader @regression rejects rules_to that is not lowercase 64-character hex",
+      "Database source replay marker reader @regression rulesFromMarker composition adapts an open marker for retroactiveFromRules",
+      "Database source replay marker reader @regression rulesFromMarker composition composes a replayed marker to null",
+      "Database source replay marker reader @regression rulesFromMarker composition returns null for no marker"
+    ],
     "f45334c14832a872": [
       "validation extractColumnNames does not pick up the table name or constraint identifiers",
       "validation extractColumnNames extracts every column name in order",
@@ -4862,8 +4876,8 @@
   },
   "scripts": {
     "test": {
-      "fileCount": 405,
-      "titleCount": 3172,
+      "fileCount": 406,
+      "titleCount": 3184,
       "files": {
         "test/unit/anchor_fold_state_hash_twin.test.js": "4fbe28f32fa63c5b",
         "test/unit/anchor_recovery_field_twin.test.js": "6c93dad4cd12104b",
@@ -5091,6 +5105,7 @@
         "test/unit/db.test/11_database_sync_state_strict_read.test.js": "e790073ef7f98cef",
         "test/unit/db/datetime/retype.test.js": "946032dcbe5e268e",
         "test/unit/db/datetime/retype_alter.test.js": "da5ac310552f4fb5",
+        "test/unit/db/source_replay_marker.test.js": "f44976730d0c0734",
         "test/unit/db/subtree/node_store_rows.test.js": "fe32d7c237f2fed6",
         "test/unit/db/subtree/orphan_stats_reads.test.js": "5c9fc36e8e0fa4a6",
         "test/unit/db_connect_retry_bound.test.js": "d7cf06179b413cae",
@@ -5559,8 +5574,8 @@
       }
     },
     "test:regression": {
-      "fileCount": 122,
-      "titleCount": 947,
+      "fileCount": 123,
+      "titleCount": 959,
       "files": {
         "test/unit/balance_helpers.test.js": "b146f330faa567f9",
         "test/unit/block_hasher.test.js": "207951e050b87331",
@@ -5627,6 +5642,7 @@
         "test/unit/contract_state_subtree.test/contract_state_root_strict_reads.test.js": "6d955dc4007ee59e",
         "test/unit/cooldown_credits.test.js": "f37fb6a4cfaf4ea4",
         "test/unit/db.test/06_database_halt_methods.test.js": "e9252cc69db1496e",
+        "test/unit/db/source_replay_marker.test.js": "f44976730d0c0734",
         "test/unit/db_replica_status.test.js": "43cffa3fce90993d",
         "test/unit/db_stake_weights_as_of.test.js": "13f9b36dc6dc41be",
         "test/unit/db_swq_source_cap.test.js": "910a4f5c866b3b8b",

@@ -12,6 +12,18 @@
 
 'use strict';
 
+function rulesFromMarker(marker){
+    if(marker === null) return null;
+    return {
+        digest: marker.rules_to,
+        replay: {
+            state: marker.state,
+            target: marker.target,
+            replay_to: marker.replay_to
+        }
+    };
+}
+
 function retroactiveFromRules(rules){
     if(!rules || typeof rules.digest !== 'string' || !/^[0-9a-f]{64}$/i.test(rules.digest))
         return null;
@@ -36,4 +48,4 @@ function withRetroactive(event, retro){
     };
 }
 
-module.exports = { retroactiveFromRules, retroactiveForkPoint, withRetroactive };
+module.exports = { rulesFromMarker, retroactiveFromRules, retroactiveForkPoint, withRetroactive };
