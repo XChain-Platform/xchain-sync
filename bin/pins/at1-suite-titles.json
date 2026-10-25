@@ -2901,6 +2901,17 @@
       "Advisory table-content parity content digest the node-local contract_emissions.id column is excluded, so it cannot false-alarm",
       "Advisory table-content parity content digest the node-local sync_meta.id/logged_at columns are excluded, so they cannot false-alarm"
     ],
+    "9c2f2fc0c7d4d97f": [
+      "Retroactive admission rules @regression admitRetroactiveRewind admits depth exactly at the cap and refuses one block over",
+      "Retroactive admission rules @regression admitRetroactiveRewind counts a duplicate source once",
+      "Retroactive admission rules @regression admitRetroactiveRewind does not count reports for a different target or rules_to",
+      "Retroactive admission rules @regression admitRetroactiveRewind refuses a request that is not retroactive",
+      "Retroactive admission rules @regression retroactiveCapBlocks accepts a positive finite hours override",
+      "Retroactive admission rules @regression retroactiveCapBlocks calculates the default 72-hour caps",
+      "Retroactive admission rules @regression retroactiveCapBlocks freezes the block intervals used by the cap",
+      "Retroactive admission rules @regression retroactiveCapBlocks throws for an unknown coin",
+      "Retroactive admission rules @regression retroactiveCapBlocks throws for hours that are not finite and positive"
+    ],
     "9cfd853f2e4d2fa3": [
       "ClientSync rollback guard startup hold caps the retry backoff at 60 seconds",
       "ClientSync rollback guard startup hold does not apply any block while the state stays unreadable",
@@ -4833,7 +4844,7 @@
   "scripts": {
     "test": {
       "fileCount": 403,
-      "titleCount": 3153,
+      "titleCount": 3157,
       "files": {
         "test/unit/anchor_fold_state_hash_twin.test.js": "4fbe28f32fa63c5b",
         "test/unit/anchor_recovery_field_twin.test.js": "6c93dad4cd12104b",
@@ -4906,6 +4917,7 @@
         "test/unit/client/commit_without_open_transaction.test.js": "1ad311d10965d7a2",
         "test/unit/client/decoder_catchup_skip_lookups_fork.test.js": "1474f342de739548",
         "test/unit/client/decoder_link.test.js": "fb1e3a01b1150f54",
+        "test/unit/client/retroactive_admission_rules.test.js": "9c2f2fc0c7d4d97f",
         "test/unit/client/rollback_guard.test.js": "34c061c9206ef781",
         "test/unit/client/rollback_guard_persist.test.js": "a04e314cf3df2081",
         "test/unit/client/rollback_guard_startup_halt.test.js": "9cfd853f2e4d2fa3",
@@ -5527,7 +5539,7 @@
     },
     "test:regression": {
       "fileCount": 120,
-      "titleCount": 928,
+      "titleCount": 932,
       "files": {
         "test/unit/balance_helpers.test.js": "b146f330faa567f9",
         "test/unit/block_hasher.test.js": "207951e050b87331",
@@ -5540,6 +5552,7 @@
         "test/unit/checkpoint_quorum_flag_day.test.js": "7a4688817472b50c",
         "test/unit/checkpoint_twin.test.js": "91d191912b3539d2",
         "test/unit/client/attest_rotation_burial.test.js": "fa858c545e51d96c",
+        "test/unit/client/retroactive_admission_rules.test.js": "9c2f2fc0c7d4d97f",
         "test/unit/client_applier.test/01_apply_full_snapshot.test.js": "1050d45e360d00f4",
         "test/unit/client_rollback.test/08_full_name_coin_mirror_deletes.test.js": "b5569f083adae37c",
         "test/unit/client_rollback.test/09_rollcall_unwind_schema_gap.test.js": "20777f1ed1f0fe9f",
