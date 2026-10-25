@@ -107,6 +107,7 @@ const MIXIN_FILES = [
     '../sql/migrations/runner.js',
     './sync_meta.js',
     './sync_halt.js',
+    './events.js',
     './state_tree_roots.js',
     './blocks.js',
     './actions.js',
