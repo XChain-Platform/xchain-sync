@@ -40,7 +40,7 @@ const INDEXER_CANONICAL_BLOBS = {
     'shared_rows_2.js': 'f7906c1f870cf12039e04b7ae4b66a3327d3ba85',
     'shared_rows_3.js': '160f4098d17d7a0d20b339f0f34a95bf8b43c429',
     'shared_rows_4.js': 'dac8fa3f5c506ac52e779d850ec7db54fe5dbd96',
-    'shared_rows_5.js': '23d7d39e19e4ca05a901fb9d80cd3042a513cd9a',
+    'shared_rows_5.js': '12dcf060bfd0f62bb125d158165c21e14c3182c3',
 };
 const INDEXER_CANONICAL_SHA256 = {
     'shared_rows.js':   '419b9e23ceaea3c8dfefd0798ed49204040137935e890fec8dc731829d13a7d4',
@@ -48,7 +48,7 @@ const INDEXER_CANONICAL_SHA256 = {
     'shared_rows_2.js': 'f11392f3802e0274f6a771b5e1b2a795a4997d90914d8bb2a284af4d643f2d7a',
     'shared_rows_3.js': 'd1de4a20c02fa2338ee10e70c5d262a498ebaf915074aa518355b5e3ac22bc44',
     'shared_rows_4.js': '08e0e852d04c0736d88c19c6ae2c63d0061591c3dc700a22a9018a23a1d3069d',
-    'shared_rows_5.js': '289b5761d0e0ac9b9d36e0184ea39f425d63e5af4cdb09a94dc2c2f0e72af3e7',
+    'shared_rows_5.js': '311c407558be7c889c1142413aad31e45c6465f29aa67f6b4c4b7015e4a5e290',
 };
 
 const READ_V2 = 'const r = require(process.argv[1]).computeArmedMapFingerprint();' +
@@ -219,6 +219,27 @@ describe('armed map v2: falsification on temp trees', function () {
 
     it('reads the same value without node_modules because every registry row is local data', function () {
         assert.strictEqual(readV2(tree({ nodeModules: false })).hex, baseline.hex);
+    });
+});
+
+describe('armed map v2: falsification on temp trees', function () {
+    this.timeout(120000);
+    before(readBaseline);
+    after(removeTrees);
+
+    it('arming the checkpoint supersede testnet sentinel does not move the sync fingerprint', function () {
+        // The row only registers the gate; no sync rule reads it yet, so it stays outside sync
+        // membership when a cut arms it.
+        const root = tree();
+        edit(root, 'src/consensus/gate_registry/shared_rows_5.js',
+            "addGate('checkpoint_supersede_activation.CHECKPOINT_SUPERSEDE_ACTIVATION', 'height', { mainnet: UNPINNED, 'BTC:testnet': UNARMED,",
+            "addGate('checkpoint_supersede_activation.CHECKPOINT_SUPERSEDE_ACTIVATION', 'height', { mainnet: UNPINNED, 'BTC:testnet': 160000,");
+        const { get } = require(path.join(ROOT, 'src/consensus/gate_registry'));
+        assert.strictEqual(get('checkpoint_supersede_activation.CHECKPOINT_SUPERSEDE_ACTIVATION')['BTC:testnet'],
+            9999999999, 'the shipped row is on the UNARMED sentinel');
+        const after = readV2(root);
+        assert.strictEqual(after.hex, baseline.hex);
+        assert.ok(!Object.keys(after.rows).some((k) => k.startsWith('checkpoint_supersede_activation.')));
     });
 });
 
