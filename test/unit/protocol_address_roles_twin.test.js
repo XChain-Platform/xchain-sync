@@ -19,21 +19,29 @@
 // catch this: it only sees its own derived map, never this snapshot.
 //
 // This suite closes that gap. It loads the sibling xchain-indexer's derived map
-// and asserts deep equality with the local snapshot. Skipped (not failed) when
-// the sibling repo is absent, so a sync-only checkout / CI clone still runs
-// green; point XCHAIN_INDEXER_DIR at the repo to force it. Mirrors the
-// sibling-present guard pattern in test/unit/consensus/consensus_primitive_conformance.test.js.
+// and asserts deep equality with the local snapshot. The comparison cases judge
+// the sibling through the shared siblingCheckout verdict and skip (or fail under
+// XCHAIN_REQUIRE_SIBLINGS=1) per case when it is unusable; point
+// XCHAIN_INDEXER_DIR at the repo to force them. The snapshot shape case needs no
+// sibling and runs on every checkout.
 
 const assert = require('assert');
-const fs     = require('fs');
 const path   = require('path');
 
 const { ROLE_BY_ADDRESS, canonicalizeHashAddress } = require('../../src/util/protocol_address_roles');
+const { siblingCheckout, skipOrFail } = require('../helpers/sibling_checkout');
 
 const INDEXER_DIR = process.env.XCHAIN_INDEXER_DIR ||
     path.join(__dirname, '..', '..', '..', 'xchain-indexer');
 const INDEXER_MODULE = path.join(INDEXER_DIR, 'src', 'consensus', 'protocol_address_roles.js');
-const INDEXER_PRESENT = fs.existsSync(INDEXER_MODULE);
+// Judge the sibling like the other twin guards (refuses a lane symlink into an unpinned main checkout).
+const INDEXER_VERDICT = siblingCheckout(__dirname, INDEXER_MODULE);
+const INDEXER_PRESENT = INDEXER_VERDICT.usable;
+
+// Gate one comparison case on the sibling; the shape case below never calls this.
+function requireIndexer(ctx) {
+    return skipOrFail(ctx, INDEXER_VERDICT, 'the protocolAddressRoles consensus twin');
+}
 
 let indexerRoles = null;
 let indexerCanonicalize = null;
@@ -47,15 +55,9 @@ if (INDEXER_PRESENT) {
 
 describe('protocolAddressRoles cross-repo byte-identity (consensus) @regression', function () {
 
-    before(function () {
-        if (!INDEXER_PRESENT) {
-            if (process.env.XCHAIN_REQUIRE_SIBLINGS === '1')
-                throw new Error('protocolAddressRoles consensus twin requires the xchain-indexer sibling (XCHAIN_REQUIRE_SIBLINGS=1) but INDEXER_MODULE not resolvable');
-            this.skip();
-        }
-    });
-
+    // Gate per case, never in a describe-level hook: a skip there would pend the shape case too.
     it('snapshot equals the indexer config-derived ROLE_BY_ADDRESS', function () {
+        if (!requireIndexer(this)) return;
         // deepStrictEqual on address-keyed objects checks both key set and role
         // values, so a missing, extra, or re-pointed address all fail loudly.
         assert.deepStrictEqual(ROLE_BY_ADDRESS, indexerRoles,
@@ -64,6 +66,7 @@ describe('protocolAddressRoles cross-repo byte-identity (consensus) @regression'
     });
 
     it('canonicalizes every special address identically to the indexer', function () {
+        if (!requireIndexer(this)) return;
         for (const addr of Object.keys(indexerRoles)) {
             assert.strictEqual(canonicalizeHashAddress(addr), indexerCanonicalize(addr),
                 `canonicalization of ${addr} differs between sync and indexer`);
@@ -71,7 +74,7 @@ describe('protocolAddressRoles cross-repo byte-identity (consensus) @regression'
     });
 
     // The two cases above compare against the sibling indexer and SKIP when it is
-    // absent, so on a sync-only checkout they cover nothing. This one holds without
+    // unusable, so on a sync-only checkout they cover nothing. This one holds without
     // the sibling: it pins the shape the snapshot must have, so a regeneration that
     // dropped the bridge escrow roles on BOTH sides (which the comparison above
     // would happily call equal) still reddens here. An XBRIDGE escrow that is not
@@ -93,6 +96,7 @@ describe('protocolAddressRoles cross-repo byte-identity (consensus) @regression'
     });
 
     it('passes a non-special address through unchanged on both sides', function () {
+        if (!requireIndexer(this)) return;
         const plain = 'mq7tVfobimRUPxPNnyd5mKn11SVmTiLxtu';
         assert.strictEqual(canonicalizeHashAddress(plain), plain);
         assert.strictEqual(indexerCanonicalize(plain), plain);

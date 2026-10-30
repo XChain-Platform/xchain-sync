@@ -265,9 +265,13 @@ describe('pinnedValidators: assertPinnedEnvOverrides @regression', function(){
     it('refuses a well-formed override under a chain or network name the getters never read', function(){
         const set = JSON.stringify(goodSet), seed = JSON.stringify(goodSeed);
         for(const name of ['CHECKPOINT_VALIDATORS_BITCON_MAINNET', 'CHECKPOINT_VALIDATORS_BTC_MAINNET2',
-            'CHECKPOINT_VALIDATORS_btc_mainnet', 'CHECKPOINT_VALIDATORS_BTC_TESTNET_NEXT'])
+            'CHECKPOINT_VALIDATORS_btc_mainnet', 'CHECKPOINT_VALIDATORS_BTC_TESTNET_NEXT',
+            'checkpoint_validators_btc_mainnet', 'Checkpoint_Validators_BTC_MAINNET'])
             assertRefuses({ [name]: set }, name + ' (pinned validator set) names no chain and network');
         assertRefuses({ CHECKPOINT_SEED_DOGE_SIGNET: seed }, 'CHECKPOINT_SEED_DOGE_SIGNET (pinned seed checkpoint) names no');
+        // A mis-cased prefix is never read by the getters either, so it is refused, not skipped.
+        assertRefuses({ checkpoint_seed_doge_mainnet: seed }, 'checkpoint_seed_doge_mainnet (pinned seed checkpoint) names no');
+        pinned.assertPinnedEnvOverrides({ checkpoint_validators_badkey: 'not json' });
         for(const chain of ['BTC', 'LTC', 'DOGE', 'BITCOIN', 'LITECOIN', 'DOGECOIN']){
             for(const net of ['MAINNET', 'TESTNET', 'REGTEST']){
                 pinned.assertPinnedEnvOverrides({ ['CHECKPOINT_VALIDATORS_' + chain + '_' + net]: set,
