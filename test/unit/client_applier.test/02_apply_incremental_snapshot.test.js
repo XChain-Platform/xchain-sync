@@ -56,6 +56,7 @@ function registerIncrementalSnapshotCases1(){
         assert.strictEqual(db.beginTransaction.calledOnce, true);
         assert.strictEqual(db.commitTransaction.calledOnce, true);
     });
+    registerRecommittedEpochCase();
     it('skips null snapshot', async function(){
         await applier.applyIncrementalSnapshot(null);
         assert.strictEqual(db.beginTransaction.called, false);
@@ -94,6 +95,25 @@ function registerIncrementalSnapshotCases1(){
             tables: { debits: [{ id: 1 }] }
         });
         assert.strictEqual(rb.calledOnce, true);
+    });
+}
+
+function registerRecommittedEpochCase(){
+    it('authoritatively refreshes recommitted epoch roots without carrying the source id', async function(){
+        await applier.applyIncrementalSnapshot({
+            schema_version: SCHEMA_VERSION.indexer,
+            block_height: 20,
+            since_block: 10,
+            tables: { merkle_epochs: [{ id: 91, epoch: 2, start_block: 10, end_block: 19,
+                merkle_root: 'corrected', leaf_count: 10 }] }
+        });
+        let query = db.doQuery.getCalls().map(c => c.args[0])
+            .find(sql => /^INSERT INTO `merkle_epochs`/.test(sql));
+        assert.ok(query, 'the authoritative epoch set must use a plain INSERT upsert');
+        assert.ok(query.includes('ON DUPLICATE KEY UPDATE'), 'a duplicate epoch must refresh its root');
+        assert.ok(!query.includes('`id`'), 'the source-local surrogate id must not reach the replica');
+        assert.ok(query.includes('`merkle_root` = VALUES(`merkle_root`)'));
+        assert.ok(query.includes('`leaf_count` = VALUES(`leaf_count`)'));
     });
 }
 
