@@ -25,17 +25,17 @@ function hasSupersedeFields(cp) {
 }
 
 function supersedeSuffix(cp) {
-    const hasFrom   = !!cp && cp.supersedes_from != null;
-    const hasDigest = !!cp && cp.rules_digest != null;
+    let hasFrom = !!cp && cp.supersedes_from != null;
+    let hasDigest = !!cp && cp.rules_digest != null;
 
-    if(!hasFrom && !hasDigest) return '';
-    if(!hasFrom || !hasDigest)
+    if (!hasFrom && !hasDigest) return '';
+    if (!hasFrom || !hasDigest)
         throw new Error('checkpoint supersession requires supersedes_from and rules_digest');
 
-    const from = Number(cp.supersedes_from);
-    if(!Number.isSafeInteger(from) || from < 0)
+    let from = Number(cp.supersedes_from);
+    if (!Number.isSafeInteger(from) || from < 0)
         throw new Error('supersedes_from must be a non-negative safe integer');
-    if(typeof cp.rules_digest !== 'string' || !/^[0-9a-f]{64}$/i.test(cp.rules_digest))
+    if (typeof cp.rules_digest !== 'string' || !/^[0-9a-f]{64}$/i.test(cp.rules_digest))
         throw new Error('rules_digest must be 64 hexadecimal characters');
 
     return '|SUPERSEDE|' + from + '|' + cp.rules_digest.toLowerCase();

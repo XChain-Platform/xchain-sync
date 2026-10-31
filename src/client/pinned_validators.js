@@ -307,9 +307,10 @@ const _OVERRIDE_PREFIXES = [
 ];
 
 // A prefixed name with a CHAIN_NETWORK suffix, both halves non-empty. Mirrors config.js
-// bootstrapDepthEnvKey's shape rule.
+// bootstrapDepthEnvKey's shape rule, except that the prefix matches in any case, so a
+// mis-cased name reaches isReadOverrideName's upper-case check and is refused, not skipped.
 function isChainNetworkShaped(prefix, envKey) {
-    if (envKey.indexOf(prefix) !== 0) return false;
+    if (envKey.length < prefix.length || envKey.slice(0, prefix.length).toUpperCase() !== prefix) return false;
     const rest = envKey.slice(prefix.length);
     const sep  = rest.lastIndexOf('_');
     return sep > 0 && sep < rest.length - 1;

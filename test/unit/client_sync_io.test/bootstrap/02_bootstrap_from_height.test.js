@@ -273,3 +273,48 @@ describe('ClientSync bootstrapFromHeight', function(){
         await assert.rejects(() => sync.bootstrapFromHeightRetry(50000), /exhausted after 1 round/);
     });
 });
+
+// A real schema-apply halt: the schema serves one table whose CREATE fails with a
+// persistent DDL fault (disk full), so fetchAndApplySchema records the halt.
+function schemaFaultSync(configOverrides){
+    let built = makeSync(configOverrides);
+    sinon.stub(axios, 'get').callsFake(async (url) => {
+        if(url.indexOf('/status/') !== -1) return { data: { source_height: 1000000 } };
+        if(url.indexOf('/schema/') !== -1) return { data: { tables: { C: 'CREATE TABLE `C` (id INT)' } } };
+        throw new Error('unexpected url ' + url);
+    });
+    built.db.doQuery.callsFake(async (sql) => {
+        if(/information_schema\.tables/.test(sql)) return [];
+        if(/CREATE TABLE/.test(sql)){ let e = new Error('disk full'); e.errno = 1021; throw e; }
+        return [];
+    });
+    return built;
+}
+
+function quietConsole(){
+    beforeEach(function(){
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+        sinon.stub(console, 'warn');
+    });
+    afterEach(function(){ sinon.restore(); });
+}
+
+describe('ClientSync bootstrapFromHeight stops at a schema-apply halt @regression', function(){
+    quietConsole();
+
+    it('retry wrapper rejects on the schema halt after one round, as a plain halt abort', async function(){
+        let { sync, applier } = schemaFaultSync({ BOOTSTRAP_MAX_RETRIES: 3 });
+        let sleep = sinon.stub(sync.util, 'sleep').resolves();
+        let round = sinon.spy(sync, 'bootstrapFromHeight');
+
+        let err = await sync.bootstrapFromHeightRetry(50000).then(() => null, e => e);
+
+        assert.ok(err && /aborted by schema-apply-failed/.test(err.message));
+        assert.strictEqual(err instanceof ClientSync.BootstrapExhaustedError, false,
+            'a halt keeps the replica idle-halted rather than taking the exhaustion exit');
+        assert.strictEqual(round.callCount, 1);
+        assert.strictEqual(sleep.called, false, 'no backoff round after a halt');
+        assert.strictEqual(applier.applyIncrementalSnapshot.called, false);
+    });
+});
