@@ -38,6 +38,13 @@ function makeDb(result){
     };
 }
 
+function makeThrowingDb(thrown){
+    return {
+        async findLedgerTouchedTokens(){ throw thrown; },
+        async findEditedTokens(){ throw thrown; }
+    };
+}
+
 function errnoError(errno){
     const err = new Error('db failure');
     if(errno !== undefined) err.errno = errno;
@@ -104,9 +111,23 @@ for(const [name, collect] of COLLECTORS){
         });
 
         it('swallows an error that carries no errno', async function(){
-            const acc = {};
-            await collect(makeDb(errnoError()), 1, 2, CONN, acc);
-            assert.strictEqual(acc.tokens, undefined);
+            const err = errnoError();
+            await assert.rejects(collect(makeDb(err), 1, 2, CONN, {}), (thrown) => thrown === err);
+        });
+
+        it('rethrows a TypeError', async function(){
+            const err = new TypeError("Cannot read properties of undefined (reading 'query')");
+            await assert.rejects(collect(makeDb(err), 1, 2, CONN, {}), (thrown) => thrown === err);
+        });
+
+        it('rethrows an error whose errno is a string', async function(){
+            const err = errnoError('1146');
+            await assert.rejects(collect(makeDb(err), 1, 2, CONN, {}), (thrown) => thrown === err);
+        });
+
+        it('rethrows a null throw', async function(){
+            await assert.rejects(collect(makeThrowingDb(null), 1, 2, CONN, {}),
+                (thrown) => thrown === null);
         });
     });
 }

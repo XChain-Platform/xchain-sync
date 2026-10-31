@@ -15,6 +15,8 @@
 'use strict';
 
 const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
 const sinon  = require('sinon');
 const { collectUpdatedRows } = require('../../../src/server/updated_rows');
 const { fakeDb } = require('./helpers/fake_db.js');
@@ -31,6 +33,8 @@ const CLASS_SQL = [
     ['invalid_archive stamp', 'FROM anchor_actions p'],
     ['attest batch-head verdict', 'JOIN attests ac ON ac.request_id = ah.request_id'],
     ['COINPay match promotion', 'FROM `order_matches` m'],
+    ['token supply (ledger-touched ticks)', 'SELECT c.tick_id FROM credits c'],
+    ['token edit (valid ISSUE ticks)', 'SELECT i.tick_id FROM issues i'],
 ];
 
 // A database whose query for `fragment` throws `err` and whose other queries answer [].
@@ -68,5 +72,15 @@ describe('updatedRows.collectUpdatedRows errno-less errors @regression', functio
             assert.strictEqual(out.unstakes, undefined);
             assert.strictEqual(out.contract_unstakes, undefined);
         }
+    });
+
+    it('keeps inline errno checks out of updated-rows collectors', function(){
+        const root = path.resolve(__dirname, '../../../src/server');
+        const splitDir = path.join(root, 'updated_rows');
+        const files = [path.join(root, 'updated_rows.js')]
+            .concat(fs.readdirSync(splitDir).filter(name => name.endsWith('.js'))
+                .map(name => path.join(splitDir, name)));
+        const offenders = files.filter(file => /\.errno\b/.test(fs.readFileSync(file, 'utf8')));
+        assert.deepStrictEqual(offenders, [], 'updated-rows collectors must use isSchemaGapError');
     });
 });
