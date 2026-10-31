@@ -291,7 +291,10 @@ function missingReplicatedTables(present, dbType, sourcePresent){
 // the indexer's LEFT JOIN then resolves source_pubkey to NULL, which is a consensus
 // divergence. pubkeys carries a surrogate AUTO_INCREMENT `id` for exactly this, used
 // as a replication cursor only and never hashed. Every cursor column is monotonic and
-// every such table is INSERT-only, so `<col> > cursor ORDER BY <col>` is stable.
+// every such table is INSERT-only, so `<col> > cursor ORDER BY <col>` is stable. The
+// decoder writes pubkeys only inside a confirmed block transaction; its mempool lane
+// carries a discovered key until confirmation without allocating an id. Reorg cleanup
+// deliberately retains known pubkeys, so an orphaned block can leave known residue.
 function lookupCursorColumn(table){
     // eslint-disable-next-line no-unused-vars
     return 'id';

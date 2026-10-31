@@ -17,6 +17,7 @@
  ********************************************************************/
 
 const { add } = require('./accumulator.js');
+const { isSchemaGapError } = require('../../db/tables/schema_gap');
 
 // The two classes that refresh a surviving `tokens` row, split out of the entry because
 // they share one shape: the row's action_index is pinned at the tick's first issuance, so
@@ -62,7 +63,7 @@ async function collectTokenSupplyRows(db, from, to, conn, acc){
         // SELECT DISTINCT semantics, so the emitted tick set is byte-identical.
         let tokenRows = await db.findLedgerTouchedTokens(from, to, conn);
         add(acc, 'tokens', tokenRows);
-    } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; }
+    } catch(e){ if(!isSchemaGapError(e)) throw e; }
 }
 
 async function collectTokenEditRows(db, from, to, conn, acc){
@@ -109,6 +110,6 @@ async function collectTokenEditRows(db, from, to, conn, acc){
     try {
         let tokenRows = await db.findEditedTokens(from, to, conn);
         add(acc, 'tokens', tokenRows);
-    } catch(e){ if(e && typeof e.errno === 'number' && e.errno !== 1146 && e.errno !== 1054) throw e; }
+    } catch(e){ if(!isSchemaGapError(e)) throw e; }
 }
 module.exports = { collectTokenSupplyRows, collectTokenEditRows };
