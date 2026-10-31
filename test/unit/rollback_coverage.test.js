@@ -1400,7 +1400,7 @@ describe('Rollback coverage guard @regression', function(){
     });
 
     // The state_hash selection must mirror the SAME mutation classes the updated_rows +
-    // cooldownCredits channels carry (and that ClientRollback reverses), keyed on the same
+    // cooldown_credits.js channels carry (and that ClientRollback reverses), keyed on the same
     // block columns, or the integrity hash covers a different row set than it protects.
     it('state_hash.js selection predicates mirror the replicated mutation classes', function(){
         const fs = require('fs'), pathMod = require('path');
@@ -1636,8 +1636,8 @@ describe('dispensers convergence wording does not drift back', function(){
         './rollback_coverage.test.js',
     ];
     // Deliberately narrow. A bare /full snapshot only/ scan would false-positive on
-    // snapshot_builder.js, where unscoped tables legitimately "ride along in the full
-    // snapshot only" and that phrasing is about other tables entirely.
+    // snapshot_builder/table_sets.js, where snapshot-class balances and state_tree_nodes
+    // legitimately ride the full snapshot only and the wording concerns other tables.
     const STALE = /converges?\s+(?:via|through)\s+the\s+full\s+snapshot\s+only/i;
 
     // The sentence that started this drift was wrapped across three comment lines, so a

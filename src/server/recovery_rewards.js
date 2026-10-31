@@ -29,9 +29,12 @@
  * This selects those rows by their materialization block (recovery_pending_rewards.
  * applied_block, set to B by the re-drain) so they can be merged into the normal
  * validator_rewards payload, keeping their block_index = E. It is the forward analogue of
- * the cooldown-maturity collector (cooldownCredits.js). No reverse-delete twin is needed:
- * validator_rewards rows carry block_index = E, so ClientRollback's existing block_index
- * >= B delete already reverses an injected row correctly (deleted iff E is orphaned).
+ * the cooldown-maturity collector (cooldown_credits.js). ClientRollback has two reverse
+ * paths for these rows: the derive_block_index delete removes derive-era restores whose
+ * materialization block is orphaned, while the block_index delete removes a legacy NULL-
+ * stamped restore when its earn block is orphaned. This selection, the indexer's stamp in
+ * applyPendingRewardsForAddress, and both deletes must remain in lockstep because
+ * validator_rewards is not consensus-hashed and drift would otherwise be silent.
  * The follower applies via the normal validator_rewards path (INSERT IGNORE on the UNIQUE
  * key, so re-injection across the live + snapshot channels is idempotent). Indexer dbType only.
  *

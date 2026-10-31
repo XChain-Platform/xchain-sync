@@ -37,6 +37,7 @@ const { carrierLogicDigest } = require('./health/carrier_logic');
 const SyncService = require('./sync_service');
 const Utility     = require('./util');
 const BlockHasher = require('./client/block_hasher');
+const TransparencyLog = require('./server/transparency_log');
 const { createApiKeyMiddleware, safeEqual } = require('./http/middleware');
 const { createShutdown, createSyncDrain } = require('./http/shutdown');
 const { getReplicatedTables, missingReplicatedTables } = require('./schema/replicated_tables');
@@ -363,6 +364,38 @@ function getContentParityIdCeiling(syncService, chain, network, dbType){
         ? poller.getContentParityIdCeiling() : null;
 }
 
+function sourceHashIdentity(hashRow, dbType){
+    if(!hashRow) return null;
+    return dbType === 'decoder'
+        ? (hashRow.block_hash == null ? null : String(hashRow.block_hash))
+        : TransparencyLog.blockIdentity(hashRow);
+}
+
+// Publish live hashes only when they still describe the identity paired with the
+// poller's broadcast height. During a reorg the indexer can roll back before the
+// poller observes its marker, leaving the two reads temporarily out of step.
+function applyConsistentServerHashFields(row, syncService, hashRow, dbType, chain, network, polledBlock){
+    const poller = (typeof syncService.getPoller === 'function')
+        ? syncService.getPoller(chain, network, dbType) : null;
+    const recorded = (poller && typeof poller.getRecordedIdentity === 'function')
+        ? poller.getRecordedIdentity(polledBlock) : null;
+    const live = sourceHashIdentity(hashRow, dbType);
+    if(recorded === null || recorded === undefined){
+        row.hash_identity_consistent = null;
+        applyServerHashFields(row, hashRow, dbType);
+        return;
+    }
+    if(live !== recorded){
+        row.hash_identity_consistent = false;
+        applyServerHashFields(row, null, dbType);
+        getLogger().warn('Status hash identity unavailable for ' + chain + '/' + network + '/' + dbType +
+            ' at broadcast height ' + polledBlock + '; source is between poll states');
+        return;
+    }
+    row.hash_identity_consistent = true;
+    applyServerHashFields(row, hashRow, dbType);
+}
+
 // Read the database tip that brackets a table_counts loop; null when it cannot be read.
 async function readCountsTip(db){
     try { return await db.getLastBlock(); }
@@ -407,7 +440,7 @@ async function buildServerStatusRow(syncService, db, dbType, chain, network){
     let row = createServerStatusRow(pollerStatus, polledBlock, sourceBlock, hashRow);
     applyReplicaFreshness(row, pollerStatus);
     await applyProtocolHaltFreshness(row, db, dbType);
-    applyServerHashFields(row, hashRow, dbType);
+    applyConsistentServerHashFields(row, syncService, hashRow, dbType, chain, network, polledBlock);
     if(dbType !== 'decoder'){
         row.index_map_checksum = null;
         if(cfg['INDEX_MAP_PARITY_CHECK'] && polledBlock !== null){

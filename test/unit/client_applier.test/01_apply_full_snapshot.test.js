@@ -92,6 +92,26 @@ function registerFullSnapshotCases1(){
     });
 }
 
+function registerFullSnapshotRepairCase(){
+    it('repairs sync_meta holes inside a full indexer snapshot transaction', async function(){
+        db.dbType = 'indexer';
+        await applier.applyFullSnapshot({
+            schema_version: SCHEMA_VERSION.indexer,
+            block_height: 10,
+            tables: {
+                blocks: [{ block_index: 10 }],
+                sync_meta: [{ block_index: 8, ledger_hash: 'l8' }]
+            }
+        });
+        let repair = db.doQuery.getCalls().find(c => /INSERT IGNORE INTO sync_meta/.test(c.args[0]));
+        assert.ok(repair, 'full bootstrap must fill leaves above its first carried sync_meta row');
+        assert.deepStrictEqual(repair.args[1], [10, 10],
+            'an empty local transparency table must seed from the first snapshot block');
+        assert.ok(repair.callId < db.commitTransaction.firstCall.callId,
+            'repair must commit atomically with the snapshot');
+    });
+}
+
 function registerFullSnapshotCases2(){
     it('does NOT clear replica-local control tables sync_halt / sync_state on full-snapshot apply @regression', async function(){
         // These durable control tables are never shipped in a snapshot; the clear
@@ -274,6 +294,7 @@ describe('ClientApplier', function(){
 
     describe('applyFullSnapshot', function(){
         registerFullSnapshotCases1();
+        registerFullSnapshotRepairCase();
         registerFullSnapshotCases2();
         registerFullSnapshotCases3();
         registerFullSnapshotCases4();

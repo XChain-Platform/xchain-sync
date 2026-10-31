@@ -22,15 +22,16 @@
  * last_action_index. Its reorg runs the full replay for every tick the orphaned
  * range touched:
  *
- *   xchain-indexer/src/rollback/index.js:165   collectAffectedEntities (issues read
- *                                              at src/db/rollback/read_phase.js:136)
- *   xchain-indexer/src/rollback/commit.js:61   updateTokens(tickers, true)
- *   xchain-indexer/src/db/database/ledger_checks.js:135  updateTokenInfo
- *   xchain-indexer/src/db/issues/token_info.js:29        getTokenInfo, whose replay is
+ *   xchain-indexer/src/rollback/index.js       collectAffectedEntities call
+ *   xchain-indexer/src/rollback/read_phase.js  collectAffectedEntities
+ *   xchain-indexer/src/db/rollback/read_phase.js  entityQueryFor*Tables
+ *   xchain-indexer/src/rollback/commit.js      updateTokens(tickers, true)
+ *   xchain-indexer/src/db/database/ledger_checks.js  updateTokenInfo
+ *   xchain-indexer/src/db/issues/token_info.js        getTokenInfo, whose replay is
  *       issueReplay.rowsQuery, issueReplay.rowValues and issueReplay.foldRow
- *   xchain-indexer/src/db/tokens/token_writer.js:26      createToken, via
- *       normalizeDataValues (src/db/database/normalize.js:136), fields (:57) and
- *       updateSql (:113)
+ *   xchain-indexer/src/db/tokens/token_writer.js      createToken, via tokenRecord.fields
+ *       and tokenRecord.updateSql, after normalizeDataValues in
+ *       xchain-indexer/src/db/database/normalize.js
  *
  * A replica cannot call that code, and nothing streams the refolded row back: the
  * row's action_index is pinned at the first issuance, and the surviving issues are
@@ -51,6 +52,7 @@
 'use strict';
 
 const mathjs = require('mathjs');
+const { isSchemaGapError } = require('./tables/schema_gap');
 
 // Wire-field lists the source's normalizeDataValues applies, restricted to the keys
 // the fold produces (xchain-indexer/src/config/wire_fields.js, token_limits.js).
@@ -74,15 +76,25 @@ const FOLD_COLUMNS = Object.freeze(['max_supply', 'max_mint', 'decimals', 'descr
     'bridge_chains', 'min_depth', 'lock_bridge', 'owner_id', 'last_action_index']);
 
 const CHUNK = 500;
+const LEDGER_TICK_TABLES = new Set(['credits', 'debits', 'escrows']);
+const CONTRACT_TICK_TABLES = new Set(['contract_stakes', 'contract_unstakes', 'contract_delegations']);
+const TRANSACTION_TICK_TABLES = new Set(['airdrops', 'destroys', 'mints', 'sends', 'fees', 'issues', 'swaps']);
 
 // Source Utility.isNull / isNumeric / exceedsUnsignedColumn / bcformat, restated.
 function isNull(v){ return (v === null || v === undefined || v === ''); }
 function isNumeric(v){ return typeof v === 'bigint' || (!isNaN(parseFloat(v)) && isFinite(v)); }
 function exceedsU64(v){
-    let raw = String(v).trim();
-    if(/^[+-]?[0-9]+$/.test(raw)){ let n = BigInt(raw); return (n < 0n || n > BigInt(U64_MAX)); }
-    let approx = Number(raw);
-    return (Number.isFinite(approx) && (approx < 0 || approx > Number(U64_MAX)));
+    const raw = String(v).trim();
+    if(/^[+-]?[0-9]+$/.test(raw)){ const n = BigInt(raw); return (n < 0n || n > BigInt(U64_MAX)); }
+    const approx = Number(raw);
+    if(!Number.isFinite(approx)) return false;
+    try {
+        const exact = mathjs.bignumber(raw);
+        const upperRoundingBoundary = mathjs.bignumber(U64_MAX).plus(0.5);
+        return approx < 0 || approx > Number(U64_MAX) || exact.gte(upperRoundingBoundary);
+    } catch(e){
+        return false;
+    }
 }
 function bcformat(num, decimals){
     let str = String(num).trim();
@@ -230,15 +242,54 @@ async function foldTicks(db, tickIds){
     return out;
 }
 
-// Ticks named by any issues row in the orphaned range, valid or not, read BEFORE the
-// dataTables delete removes those rows. The source's read phase reads `issues` with no
-// status filter too, so both sides refresh the same set. An empty result makes the
-// refold below a no-op, which is what a rollback that touched no ISSUE must be.
-async function collectIssueTickIds(db, firstActionIndex){
-    let rows = await db.doQuery(
-        "SELECT DISTINCT tick_id FROM issues WHERE action_index >= ? AND tick_id IS NOT NULL ORDER BY tick_id",
-        [firstActionIndex], null, { rethrow: true });
-    return (rows || []).map(r => r.tick_id);
+// Mirrors the ticker-bearing branches of the indexer's entityQueryFor*Tables. Its
+// joins are part of the set definition: a row with an unresolved ticker or source
+// address does not enter the source rollback's ticker list.
+function refoldTickQuery(table){
+    if(LEDGER_TICK_TABLES.has(table))
+        return "SELECT DISTINCT m.tick_id AS tick_id FROM " + table + " m " +
+            "INNER JOIN index_tickers t1 ON (t1.id=m.tick_id) " +
+            "INNER JOIN index_addresses a1 ON (a1.id=m.address_id) WHERE m.action_index >= ?";
+    if(CONTRACT_TICK_TABLES.has(table))
+        return "SELECT DISTINCT m.tick_id AS tick_id FROM " + table + " m " +
+            "INNER JOIN index_tickers t1 ON (t1.id=m.tick_id) " +
+            "INNER JOIN index_addresses a1 ON (a1.id=m.source_id) WHERE m.action_index >= ?";
+    if(!TRANSACTION_TICK_TABLES.has(table)) return false;
+    const tickColumn = table === 'swaps' ? 'give_tick_id' : 'tick_id';
+    let joins = "INNER JOIN actions a1 ON (a1.action_index=m.action_index) " +
+        "INNER JOIN transactions t1 ON (t1.tx_index=a1.tx_index) " +
+        "INNER JOIN index_tickers t2 ON (t2.id=m." + tickColumn + ") " +
+        "INNER JOIN index_addresses a2 ON (a2.id=t1.source_id) ";
+    if(['mints', 'sends', 'fees'].includes(table))
+        joins += "LEFT JOIN index_addresses a3 ON (a3.id=m.destination_id) ";
+    if(table === 'issues')
+        joins += "LEFT JOIN index_addresses a3 ON (a3.id=m.transfer_id) " +
+            "LEFT JOIN index_addresses a4 ON (a4.id=m.transfer_supply_id) ";
+    return "SELECT DISTINCT m." + tickColumn + " AS tick_id FROM " + table + " m " + joins +
+        "WHERE m.action_index >= ?";
+}
+
+function compareTickIds(a, b){
+    const left = BigInt(String(a)), right = BigInt(String(b));
+    return left < right ? -1 : (left > right ? 1 : 0);
+}
+
+// Read before the generic deletes, as the source read phase does. Missing legacy
+// tables are skipped independently so one schema gap does not discard the other sets.
+async function collectRefoldTickIds(db, firstActionIndex, tables){
+    const found = new Map();
+    for(const table of (tables || [])){
+        const query = refoldTickQuery(table);
+        if(!query) continue;
+        try {
+            const rows = await db.doQuery(query, [firstActionIndex], null, { rethrow: true });
+            for(const row of (rows || []))
+                if(row.tick_id !== null && row.tick_id !== undefined) found.set(String(row.tick_id), row.tick_id);
+        } catch(e){
+            if(!isSchemaGapError(e)) throw e;
+        }
+    }
+    return [...found.values()].sort(compareTickIds);
 }
 
 // The surviving tokens rows' first-issuance action_index, by tick_id.
@@ -312,4 +363,4 @@ const RESTATED = Object.freeze({
     U64_MAX, MIN_TOKEN_DECIMALS, MAX_TOKEN_DECIMALS, FOLD_KEYS: Object.freeze(Object.keys(rowValues({}))),
 });
 
-module.exports = { FOLD_COLUMNS, RESTATED, foldIssueRows, collectIssueTickIds, refoldTokenRows, tokenFoldRows };
+module.exports = { FOLD_COLUMNS, RESTATED, foldIssueRows, collectRefoldTickIds, refoldTokenRows, tokenFoldRows };

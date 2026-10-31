@@ -109,6 +109,42 @@ describe('Checkpoint supersession @regression', function(){
         assert.strictEqual(result.valid, false);
         assert.strictEqual(result.validSigs, 0);
     });
+});
+
+describe('Checkpoint supersession @regression', function(){
+
+    it('fails closed when active supersession fields are malformed', function(){
+        const signer = makeSigner();
+        const base = sign(checkpointAt(), signer);
+        const malformed = [
+            { supersedes_from: 5 }, { rules_digest: RULES_DIGEST },
+            { supersedes_from: -1, rules_digest: RULES_DIGEST },
+            { supersedes_from: 5, rules_digest: 'zz' },
+        ];
+        for(const fields of malformed){
+            const cp = Object.assign({}, base, fields);
+            assert.strictEqual(checkpoint.tryCanonicalCheckpoint(cp), null);
+            const result = checkpoint.verifyCheckpoint(cp,
+                [{ pubkey: signer.pubkey, weight: '100', source: 'validator-1' }]);
+            assert.strictEqual(result.valid, false);
+            assert.strictEqual(result.validSigs, 0);
+            assert.strictEqual(result.canonical, null);
+        }
+    });
+
+    it('treats a malformed rotation step as an inconclusive wait', async function(){
+        const sync = Object.assign(Object.create(ClientSync.prototype), {
+            chain: 'BTC', network: 'regtest', lastAppliedBlock: 120,
+            checkpointBindingMismatches: () => null,
+        });
+        const result = await sync.attestRotationStep(
+            checkpointAt({ supersedes_from: 5 }), checkpointAt({ block_index: 120 }));
+        assert.strictEqual(result.verdict, 'wait');
+        assert.match(result.reason, /malformed signed form/);
+    });
+});
+
+describe('Checkpoint supersession @regression', function(){
 
     it('follow-forward advances past a superseded step without a divergence halt', async function(){
         const seed = checkpointAt({ block_index: 90, checkpoint_seq: 9, snapshot_block: 84 });
@@ -125,5 +161,17 @@ describe('Checkpoint supersession @regression', function(){
         assert.strictEqual(result.verdict, 'ok');
         assert.strictEqual(result.attested, superseder);
         assert.deepStrictEqual(visited, [12], 'the superseded step must be non-binding');
+    });
+
+    it('follow-forward waits when the served checkpoint canonical is malformed', async function(){
+        const seed = checkpointAt({ block_index: 90, checkpoint_seq: 9, snapshot_block: 84 });
+        const attested = checkpointAt({ block_index: 120, checkpoint_seq: 12, snapshot_block: 110 });
+        const served = Object.assign({}, attested, { supersedes_from: 5 });
+        const sync = syncOverRange([attested], null, []);
+
+        const result = await sync.followCheckpointForward(served, seed, 'source');
+
+        assert.strictEqual(result.verdict, 'wait');
+        assert.match(result.reason, /differs from the attested range step/);
     });
 });

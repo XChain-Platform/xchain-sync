@@ -48,6 +48,7 @@ let ClientSyncWS, fakeWsInstance, FakeWS;
 function setupWebSocketTest(){
     sinon.stub(console, 'log');
     sinon.stub(console, 'error');
+    sinon.stub(console, 'warn');
 
     fakeWsInstance = new EventEmitter();
     fakeWsInstance.close    = sinon.stub();
@@ -302,6 +303,43 @@ describe('ClientSync: connectWebSocket', function(){
 
         assert.ok(sync.connectWebSocket.calledOnce, 'must reconnect after delay');
         clock.restore();
+    });
+});
+
+describe('ClientSync: connectWebSocket', function(){
+    beforeEach(setupWebSocketTest);
+    afterEach(function(){ sinon.restore(); });
+
+    it('eviction cancels a reconnect timer that was already pending @regression', async function(){
+        let { sync } = makeSyncWS({
+            SYNC_SOURCES: 'http://a:3006,http://b:3006,http://c:3006,http://d:3006',
+            CLIENT_RECONNECT_DELAY: 100
+        });
+        sync.running = true;
+        let clock = sinon.useFakeTimers();
+        let create = sinon.spy(sync, 'createWebSocket');
+        sync.connectWebSocket('http://d:3006', 3);
+        fakeWsInstance.emit('close');
+        assert.strictEqual(sync._reconnectTimers.has(3), true);
+
+        sync.evictSource(3);
+        await clock.tickAsync(101);
+
+        assert.strictEqual(sync._reconnectTimers.has(3), false);
+        assert.strictEqual(sync._sourcesNeedingRecovery.has(3), false);
+        assert.strictEqual(create.callCount, 1, 'the pending timer never creates another socket');
+        clock.restore();
+    });
+
+    it('connectWebSocket refuses an evicted source at the choke point @regression', function(){
+        let { sync } = makeSyncWS({ SYNC_SOURCES: 'http://a:3006,http://b:3006,http://c:3006,http://d:3006' });
+        let create = sinon.spy(sync, 'createWebSocket');
+        sync._evictedSources.add(3);
+
+        sync.connectWebSocket('http://d:3006', 3);
+
+        assert.strictEqual(create.called, false);
+        assert.strictEqual(sync.wsConns[3], undefined);
     });
 });
 

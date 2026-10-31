@@ -37,6 +37,7 @@ const { archiveAuthorScopeJoin, ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION } = req
 const gateRegistry = require('../consensus/gate_registry');
 // The one schema-gap rule (errno 1146 missing table / 1054 missing column) the forward channels use.
 const { isSchemaGapError } = require('../db/tables/schema_gap');
+const { rollbackPreservingError } = require('./rollback_preserving_error');
 const util = require('node:util');
 const { getLogger } = require('../observability');
 const logger = getLogger();
@@ -902,12 +903,12 @@ class ClientRollback {
                 }
             }
 
-            // Ticks whose `issues` history this rollback truncates, read while the orphaned
-            // rows still exist. Refolded near the end (see refoldTokenRows below).
-            let issueTickIds = [];
+            // Ticks named by ticker-bearing rows in the orphaned range, collected with
+            // the source rollback's joins while those rows still exist.
+            let refoldTickIds = [];
             if(firstActionIndex !== null){
                 try {
-                    issueTickIds = await tokenRefold.collectIssueTickIds(this.db, firstActionIndex);
+                    refoldTickIds = await tokenRefold.collectRefoldTickIds(this.db, firstActionIndex, this.dataTables);
                 } catch(e){
                     if(!isSchemaGapError(e)) throw e;
                 }
@@ -982,9 +983,9 @@ class ClientRollback {
 
             // Sweep orphan icon rows after the dataTables delete has removed any
             // reorged token rows. icons is keyed by token_id (FK to tokens), so
-            // icons for reorged tokens become orphans; the next full snapshot would
-            // eventually overwrite them, but serving stale icon state for a token
-            // that no longer exists is misleading. Mirrors xchain-indexer/src/rollback/rederive.js.
+            // icons for reorged tokens become orphans. icons is operator-local and never
+            // shipped in a snapshot, so this sweep is the replica's only cleanup.
+            // Mirrors xchain-indexer/src/rollback/rederive.js.
             try {
                 await this.db.doQuery('DELETE FROM icons WHERE token_id NOT IN (SELECT id FROM tokens)', []);
             } catch(e){
@@ -1278,15 +1279,12 @@ class ClientRollback {
 
             // Mirror the server's TransparencyLog.pruneFrom, which deletes BOTH
             // sync_meta AND merkle_epochs on reorg; the follower only mirrored
-            // sync_meta above. merkle_epochs is sync-owned, reaches followers whole
-            // in full snapshots and in every indexer incremental catch-up
-            // (indexerFullDumpSet in snapshot_builder/table_sets.js), and is applied INSERT IGNORE
-            // (ClientApplier.ignoreTables), so a reorg that re-roots a closed epoch
-            // would leave the stale root in place forever: the corrected re-dump
-            // collides on UNIQUE epoch and is silently skipped. Deleting the
-            // orphaned-range epochs lets the next catch-up re-insert the corrected
-            // roots (and ids) cleanly. Keyed by end_block (not block_index), like
-            // the server's prune. Falls outside the generic blockTables loop.
+            // sync_meta above. merkle_epochs is sync-owned and reaches followers whole
+            // in full snapshots and in every indexer incremental catch-up. Re-delivery
+            // upserts a root on its unique epoch while preserving a replica-local id,
+            // but an upsert cannot remove an epoch the source deleted. Delete every
+            // orphaned-range epoch before the next catch-up. Keyed by end_block (not
+            // block_index), like the server's prune. Falls outside blockTables.
             try {
                 await this.db.doQuery("DELETE FROM merkle_epochs WHERE end_block >= ?", [block_index]);
             } catch(e){
@@ -1338,17 +1336,14 @@ class ClientRollback {
                 if(e.errno !== 1146){ logger.error(util.format('rebuildBalances after rollback failed:', e)); throw e; }
             }
 
-            // Refold the tokens metadata of every tick the orphaned range issued on, the
-            // reverse leg of updated_rows class 7. An orphaned ISSUE that edited a surviving
-            // token (owner, a lock, the callback, a list, the mint window, the bridge policy)
-            // rewrote the row in place, and the generic delete cannot touch it: its
-            // action_index is the FIRST issuance. The source refolds it from the surviving
-            // issues (xchain-indexer rollback/commit.js updateTokens), and no forward window
-            // ever re-sends it, so without this the replica kept the orphaned edit forever.
+            // Refold the tokens metadata of every tick the orphaned range touched through
+            // the source rollback's ticker-bearing tables. The source performs the same
+            // full ISSUE-history refold when only a MINT, SEND or ledger row was orphaned,
+            // keeping the affected set identical before the supply recompute.
             // Runs after every delete, as the source's refresh does, and BEFORE the supply
             // recompute below, which reads tokens.decimals.
             try {
-                let refold = await tokenRefold.refoldTokenRows(this.db, issueTickIds);
+                const refold = await tokenRefold.refoldTokenRows(this.db, refoldTickIds);
                 if(refold.skipped.length)
                     logger.warn('ClientRollback: tokens refold skipped ' + refold.skipped.length + ' tick(s) whose first ' +
                         'issuance is not held locally (truncated replica?); tick_ids ' + refold.skipped.slice(0, 20).join(','));
@@ -1375,7 +1370,7 @@ class ClientRollback {
             logger.info('Indexer rollback to block ' + block_index + ' completed (' + this.util.getTimer(timer) + ')');
 
         } catch(e){
-            await this.db.rollbackTransaction();
+            await rollbackPreservingError(this.db, e, 'Indexer rollback');
             logger.error(util.format('Indexer rollback failed:', e));
             throw e;
         }
@@ -1433,7 +1428,7 @@ class ClientRollback {
             logger.info('Decoder rollback to block ' + block_index + ' completed (' + this.util.getTimer(timer) + ')');
 
         } catch(e){
-            await this.db.rollbackTransaction();
+            await rollbackPreservingError(this.db, e, 'Decoder rollback');
             logger.error(util.format('Decoder rollback failed:', e));
             throw e;
         }

@@ -214,13 +214,12 @@ function decoderIncrementalSets(){
 // snapshots. slash_events is block-scoped for the same reason
 // (see ServerPoller.blockScopedTables).
 //
-// Tables with neither a block_index nor an action_index cursor, such as
-// icons (token-icon processing state, keyed by token_id) and
-// price_snapshots (mirrored from the cross-chain hub's price channel,
-// keyed by round_number/coin_pair), cannot be scoped incrementally and
-// are intentionally omitted. They ride along in the full snapshot only;
-// for price_snapshots, live convergence is handled by the hub DB sync
-// mirror, not this block stream.
+// icons (local, keyed by token_id) and price_snapshots (hub-mirror, keyed by
+// round_number/coin_pair) are absent because the registry classifies them as
+// operator-local, not because they lack a cursor. OPERATOR_LOCAL_TABLES keeps
+// both out of full and incremental snapshots, and xchain-sync never ships them.
+// Consensus-relevant price_snapshots reaches a node only through that node's
+// own hub_db_sync subscription; see the OPERATOR_LOCAL_TABLES contract above.
 // attest_validator_stats, markets, and merkle_epochs are also unscoped
 // but are included in indexerFullDump below so a follower does not
 // freeze those tables at bootstrap height (see comment there).

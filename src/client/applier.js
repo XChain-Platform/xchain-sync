@@ -30,6 +30,7 @@ const { isStateCommitmentActive, isStateCommitmentActivationBlock } = require('.
 const { coinTicker }      = require('../consensus-constants');
 const { OPERATOR_LOCAL_TABLES, SOURCE_UNSTREAMED_TABLES, REPLICA_LEDGER_TABLES, orderSnapshotTables } = require('../server/snapshot_builder');
 const lifecycle           = require('../table_lifecycle');
+const { rollbackPreservingError } = require('./rollback_preserving_error');
 const util = require('node:util');
 const { getLogger } = require('../observability');
 const logger = getLogger();
@@ -239,7 +240,7 @@ class ClientApplier {
             if((await this.db.commitTransaction()) === false)
                 throw new Error('block ' + payload.block_index + ': no open transaction at commit; nothing was committed');
         } catch(e){
-            await this.db.rollbackTransaction();
+            await rollbackPreservingError(this.db, e, 'Block apply');
             logger.error(util.format('Error applying block %s:', payload.block_index, e));
             throw e;
         }
@@ -402,15 +403,19 @@ class ClientApplier {
         return dbType === 'indexer' && isStateCommitmentActive(snapshotData.block_height, this.network, this.coinTicker);
     }
 
+    assertSnapshotSchemaVersion(snapshotData, dbType){
+        let expectedVersion = SCHEMA_VERSION[dbType];
+        if(snapshotData.schema_version !== expectedVersion){
+            throw new Error('Schema version mismatch: server=' + snapshotData.schema_version + ' client=' + expectedVersion + '; restart the validator after upgrading the server');
+        }
+    }
+
     // Apply a full snapshot after confirming that its schema matches this replica.
     async applyFullSnapshot(snapshotData){
         if(!snapshotData || !snapshotData.tables) return;
 
         let dbType = (this.db && this.db.dbType) || 'indexer';
-        let expectedVersion = SCHEMA_VERSION[dbType];
-        if(snapshotData.schema_version !== expectedVersion){
-            throw new Error('Schema version mismatch: server=' + snapshotData.schema_version + ' client=' + expectedVersion + '; restart the validator after upgrading the server');
-        }
+        this.assertSnapshotSchemaVersion(snapshotData, dbType);
 
         logger.info('Applying full snapshot (block height: ' + snapshotData.block_height + ')...');
         let timer = this.util.startTimer();
@@ -444,6 +449,8 @@ class ClientApplier {
                 this.logLargeTableInsert(table, rows);
             }
 
+            if(dbType === 'indexer') await this.repairSyncMetaHoles(snapshotData);
+
             // Drops orphaned state_tree_roots at or above the snapshot height, keyed by ticker.
             try {
                 await this.db.deleteStateTreeRootsFromBlock(this.coinTicker, this.network, snapshotData.block_height);
@@ -458,7 +465,7 @@ class ClientApplier {
                 throw new Error('full snapshot: no open transaction at commit; nothing was committed');
             logger.info('Full snapshot applied (' + this.util.getTimer(timer) + ')');
         } catch(e){
-            await this.db.rollbackTransaction();
+            await rollbackPreservingError(this.db, e, 'Full snapshot apply');
             logger.error(util.format('Error applying full snapshot:', e));
             throw e;
         }
@@ -510,6 +517,7 @@ class ClientApplier {
                 await this.maybeRederiveEscrow(snapshotData.tables);
                 if(snapshotData.tables.credits || snapshotData.tables.debits)
                     await this.rebuildBalancesTouchedBy(snapshotData.tables.credits, snapshotData.tables.debits);
+                await this.repairSyncMetaHoles(snapshotData);
                 // Re-seed the SMT at the new tip: the incremental window's blocks never
                 // had per-block roots computed, so without this the next live block would
                 // find no prior balances_root. Full build over the now-complete replica
@@ -522,10 +530,24 @@ class ClientApplier {
                 throw new Error('incremental snapshot: no open transaction at commit; nothing was committed');
             logger.info('Incremental snapshot applied (' + this.util.getTimer(timer) + ')');
         } catch(e){
-            await this.db.rollbackTransaction();
+            await rollbackPreservingError(this.db, e, 'Incremental snapshot apply');
             logger.error(util.format('Error applying incremental snapshot:', e));
             throw e;
         }
+    }
+
+    async repairSyncMetaHoles(snapshotData){
+        let snapshotStart = null;
+        for(const row of (snapshotData.tables.blocks || [])){
+            const blockIndex = Number(row.block_index);
+            if(Number.isSafeInteger(blockIndex) && (snapshotStart === null || blockIndex < snapshotStart))
+                snapshotStart = blockIndex;
+        }
+        const result = await this.db.repairSyncMetaHoles(snapshotStart);
+        const filled = result && Number(result.affectedRows || 0);
+        if(filled > 0)
+            logger.info('Repaired ' + filled + ' missing sync_meta row(s) from local block hashes');
+        return filled;
     }
 
     // One incremental snapshot's tables, inserted in payload order inside the
@@ -566,7 +588,7 @@ class ClientApplier {
             if((await this.db.commitTransaction()) === false)
                 throw new Error('dispensers reconcile: no open transaction at commit; nothing was committed');
         } catch(e){
-            await this.db.rollbackTransaction();
+            await rollbackPreservingError(this.db, e, 'Dispensers reconcile');
             logger.error(util.format('Error applying dispensers reconcile:', e));
             throw e;
         }

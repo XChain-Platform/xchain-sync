@@ -45,7 +45,7 @@ function registerHooks(){
 
 function registerIncrementalSnapshotCases1(){
     it('inserts rows without truncation', async function(){
-        let snapshot = {
+        const snapshot = {
             schema_version: SCHEMA_VERSION.indexer,
             block_height: 20,
             since_block: 10,
@@ -81,14 +81,14 @@ function registerIncrementalSnapshotCases1(){
                 source_id: 7, signing_pubkey_id: 3, amount: '1.00000000', reward_block_index: 961500,
                 reward_derive_block_index: 961700, block_index: 961700 }] }
         });
-        let del = db.doQuery.getCalls().find(c => /^DELETE vr FROM validator_rewards vr JOIN anchor_reward_reconcile_log d/.test(c.args[0]));
+        const del = db.doQuery.getCalls().find(c => /^DELETE vr FROM validator_rewards vr JOIN anchor_reward_reconcile_log d/.test(c.args[0]));
         assert.ok(del, 'expected the loser-row delete mirror on the incremental path');
         assert.ok(/WHERE d\.block_index >= \?$/.test(del.args[0]));
         assert.deepStrictEqual(del.args[1], [961600]);
     });
     it('rebuilds balances when the catch-up touches credits/debits', async function(){
         db.dbType = 'indexer';
-        let rb  = sinon.stub(balanceHelpers, 'rebuildBalances').resolves();
+        const rb  = sinon.stub(balanceHelpers, 'rebuildBalances').resolves();
         await applier.applyIncrementalSnapshot({
             schema_version: SCHEMA_VERSION.indexer,
             since_block: 10,
@@ -107,13 +107,43 @@ function registerRecommittedEpochCase(){
             tables: { merkle_epochs: [{ id: 91, epoch: 2, start_block: 10, end_block: 19,
                 merkle_root: 'corrected', leaf_count: 10 }] }
         });
-        let query = db.doQuery.getCalls().map(c => c.args[0])
+        const query = db.doQuery.getCalls().map(c => c.args[0])
             .find(sql => /^INSERT INTO `merkle_epochs`/.test(sql));
         assert.ok(query, 'the authoritative epoch set must use a plain INSERT upsert');
         assert.ok(query.includes('ON DUPLICATE KEY UPDATE'), 'a duplicate epoch must refresh its root');
         assert.ok(!query.includes('`id`'), 'the source-local surrogate id must not reach the replica');
         assert.ok(query.includes('`merkle_root` = VALUES(`merkle_root`)'));
         assert.ok(query.includes('`leaf_count` = VALUES(`leaf_count`)'));
+    });
+}
+
+function registerIncrementalSnapshotRepairCases(){
+    it('repairs sync_meta holes from local block hashes before committing an indexer snapshot', async function(){
+        db.dbType = 'indexer';
+        await applier.applyIncrementalSnapshot({
+            schema_version: SCHEMA_VERSION.indexer,
+            block_height: 20,
+            since_block: 10,
+            tables: { blocks: [{ block_index: 11 }] }
+        });
+        const repair = db.doQuery.getCalls().find(c => /INSERT IGNORE INTO sync_meta/.test(c.args[0]));
+        assert.ok(repair, 'the snapshot transaction must run the leaf repair');
+        assert.match(repair.args[0], /b\.block_index >= COALESCE\(bounds\.lo \+ 1, \?\)/,
+            'the repair must preserve pre-history and retention-pruned rows');
+        assert.deepStrictEqual(repair.args[1], [11, 11],
+            'an unseeded replica must start no earlier than the carried window');
+        assert.match(repair.args[0], /s\.block_index IS NULL/,
+            'the repair must select actual holes');
+    });
+    it('does not run the indexer sync_meta repair on decoder snapshots', async function(){
+        db.dbType = 'decoder';
+        await applier.applyIncrementalSnapshot({
+            schema_version: SCHEMA_VERSION.decoder,
+            block_height: 20,
+            since_block: 10,
+            tables: { blocks: [{ block_index: 11 }] }
+        });
+        assert.ok(!db.doQuery.getCalls().some(c => /INSERT IGNORE INTO sync_meta/.test(c.args[0])));
     });
 }
 
@@ -134,6 +164,7 @@ describe('ClientApplier', function(){
 
     describe('applyIncrementalSnapshot', function(){
         registerIncrementalSnapshotCases1();
+        registerIncrementalSnapshotRepairCases();
         registerIncrementalSnapshotCases2();
     });
 });
