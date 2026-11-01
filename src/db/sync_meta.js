@@ -170,35 +170,6 @@ module.exports = {
         );
     },
 
-    // Fill replica transparency leaves from block hashes already present in the
-    // local database. The lower bound preserves pre-history and retention pruning:
-    // only holes above the first retained leaf are eligible. An empty table starts at
-    // the caller's first snapshot block. One INSERT SELECT keeps the repair bounded
-    // to a single indexed anti-join and assigns replica-local ids.
-    async repairSyncMetaHoles(snapshotStart){
-        if(this.dbType === 'decoder') return { affectedRows: 0 };
-        // null means fill only above existing leaves; Number(null) would seed from 0.
-        const fallbackStart = (snapshotStart != null && Number.isSafeInteger(Number(snapshotStart)))
-            ? Number(snapshotStart) : null;
-        return await this.doQuery(
-            `INSERT IGNORE INTO sync_meta
-                (block_index, block_time, ledger_hash, actions_hash, contract_hash)
-             SELECT b.block_index, b.block_time, ledger.hash, actions.hash, contracts.hash
-             FROM blocks b
-             JOIN (SELECT MIN(block_index) AS lo FROM sync_meta) bounds
-               ON bounds.lo IS NOT NULL OR ? IS NOT NULL
-             LEFT JOIN sync_meta s ON s.block_index = b.block_index
-             LEFT JOIN index_transactions ledger ON ledger.id = b.ledger_hash_id
-             LEFT JOIN index_transactions actions ON actions.id = b.actions_hash_id
-             LEFT JOIN index_transactions contracts ON contracts.id = b.contract_hash_id
-             WHERE b.block_index >= COALESCE(bounds.lo + 1, ?)
-               AND s.block_index IS NULL
-               AND ledger.hash IS NOT NULL
-             ORDER BY b.block_index ASC`,
-            [fallbackStart, fallbackStart]
-        );
-    },
-
     // How many blocks are recorded, one row carrying `total`.
     async countSyncMetaRows(){
         return await this.doQuery("SELECT COUNT(*) as total FROM sync_meta");

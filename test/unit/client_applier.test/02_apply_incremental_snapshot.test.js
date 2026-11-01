@@ -118,7 +118,7 @@ function registerRecommittedEpochCase(){
 }
 
 function registerIncrementalSnapshotRepairCases(){
-    it('repairs sync_meta holes from local block hashes before committing an indexer snapshot', async function(){
+    it('never derives sync_meta leaves from local blocks on an incremental indexer snapshot', async function(){
         db.dbType = 'indexer';
         await applier.applyIncrementalSnapshot({
             schema_version: SCHEMA_VERSION.indexer,
@@ -126,16 +126,11 @@ function registerIncrementalSnapshotRepairCases(){
             since_block: 10,
             tables: { blocks: [{ block_index: 11 }] }
         });
-        const repair = db.doQuery.getCalls().find(c => /INSERT IGNORE INTO sync_meta/.test(c.args[0]));
-        assert.ok(repair, 'the snapshot transaction must run the leaf repair');
-        assert.match(repair.args[0], /b\.block_index >= COALESCE\(bounds\.lo \+ 1, \?\)/,
-            'the repair must preserve pre-history and retention-pruned rows');
-        assert.deepStrictEqual(repair.args[1], [11, 11],
-            'an unseeded replica must start no earlier than the carried window');
-        assert.match(repair.args[0], /s\.block_index IS NULL/,
-            'the repair must select actual holes');
+        const derived = db.doQuery.getCalls().filter(c => /INTO sync_meta[\s\S]*FROM blocks/.test(c.args[0]));
+        assert.deepStrictEqual(derived, [],
+            'a source that was down records no leaves for those blocks, so the replica must not invent them');
     });
-    it('does not run the indexer sync_meta repair on decoder snapshots', async function(){
+    it('writes no sync_meta leaves on decoder snapshots', async function(){
         db.dbType = 'decoder';
         await applier.applyIncrementalSnapshot({
             schema_version: SCHEMA_VERSION.decoder,
