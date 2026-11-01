@@ -146,6 +146,15 @@ describe('ClientSync: strict freshness counts unanchored cycles @regression', fu
         assert.strictEqual(haltReason(), 'checkpoint-freshness-stale');
         assert.ok(warnLines().some(line => /malformed signed form/.test(line)));
     });
+
+    it('HALTS when malformed supersession fields make canonicalization throw', async function(){
+        armStale();
+        const cp = signedCp(signer);
+        cp.supersedes_from = 1;
+        serve(cp);
+        await sync.verifyCheckpointQuorum();
+        assert.strictEqual(haltReason(), 'checkpoint-freshness-stale');
+    });
 });
 
 describe('ClientSync: strict freshness counts unanchored cycles @regression', function(){
