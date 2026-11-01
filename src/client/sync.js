@@ -4564,7 +4564,8 @@ class ClientSync {
         if(freshnessMismatches) return this.haltCheckpoint(cp, freshnessMismatches, 'checkpoint-freshness-stale');
         if(cp.block_index > this.lastAppliedBlock)               // not caught up to this checkpoint yet
             return this.judgeCheckpointPastTip(cp, validators);
-        let q = checkpointVerifier.verifyCheckpoint(cp, validators);
+        const q = this.verifyServedCheckpoint(cp, validators);
+        if(!q) return 'unanchored';
         if(!q.valid) return this.anchorByRotation(cp, source);
         // Its committed roots must equal the replica's OWN recomputed roots at that height.
         let cmp = await this.checkpointRootsMatchLocal(cp);
@@ -4581,7 +4582,8 @@ class ClientSync {
     // A checkpoint past the tip: 'ahead' when quorum-valid, else 'unanchored' with a warning.
     // No halt, since a rotated signer set cannot be followed until the replica reaches that height.
     judgeCheckpointPastTip(cp, validators){
-        let q = checkpointVerifier.verifyCheckpoint(cp, validators);
+        const q = this.verifyServedCheckpoint(cp, validators);
+        if(!q) return 'unanchored';
         if(q.valid) return 'ahead';
         getLogger().warn('Checkpoint-quorum anchor: served checkpoint past the tip for ' + this.chain + '/' +
             this.network + ' at block ' + cp.block_index + ' (seq ' + cp.checkpoint_seq + ', replica tip ' +
@@ -4589,6 +4591,28 @@ class ClientSync {
             ' valid sigs, weighted=' + q.weighted + '); cannot follow rotation until the replica reaches ' +
             'that height, not anchoring this cycle');
         return 'unanchored';
+    }
+
+    // A checkpoint body is source-controlled. Canonicalization rejects malformed
+    // supersession fields by throwing, which means this cycle anchored nothing.
+    verifyServedCheckpoint(cp, validators){
+        try {
+            return checkpointVerifier.verifyCheckpoint(cp, validators);
+        } catch(e){
+            getLogger().warn('Checkpoint-quorum anchor: malformed served checkpoint for ' +
+                this.chain + '/' + this.network + ' (' + e.message + '); not anchoring this cycle');
+            return null;
+        }
+    }
+
+    canonicalServedCheckpoint(cp){
+        try {
+            return checkpointVerifier.canonicalCheckpoint(cp);
+        } catch(e){
+            getLogger().warn('Checkpoint-quorum anchor: malformed served checkpoint for ' +
+                this.chain + '/' + this.network + ' (' + e.message + '); not anchoring this cycle');
+            return null;
+        }
     }
 
     // The anchor source's /latest checkpoint body, or null on a transport fault or 404.
@@ -4888,8 +4912,8 @@ class ClientSync {
         // The served cp is unauthenticated here, so it must equal the attested step on every
         // signed field (the canonical) and on state_root, which pre-commitment canonicals omit.
         // A mismatch waits rather than halts: a row superseded between the two fetches looks the same.
-        let trustedCanonical = checkpointVerifier.tryCanonicalCheckpoint(trusted);
-        let servedCanonical = checkpointVerifier.tryCanonicalCheckpoint(cp);
+        const trustedCanonical = this.canonicalServedCheckpoint(trusted);
+        const servedCanonical = this.canonicalServedCheckpoint(cp);
         if(String(trusted.state_root).toLowerCase() !== String(cp.state_root).toLowerCase()
                 || trustedCanonical === null || servedCanonical === null
                 || trustedCanonical !== servedCanonical)
@@ -4944,7 +4968,10 @@ class ClientSync {
         if(vset.truncated === true)
             return { verdict: 'wait', reason: 'oracle_publish signer set at snapshot ' + next.snapshot_block +
                 ' is truncated (federation exceeds the stake-weight cap); step not attested' };
-        if(!checkpointVerifier.verifyCheckpoint(next, vset).valid)
+        const verification = this.verifyServedCheckpoint(next, vset);
+        if(!verification)
+            return { verdict: 'wait', reason: 'malformed checkpoint ' + next.block_index + ' in range' };
+        if(!verification.valid)
             return { verdict: 'divergence', mismatches: [{ field: 'checkpoint_quorum',
                 a: 'quorum-signed (federation)',
                 b: 'INVALID at block ' + next.block_index + ' under the authoritative oracle_publish set at snapshot ' + next.snapshot_block }] };
