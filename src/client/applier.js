@@ -449,7 +449,11 @@ class ClientApplier {
                 this.logLargeTableInsert(table, rows);
             }
 
-            if(dbType === 'indexer') await this.repairSyncMetaHoles(snapshotData);
+            // A full snapshot only fills holes above the leaves it carried. With none carried
+            // the source recorded no leaves for this range (its log starts at the tip it
+            // started from, and retention prunes below it), so seeding them here would hold
+            // leaves the source never had.
+            if(dbType === 'indexer') await this.repairSyncMetaHoles(snapshotData, { seedEmpty: false });
 
             // Drops orphaned state_tree_roots at or above the snapshot height, keyed by ticker.
             try {
@@ -536,14 +540,15 @@ class ClientApplier {
         }
     }
 
-    async repairSyncMetaHoles(snapshotData){
+    async repairSyncMetaHoles(snapshotData, opts){
         let snapshotStart = null;
+        const seedEmpty = !(opts && opts.seedEmpty === false);
         for(const row of (snapshotData.tables.blocks || [])){
             const blockIndex = Number(row.block_index);
             if(Number.isSafeInteger(blockIndex) && (snapshotStart === null || blockIndex < snapshotStart))
                 snapshotStart = blockIndex;
         }
-        const result = await this.db.repairSyncMetaHoles(snapshotStart);
+        const result = await this.db.repairSyncMetaHoles(seedEmpty ? snapshotStart : null);
         const filled = result && Number(result.affectedRows || 0);
         if(filled > 0)
             logger.info('Repaired ' + filled + ' missing sync_meta row(s) from local block hashes');

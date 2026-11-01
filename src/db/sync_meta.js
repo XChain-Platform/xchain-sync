@@ -177,7 +177,9 @@ module.exports = {
     // to a single indexed anti-join and assigns replica-local ids.
     async repairSyncMetaHoles(snapshotStart){
         if(this.dbType === 'decoder') return { affectedRows: 0 };
-        const fallbackStart = Number.isSafeInteger(Number(snapshotStart)) ? Number(snapshotStart) : null;
+        // null means fill only above existing leaves; Number(null) would seed from 0.
+        const fallbackStart = (snapshotStart != null && Number.isSafeInteger(Number(snapshotStart)))
+            ? Number(snapshotStart) : null;
         return await this.doQuery(
             `INSERT IGNORE INTO sync_meta
                 (block_index, block_time, ledger_hash, actions_hash, contract_hash)
