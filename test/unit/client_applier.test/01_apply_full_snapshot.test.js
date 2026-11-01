@@ -93,7 +93,10 @@ function registerFullSnapshotCases1(){
 }
 
 function registerFullSnapshotRepairCase(){
-    it('repairs sync_meta holes inside a full indexer snapshot transaction', async function(){
+    // A source records leaves only from the tip it started at and prunes below a
+    // committed epoch, so a replica holds the leaves it was sent and never derives
+    // more from its own blocks.
+    it('never derives sync_meta leaves from local blocks on a full indexer snapshot', async function(){
         db.dbType = 'indexer';
         await applier.applyFullSnapshot({
             schema_version: SCHEMA_VERSION.indexer,
@@ -103,12 +106,8 @@ function registerFullSnapshotRepairCase(){
                 sync_meta: [{ block_index: 8, ledger_hash: 'l8' }]
             }
         });
-        let repair = db.doQuery.getCalls().find(c => /INSERT IGNORE INTO sync_meta/.test(c.args[0]));
-        assert.ok(repair, 'full bootstrap must fill leaves above its first carried sync_meta row');
-        assert.deepStrictEqual(repair.args[1], [null, null],
-            'a full snapshot fills only above the leaves it carried and never seeds an empty table');
-        assert.ok(repair.callId < db.commitTransaction.firstCall.callId,
-            'repair must commit atomically with the snapshot');
+        const derived = db.doQuery.getCalls().filter(c => /INTO sync_meta[\s\S]*FROM blocks/.test(c.args[0]));
+        assert.deepStrictEqual(derived, [], 'a full snapshot must not fabricate leaves the source never recorded');
     });
 }
 

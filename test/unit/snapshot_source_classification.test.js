@@ -158,7 +158,6 @@ describe('source-unstreamed table set', function(){
                 commitTransaction: sinon.stub().resolves(),
                 rollbackTransaction: sinon.stub().resolves(),
                 deleteStateTreeRootsFromBlock: sinon.stub().resolves(),
-                repairSyncMetaHoles: sinon.stub().resolves({ affectedRows: 0 }),
                 deleteAllRows: sinon.stub().resolves(),
                 findStreamableTableNames: sinon.stub().resolves(localTables.map(table_name => ({ table_name }))),
             };
