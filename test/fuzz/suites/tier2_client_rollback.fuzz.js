@@ -146,10 +146,15 @@ describe('Tier 2 - ClientRollback @tier2', function () {
                 async (bi, failIndices) => {
                     db.getFirstActionIndex.resolves(bi * 100);
                     db.commitTransaction.resetHistory();
+                    db.beginTransaction.resetHistory();
 
+                    // Only in-transaction queries are fault-injected. The bootstrap_base
+                    // floor read before beginTransaction is deliberately strict (a fault
+                    // there aborts the rollback; see the sibling property below).
                     let callCount = 0;
                     let failSet = new Set(failIndices);
                     db.doQuery.callsFake(async (query) => {
+                        if (!db.beginTransaction.called) return [];
                         callCount++;
                         if (failSet.has(callCount)) {
                             const e = new Error('fuzz-schema-gap: unknown table/column');
@@ -162,6 +167,36 @@ describe('Tier 2 - ClientRollback @tier2', function () {
                     await rollback.rollback(bi);
                     assert.strictEqual(db.commitTransaction.callCount, 1,
                         'Expected commit after skippable schema-gap errors');
+                }
+            ), { numRuns: NUM_RUNS });
+        });
+
+        it('a schema-gap fault on the pre-transaction bootstrap_base read aborts with no transaction opened', function () {
+            return fc.assert(fc.asyncProperty(
+                blockIndex(),
+                async (bi) => {
+                    db.getFirstActionIndex.resolves(bi * 100);
+                    db.beginTransaction.resetHistory();
+                    db.commitTransaction.resetHistory();
+
+                    db.doQuery.callsFake(async () => {
+                        if (!db.beginTransaction.called) {
+                            const e = new Error('fuzz-schema-gap: unknown table/column');
+                            e.errno = 1146;
+                            throw e;
+                        }
+                        return [];
+                    });
+
+                    let rejected = false;
+                    try {
+                        await rollback.rollback(bi);
+                    } catch (e) {
+                        rejected = true;
+                    }
+                    assert.ok(rejected, 'Expected rollback to reject on a pre-transaction fault');
+                    assert.strictEqual(db.beginTransaction.callCount, 0, 'No transaction may open');
+                    assert.strictEqual(db.commitTransaction.callCount, 0, 'No commit may happen');
                 }
             ), { numRuns: NUM_RUNS });
         });
