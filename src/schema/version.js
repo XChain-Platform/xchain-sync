@@ -302,6 +302,13 @@
  *       ER_DUP_ENTRY under ClientApplier and stalls the queue. The migration is
  *       mode=auto, so the forced schema refresh widens the key on followers.
  *       Decoder is unaffected and stays at 5.
+ *  22 - (indexer only) `index_memos.memo` collation utf8mb4_general_ci to
+ *       utf8mb4_nopad_bin (2026-11-01-index-memos-binary-collation). Memo text that
+ *       differs only in case, by a 4-byte character or by trailing spaces now interns
+ *       as separate rows, so a v21 follower still on general_ci hits ER_DUP_ENTRY on
+ *       the UNIQUE memo key when those rows stream. Memo text enters no block-hash
+ *       preimage. The migration is mode=manual, as the 2026-08-19 memo widening was
+ *       when v10 folded it. Decoder is unaffected and stays at 5.
  *
  * MIGRATION_FRONTIER is the machine-readable half of that accounting: `through`
  * is the newest migration DATE whose replicated DDL is folded into the version
@@ -324,11 +331,11 @@
  *
  ********************************************************************/
 
-const SCHEMA_VERSION = { indexer: 21, decoder: 5 };
+const SCHEMA_VERSION = { indexer: 22, decoder: 5 };
 
 const MIGRATION_FRONTIER = {
     indexer: {
-        through: '2026-10-23',
+        through: '2026-11-01',
         before: [
             '2026-05-30-balances-composite-index.sql',
             '2026-06-03-unique-full-column-index-addresses.sql',
@@ -398,14 +405,15 @@ const MIGRATION_FRONTIER = {
             '2026-10-17-ledger-address-tick-amount-index.sql',
             '2026-10-18-anchor-actions-pre-archive-status.sql',
             '2026-10-19-bridge-escrow-anchor-axis-checkpoint-idx.sql',
-            '2026-10-21-rollcall-actions.sql'
-        ],
-        accounted: [
+            '2026-10-21-rollcall-actions.sql',
             '2026-10-23-index-tickers-full-tick-prefix.sql'
         ],
+        accounted: [
+            '2026-11-01-index-memos-binary-collation.sql'
+        ],
         hashes: {
-            '2026-10-23-index-tickers-full-tick-prefix.sql':
-                'c2adf41f4b0074c88bd1953f27a001045f9fd8bcf81ade37c6dea6c17e96ec46'
+            '2026-11-01-index-memos-binary-collation.sql':
+                'eaed44bbbf96e096fb63773d00d59cd6e45782fbad117feba20187c28445d783'
         }
     },
     decoder: {
