@@ -134,6 +134,11 @@ function initializeUpsertFullDumpTables(applier) {
         'markets',
         'attest_validator_stats'
     ]);
+    // These tables are append-only on ordinary delivery but authoritative when
+    // an incremental snapshot re-sends their complete set.
+    applier.authoritativeSnapshotUpsertTables = new Set([
+        'merkle_epochs'
+    ]);
 }
 
 function initializeLocalSurrogateIdTables(applier) {
@@ -159,7 +164,10 @@ function initializeLocalSurrogateIdOnlyTables(applier) {
         // Keep sync_meta keyed by its unique block_index (first write wins, as on
         // the source). The live stream omits id, so a catch-up row carrying the
         // source id can hit another block's local id and be silently IGNOREd.
-        'sync_meta'
+        'sync_meta',
+        // Epoch is the shared identity. A recommit may replace the root while
+        // source and replica allocate unrelated local surrogate ids.
+        'merkle_epochs'
     ]);
 }
 
@@ -526,6 +534,7 @@ class ClientApplier {
     // natural-key collision and a wrong row hidden by a PRIMARY collision are
     // corrected.
     async insertSnapshotTables(tables, opts){
+        let snapshotOpts = { ...(opts || {}), authoritativeSnapshot: true };
         for(let table in tables){
             let rows = tables[table];
             if(!rows || rows.length === 0) continue;
@@ -533,7 +542,7 @@ class ClientApplier {
             let repairKeyColumns = this.repairNaturalKeyColumns.get(table);
             if(opts && opts.strictIgnoreCheck && repairKeyColumns)
                 await this.reconcileLookupRows(table, rows, repairKeyColumns);
-            await this.insertRows(table, rows, opts);
+            await this.insertRows(table, rows, snapshotOpts);
         }
     }
 
@@ -645,10 +654,11 @@ class ClientApplier {
         }
     }
 
-    prepareTableRows(table, rows){
+    prepareTableRows(table, rows, opts){
         this.validateInsertTable(table);
-        let useIgnore = this.ignoreTables.has(table);
-        let useUpsert = this.upsertFullDumpTables.has(table);
+        let useUpsert = this.upsertFullDumpTables.has(table)
+            || !!(opts && opts.authoritativeSnapshot && this.authoritativeSnapshotUpsertTables.has(table));
+        let useIgnore = this.ignoreTables.has(table) && !useUpsert;
         let prepared = this.prepareNaturalKeyRows(table, rows, this.prepareInsertColumns(table, rows));
         return { ...prepared, useIgnore, useUpsert };
     }
@@ -738,7 +748,7 @@ class ClientApplier {
 
     async insertRows(table, rows, opts){
         if(!rows || rows.length === 0) return;
-        let prepared = this.prepareTableRows(table, rows);
+        let prepared = this.prepareTableRows(table, rows, opts);
 
         // Chunked to keep the IN list bounded on a large catch-up window.
         let deleteBatch = 500;
