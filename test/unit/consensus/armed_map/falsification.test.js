@@ -40,7 +40,7 @@ const INDEXER_CANONICAL_BLOBS = {
     'shared_rows_2.js': 'f7906c1f870cf12039e04b7ae4b66a3327d3ba85',
     'shared_rows_3.js': '160f4098d17d7a0d20b339f0f34a95bf8b43c429',
     'shared_rows_4.js': 'dac8fa3f5c506ac52e779d850ec7db54fe5dbd96',
-    'shared_rows_5.js': '8796d36ef23cfbfd5c4e55dac7b6299f07731cd0',
+    'shared_rows_5.js': '9362dcc1b09d427fa555f5bfa7b9921c95ec01ee',
 };
 const INDEXER_CANONICAL_SHA256 = {
     'shared_rows.js':   '419b9e23ceaea3c8dfefd0798ed49204040137935e890fec8dc731829d13a7d4',
@@ -48,7 +48,7 @@ const INDEXER_CANONICAL_SHA256 = {
     'shared_rows_2.js': 'f11392f3802e0274f6a771b5e1b2a795a4997d90914d8bb2a284af4d643f2d7a',
     'shared_rows_3.js': 'd1de4a20c02fa2338ee10e70c5d262a498ebaf915074aa518355b5e3ac22bc44',
     'shared_rows_4.js': '08e0e852d04c0736d88c19c6ae2c63d0061591c3dc700a22a9018a23a1d3069d',
-    'shared_rows_5.js': '2193add530cbc188c69f201df33bae4d1e7006df65ead39eab696c0493c5e395',
+    'shared_rows_5.js': '9f7a58c210fba3559d9fcc5d6853f188782291e5aa378690f5fcdf2cf5338bb1',
 };
 
 const READ_V2 = 'const r = require(process.argv[1]).computeArmedMapFingerprint();' +
@@ -207,11 +207,11 @@ describe('armed map v2: falsification on temp trees', function () {
         // no archive_publish set, so the row stays outside sync membership when a cut arms it.
         const root = tree();
         edit(root, 'src/consensus/gate_registry/shared_rows_5.js',
-            "'height', { mainnet: UNPINNED, 'BTC:testnet': 158396, 'LTC:testnet': 4946814, 'DOGE:testnet': 68033131, testnet: UNARMED, regtest: 0 });\n// archive_section_verdict_activation",
-            "'height', { mainnet: UNPINNED, 'BTC:testnet': 160000, 'LTC:testnet': 4946814, 'DOGE:testnet': 68033131, testnet: UNARMED, regtest: 0 });\n// archive_section_verdict_activation");
+            "'height', { mainnet: UNPINNED, 'BTC:testnet': 158557, 'LTC:testnet': 4949697, 'DOGE:testnet': 68035864, testnet: UNARMED, regtest: 0 });\n// archive_section_verdict_activation",
+            "'height', { mainnet: UNPINNED, 'BTC:testnet': 160000, 'LTC:testnet': 4949697, 'DOGE:testnet': 68035864, testnet: UNARMED, regtest: 0 });\n// archive_section_verdict_activation");
         const { get } = require(path.join(ROOT, 'src/consensus/gate_registry'));
         assert.strictEqual(get('archive_rollcall_presence_activation.ARCHIVE_ROLLCALL_PRESENCE_ACTIVATION')['BTC:testnet'],
-            158396, 'the shipped row carries the v0.27.0 BTC:testnet height');
+            158557, 'the shipped row carries the v0.27.0 BTC:testnet height');
         const after = readV2(root);
         assert.strictEqual(after.hex, baseline.hex);
         assert.ok(!Object.keys(after.rows).some((k) => k.startsWith('archive_rollcall_presence_activation.')));
@@ -232,11 +232,11 @@ describe('armed map v2: falsification on temp trees', function () {
         // so a cut that arms it changes which checkpoints this replica accepts.
         const root = tree();
         edit(root, 'src/consensus/gate_registry/shared_rows_5.js',
-            "addGate('checkpoint_supersede_activation.CHECKPOINT_SUPERSEDE_ACTIVATION', 'height', { mainnet: UNPINNED, 'BTC:testnet': 158396,",
+            "addGate('checkpoint_supersede_activation.CHECKPOINT_SUPERSEDE_ACTIVATION', 'height', { mainnet: UNPINNED, 'BTC:testnet': 158557,",
             "addGate('checkpoint_supersede_activation.CHECKPOINT_SUPERSEDE_ACTIVATION', 'height', { mainnet: UNPINNED, 'BTC:testnet': 160000,");
         const { get } = require(path.join(ROOT, 'src/consensus/gate_registry'));
         assert.strictEqual(get('checkpoint_supersede_activation.CHECKPOINT_SUPERSEDE_ACTIVATION')['BTC:testnet'],
-            158396, 'the shipped row carries the v0.27.0 BTC:testnet height');
+            158557, 'the shipped row carries the v0.27.0 BTC:testnet height');
         const after = readV2(root);
         assert.notStrictEqual(after.hex, baseline.hex);
         assert.deepStrictEqual(movedRows(baseline, after), ['checkpoint_supersede_activation.CHECKPOINT_SUPERSEDE_ACTIVATION']);
