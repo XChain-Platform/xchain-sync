@@ -41,6 +41,15 @@ if (!preg_match('#^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$#', $dir)
     exit("Bad request\n");
 }
 
+// A quarantine directory holds archives an operator set aside on purpose; they
+// are not published, so no latest.tgz resolves inside one at any depth. The
+// browse page and the refresh-status check skip the same directories.
+if (in_array('quarantine', explode('/', $dir), true)) {
+    http_response_code(404);
+    header('Content-Type: text/plain');
+    exit("Not found\n");
+}
+
 $target = realpath($base . '/' . $dir);
 if ($target === false
     || strpos($target, $base . DIRECTORY_SEPARATOR) !== 0
@@ -75,8 +84,14 @@ if ($type === 'sig' && is_file($target . '/latest.tgz')) {
 
 // Take candidates from *.tar.gz only, the producer's extension and the only one
 // publish-bootstraps.sh prunes, so an unpruned .tgz stray can never become latest.
+// A candidate must also BE an archive: a regular file (a directory named
+// *.tar.gz is not one, and the freshness check counts only `-type f`) whose
+// basename stays in the same safe class the directory segments use, so the
+// Location header below never carries a character it cannot hold.
 $files = array_values(array_filter(glob($target . '/*.tar.gz') ?: [], function ($f) {
-    return basename($f) !== 'latest.tar.gz';
+    return is_file($f)
+        && preg_match('#^[A-Za-z0-9._-]+$#', basename($f))
+        && basename($f) !== 'latest.tar.gz';
 }));
 
 if (empty($files)) {
@@ -129,7 +144,8 @@ if ($type === 'sig') {
     exit;
 }
 
-// 302 to the real archive (absolute path; filename chars are already safe).
+// 302 to the real archive (absolute path; the candidate filter above admits
+// only safe filename chars).
 header('Location: /bootstraps/' . $dir . '/' . $name, true, 302);
 header('Cache-Control: no-cache, must-revalidate');
 exit;
