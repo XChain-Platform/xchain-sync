@@ -105,8 +105,8 @@ function registerFullSnapshotRepairCase(){
         });
         let repair = db.doQuery.getCalls().find(c => /INSERT IGNORE INTO sync_meta/.test(c.args[0]));
         assert.ok(repair, 'full bootstrap must fill leaves above its first carried sync_meta row');
-        assert.deepStrictEqual(repair.args[1], [10, 10],
-            'an empty local transparency table must seed from the first snapshot block');
+        assert.deepStrictEqual(repair.args[1], [null, null],
+            'a full snapshot fills only above the leaves it carried and never seeds an empty table');
         assert.ok(repair.callId < db.commitTransaction.firstCall.callId,
             'repair must commit atomically with the snapshot');
     });
