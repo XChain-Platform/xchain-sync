@@ -253,10 +253,9 @@ describe('ClientRollback', function(){
 
         it('deletes from merkle_epochs by end_block, mirroring the server pruneFrom (item 4770)', async function(){
             await rollback.rollback(100);
-            // merkle_epochs is sync-owned and snapshot-ride-along only (applied
-            // INSERT IGNORE), so without this delete a reorg that re-roots a closed
-            // epoch leaves the follower serving the stale root forever. It is keyed
-            // by end_block, not block_index.
+            // merkle_epochs is sync-owned and snapshot-ride-along only. Snapshot
+            // upserts refresh surviving epochs, but cannot remove one the source
+            // deleted during a reorg. It is keyed by end_block, not block_index.
             let merkleDelete = db.doQuery.getCalls().find(c =>
                 c.args[0].includes('merkle_epochs') && c.args[0].includes('DELETE')
             );

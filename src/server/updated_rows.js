@@ -50,7 +50,7 @@
  *   - cooldown-maturity status_id flip on surviving unstakes / contract_unstakes
  *     (markCooldownsCompleted sets status_id = 'completed' in place at the maturity
  *     block), keyed by cooldown_end_block in [fromBlock, toBlock]. Forward twin
- *     of ClientRollback's reverse status reset and cooldownCredits.js's forward
+ *     of ClientRollback's reverse status reset and cooldown_credits.js's forward
  *     refund-credit selection (same maturity-block key).
  *   - invalid_archive stamp on a surviving anchor_actions archive-head (v1/v6) parent
  *     row when the completing v2 chunk of its batch lands in this window and CRC

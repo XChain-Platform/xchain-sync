@@ -79,7 +79,7 @@ describe('ClientSync: oversized catch-up fallback routes by truncation', functio
         sinon.stub(sync, 'syncLookupTablesPaged').resolves();
         let heightRetry = sinon.stub(sync, 'bootstrapFromHeightRetry').resolves();
         let fullSnap    = sinon.stub(sync, 'bootstrapFromSnapshot').resolves();
-        db.getLastBlock.resolves(100);
+        db.getLastBlock.resolves(null);
         let sizeErr = new Error('maxContentLength size of X exceeded');
         sizeErr.code = 'ERR_FR_MAX_CONTENT_LENGTH_EXCEEDED';
         sinon.stub(axios, 'get').rejects(sizeErr);
@@ -91,6 +91,38 @@ describe('ClientSync: oversized catch-up fallback routes by truncation', functio
         assert.strictEqual(fullSnap.called, false,
             'the full snapshot must NOT be fetched on a truncated replica');
     });
+
+    it('truncated replica with rows halts instead of stacking a bootstrap window @regression', async function(){
+        ({ sync, db, applier } = makeSync({ SYNC_BOOTSTRAP_DEPTH: { 'BTC:MAINNET': 50000 } }));
+        sinon.stub(sync, 'syncLookupTablesPaged').resolves();
+        let heightRetry = sinon.stub(sync, 'bootstrapFromHeightRetry').resolves();
+        let fullSnap = sinon.stub(sync, 'bootstrapFromSnapshot').resolves();
+        db.getLastBlock.resolves(100);
+        let sizeErr = new Error('maxContentLength size of X exceeded');
+        sizeErr.code = 'ERR_FR_MAX_CONTENT_LENGTH_EXCEEDED';
+        sinon.stub(axios, 'get').rejects(sizeErr);
+
+        await sync.runIncrementalCatchUp();
+
+        assert.strictEqual(heightRetry.called, false, 'a populated replica is never re-seeded in place');
+        assert.strictEqual(fullSnap.called, false);
+        assert.strictEqual(applier.applyIncrementalSnapshot.called, false);
+        assert.strictEqual(sync.getHaltInfo().reason, 'catch-up-too-large');
+        assert.ok(db.recordHalt.calledOnceWith(sinon.match.any, 100, 'catch-up-too-large'));
+        let logged = console.error.getCalls().map(c => String(c.args[0])).join('\n');
+        assert.ok(logged.includes('SYNC_BOOTSTRAP_DEPTH'));
+        assert.ok(logged.includes('SNAPSHOT_MAX_CONTENT'));
+    });
+});
+
+describe('ClientSync: oversized catch-up fallback routes by truncation', function(){
+    let sync, db;
+    beforeEach(function(){
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+        sinon.stub(console, 'warn');
+    });
+    afterEach(function(){ sinon.restore(); });
 
     it('full-history replica: size error still routes to bootstrapFromSnapshot (unchanged) @regression', async function(){
         ({ sync, db, applier } = makeSync()); // _truncatedDepth 0
@@ -106,5 +138,21 @@ describe('ClientSync: oversized catch-up fallback routes by truncation', functio
 
         assert.ok(fullSnap.calledOnce, 'full-history replica keeps the full-snapshot fallback');
         assert.strictEqual(heightRetry.called, false, 'height retry must not run for a full-history replica');
+    });
+
+    it('height-bootstrap exhaustion is fatal to the live WebSocket chain @regression', async function(){
+        ({ sync, db } = makeSync({ SYNC_BOOTSTRAP_DEPTH: { 'BTC:MAINNET': 50000 }, BOOTSTRAP_MAX_RETRIES: 0 }));
+        db.getLastBlock.resolves(null);
+        sinon.stub(sync, 'syncLookupTablesPaged').resolves();
+        sinon.stub(sync, 'bootstrapFromHeight').rejects(new Error('source unavailable'));
+        let sizeErr = new Error('maxContentLength size of X exceeded');
+        sizeErr.code = 'ERR_FR_MAX_CONTENT_LENGTH_EXCEEDED';
+        sinon.stub(axios, 'get').rejects(sizeErr);
+        let exit = sinon.stub(process, 'exit');
+
+        let err = await sync.runIncrementalCatchUp().then(() => null, e => e);
+        assert.ok(err instanceof ClientSync.BootstrapExhaustedError);
+        sync.handleWsChainError(err);
+        assert.ok(exit.calledOnceWithExactly(1));
     });
 });

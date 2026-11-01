@@ -122,6 +122,7 @@ class Store {
         for(const b of this.rows('blocks')) if(m === null || b.block_index > m) m = b.block_index;
         return m;
     }
+    async repairSyncMetaHoles(){ return { affectedRows: 0 }; }
     async getBlockHashRow(idx){
         if(this.faults.hashRowThrow){ this.faults.hashRowThrow--; throw new Error('injected hash row read error'); }
         let b = this.rows('blocks').find(r => Number(r.block_index) === Number(idx));

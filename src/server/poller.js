@@ -266,6 +266,7 @@ class ServerPoller {
 
         let epochSize = this.transparencyLog.epochSize;
         let epochs = new Set();
+        const recordedGaps = [];
         for(let block_index of gaps){
             let hashRow = await this.db.getBlockHashRow(block_index);
             if(!hashRow) continue;  // block no longer in source (reorg since scan); skip
@@ -273,6 +274,7 @@ class ServerPoller {
                 Number(hashRow.block_index), Number(hashRow.block_time),
                 hashRow.ledger_hash, hashRow.actions_hash, hashRow.contract_hash
             );
+            recordedGaps.push(block_index);
             // Block N belongs to epoch ceil(N / epochSize); matches getProof's mapping.
             epochs.add(Math.ceil(block_index / epochSize));
         }
@@ -285,11 +287,14 @@ class ServerPoller {
         // endBlock has not yet been reached, avoiding a permanent partial root for the
         // current in-progress epoch.
         let hwm = await this.transparencyLog.getHighWaterMark();
-        for(let epoch of epochs)
+        const completedEpochs = (hwm === null || hwm === undefined)
+            ? [...epochs] : [...epochs].filter(epoch => epoch * epochSize <= hwm);
+        for(let epoch of completedEpochs)
             await this.transparencyLog.recommitEpoch(epoch, hwm);
 
         logger.info('Transparency backfill complete for ' + this.chain + '/' + this.network + '/' + this.dbType +
-            ': ' + gaps.length + ' block(s) recorded, ' + epochs.size + ' epoch(s) recomputed');
+            ': recorded blocks ' + JSON.stringify(recordedGaps) +
+            ', recomputed epochs ' + JSON.stringify(completedEpochs));
         return gaps.length;
     }
 
@@ -567,6 +572,16 @@ class ServerPoller {
     // Return the id ceiling recorded at the last batch that reached its snapshot tip, or null.
     getContentParityIdCeiling(){
         return this.contentParityIdCeiling || null;
+    }
+
+    // Return the hash identity paired with a broadcast height. The recent map
+    // covers reorg walk-back; the cursor hash is the cold-start fallback.
+    getRecordedIdentity(blockIndex){
+        if(this.recentBroadcastHashes.has(blockIndex))
+            return this.recentBroadcastHashes.get(blockIndex);
+        if(Number(blockIndex) === Number(this.lastPolledBlock))
+            return this.lastPolledBlockHash || null;
+        return null;
     }
 
     publishBlockPayload(payload, nextBlock){

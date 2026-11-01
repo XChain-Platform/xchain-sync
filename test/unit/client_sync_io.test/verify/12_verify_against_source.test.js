@@ -283,6 +283,46 @@ describe('ClientSync: verifyAgainstSource', function(){
     });
     afterEach(function(){ sinon.restore(); });
 
+    it('treats an empty source status identity as skew instead of divergence', async function(){
+        ({ sync, db } = makeSync({ VERIFY_HASHES: true, HALT_ON_DIVERGENCE: true }));
+        db.getBlockHashRow.resolves({
+            ledger_hash: 'lh-local', actions_hash: 'ah-local', contract_hash: 'ch-local'
+        });
+        sinon.stub(axios, 'get').resolves({ data: {
+            block_height: null, ledger_hash: null, actions_hash: null,
+            contract_hash: null, table_counts: null
+        }});
+        sinon.stub(sync, 'haltOnDivergence').resolves();
+
+        assert.strictEqual(await sync.verifyAgainstSource(sync.sources[0], 100), 'skew');
+        assert.strictEqual(sync.haltOnDivergence.called, false);
+    });
+
+    it('treats an explicitly inconsistent same-height identity as skew', async function(){
+        ({ sync, db } = makeSync({ VERIFY_HASHES: true, HALT_ON_DIVERGENCE: true }));
+        db.getBlockHashRow.resolves({
+            ledger_hash: 'lh-local', actions_hash: 'ah-local', contract_hash: 'ch-local'
+        });
+        sinon.stub(axios, 'get').resolves({ data: {
+            block_height: 100, ledger_hash: 'lh-new', actions_hash: 'ah-new',
+            contract_hash: 'ch-new', hash_identity_consistent: false, table_counts: null
+        }});
+        sinon.stub(sync, 'haltOnDivergence').resolves();
+
+        assert.strictEqual(await sync.verifyAgainstSource(sync.sources[0], 100), 'skew');
+        assert.strictEqual(sync.haltOnDivergence.called, false);
+    });
+});
+
+describe('ClientSync: verifyAgainstSource', function(){
+    let sync, db;
+
+    beforeEach(function(){
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+    });
+    afterEach(function(){ sinon.restore(); });
+
 
 
     it('halts on a confirmed same-height cross-source hash mismatch when HALT_ON_DIVERGENCE is on', async function(){

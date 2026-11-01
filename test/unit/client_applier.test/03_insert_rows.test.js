@@ -87,6 +87,9 @@ function registerInsertCases1(){
                 table + ' is pinned at close and must never be overwritten by a re-delivery');
         });
     }
+}
+
+function registerInsertUpsertCases(){
     for(const table of ['markets', 'attest_validator_stats']){
         it('upserts ' + table + ' with ON DUPLICATE KEY UPDATE covering every carried column', async function(){
             await applier.insertRows(table, [{ id: 1, a: 'x', b: 'y' }]);
@@ -307,6 +310,7 @@ describe('ClientApplier', function(){
 
     describe('insertRows', function(){
         registerInsertCases1();
+        registerInsertUpsertCases();
         registerInsertCases2();
         registerInsertCases3();
         registerInsertCases4();

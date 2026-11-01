@@ -129,8 +129,10 @@ describe('Boundary: Source Array Parsing', function(){
             let cs = createSync('http://s1,http://s2');
             sinon.stub(axios, 'get').rejects(new Error('fail'));
             let ok = await cs.bootstrapRotateSources();
-            // Both sources fail this round → false; sources rotated during the pass.
+            // Both sources fail this round, so the pass returns false and leaves the source order alone.
             assert.strictEqual(ok, false);
+            assert.deepStrictEqual(cs.sources, ['http://s1', 'http://s2'],
+                'bootstrap attempts must not change the index-to-source mapping');
             axios.get.restore();
         });
 
@@ -143,6 +145,8 @@ describe('Boundary: Source Array Parsing', function(){
             });
             let ok = await cs.bootstrapRotateSources();
             assert.strictEqual(ok, false);
+            assert.deepStrictEqual(cs.sources, ['http://s1', 'http://s2', 'http://s3'],
+                'exhaustion must leave configured source order intact');
             // Should try all 3 sources (initial + 2 retries) but not loop infinitely
             // axios.get is called once per schema fetch attempt + once per snapshot
             assert.ok(callCount <= 6); // max 2 calls per source (schema + snapshot)
