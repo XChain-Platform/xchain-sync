@@ -170,6 +170,14 @@ describe('Tier 2 - ClientRollback @tier2', function () {
                 }
             ), { numRuns: NUM_RUNS });
         });
+    });
+});
+
+describe('Tier 2 - ClientRollback @tier2', function () {
+    this.timeout(0);
+    useClientRollbackHooks();
+
+    describe('rollback', function () {
 
         it('a schema-gap fault on the pre-transaction bootstrap_base read aborts with no transaction opened', function () {
             return fc.assert(fc.asyncProperty(
@@ -200,6 +208,14 @@ describe('Tier 2 - ClientRollback @tier2', function () {
                 }
             ), { numRuns: NUM_RUNS });
         });
+    });
+});
+
+describe('Tier 2 - ClientRollback @tier2', function () {
+    this.timeout(0);
+    useClientRollbackHooks();
+
+    describe('rollback', function () {
 
         it('when firstActionIndex is null, action-scoped DELETEs use no action_index filter', function () {
             return fc.assert(fc.asyncProperty(
