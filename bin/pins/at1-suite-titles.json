@@ -327,6 +327,12 @@
     "17946dcd3345474c": [
       "state_hash index-map class (id-determinism P4) - follower twin @regression armed: a divergent id->address pair changes state_hash (follower would HALT)"
     ],
+    "17cd65b985544f4c": [
+      "state_checkpoints reads over a table mirroring every chain @integration a chain with no rows on that network reads empty rather than another chain",
+      "state_checkpoints reads over a table mirroring every chain @integration findCheckpointsInRange returns one LTC testnet row per height, keeping the LTC row where BTC shares the height",
+      "state_checkpoints reads over a table mirroring every chain @integration getCheckpointAtHeight returns the LTC row at a height another chain also checkpointed",
+      "state_checkpoints reads over a table mirroring every chain @integration getLatestCheckpoint returns the LTC testnet newest row, not the higher DOGE one"
+    ],
     "1944d7a9ee88bfc7": [
       "ServerPoller content-parity id ceiling drops the ceiling when a reorg is broadcast",
       "ServerPoller content-parity id ceiling leaves out a lookup whose read fails, keeping the others",
@@ -2601,6 +2607,15 @@
       "BlockBroadcaster addSubscription sends initial status if available",
       "BlockBroadcaster addSubscription sets metadata on ws",
       "BlockBroadcaster addSubscription uses x-forwarded-for when TRUST_PROXY is true"
+    ],
+    "8dde5c900b3cf26c": [
+      "state_checkpoints reads are scoped to one chain and network: the /checkpoint routes pass the route chain as its ticker /:height on litecoin/testnet binds LTC and testnet ahead of the height",
+      "state_checkpoints reads are scoped to one chain and network: the /checkpoint routes pass the route chain as its ticker /latest on litecoin/testnet reads the LTC testnet rows and serves that row",
+      "state_checkpoints reads are scoped to one chain and network: the /checkpoint routes pass the route chain as its ticker /range on litecoin/testnet binds LTC and testnet ahead of the bounds and the cap",
+      "state_checkpoints reads are scoped to one chain and network: the /checkpoint routes pass the route chain as its ticker folds every route form of a chain (full name, ticker, any case) onto one ticker",
+      "state_checkpoints reads are scoped to one chain and network: the SQL each read binds findCheckpointsInRange filters the outer rows and correlates the MAX(checkpoint_seq) subquery on chain and network",
+      "state_checkpoints reads are scoped to one chain and network: the SQL each read binds getCheckpointAtHeight filters on chain, network and the exact height",
+      "state_checkpoints reads are scoped to one chain and network: the SQL each read binds getLatestCheckpoint filters on chain and network before taking the newest row"
     ],
     "8e78b69ca3426aa3": [
       "state_root reserved sub-trees: gate is inert EXCEPT the armed set @regression the activation maps hold EXACTLY the armed set (arming is a code change, not config)"
@@ -4892,8 +4907,8 @@
   },
   "scripts": {
     "test": {
-      "fileCount": 408,
-      "titleCount": 3196,
+      "fileCount": 409,
+      "titleCount": 3203,
       "files": {
         "test/unit/anchor_fold_state_hash_twin.test.js": "4fbe28f32fa63c5b",
         "test/unit/anchor_recovery_field_twin.test.js": "6c93dad4cd12104b",
@@ -5124,6 +5139,7 @@
         "test/unit/db/datetime/retype.test.js": "946032dcbe5e268e",
         "test/unit/db/datetime/retype_alter.test.js": "da5ac310552f4fb5",
         "test/unit/db/source_replay_marker.test.js": "f44976730d0c0734",
+        "test/unit/db/state_checkpoints_scope.test.js": "8dde5c900b3cf26c",
         "test/unit/db/subtree/node_store_rows.test.js": "fe32d7c237f2fed6",
         "test/unit/db/subtree/orphan_stats_reads.test.js": "5c9fc36e8e0fa4a6",
         "test/unit/db_connect_retry_bound.test.js": "d7cf06179b413cae",
@@ -5451,8 +5467,8 @@
       }
     },
     "test:integration": {
-      "fileCount": 39,
-      "titleCount": 135,
+      "fileCount": 40,
+      "titleCount": 139,
       "files": {
         "test/integration/armed_source_handshake.test.js": "1dc85ba5837c0fa0",
         "test/integration/balance_rebuild_scoped.test/01_full_rebuild.test.js": "583e44f81238b4c9",
@@ -5486,6 +5502,7 @@
         "test/integration/server_rest_api.test/08_proxy_trust_rate_limit_wiring.test.js": "68f10a273308ebbe",
         "test/integration/server_websocket.test.js": "2c414fbb86440ec6",
         "test/integration/snapshot_concurrency.test.js": "cad1d26d53c24f5a",
+        "test/integration/state_checkpoints/scope_real.test.js": "17cd65b985544f4c",
         "test/integration/status_height_labels_real.test.js": "ff5ff8150abe0ded",
         "test/integration/subtree_armed_follower.test.js": "f4f95d87d6f86904",
         "test/integration/subtree_shadow_cross_twin.test.js": "20ed0b54513008c0",
@@ -5496,8 +5513,8 @@
       }
     },
     "test:integration:ci": {
-      "fileCount": 35,
-      "titleCount": 125,
+      "fileCount": 36,
+      "titleCount": 129,
       "files": {
         "test/integration/armed_source_handshake.test.js": "1dc85ba5837c0fa0",
         "test/integration/balance_rebuild_scoped.test/01_full_rebuild.test.js": "583e44f81238b4c9",
@@ -5527,6 +5544,7 @@
         "test/integration/server_rest_api.test/08_proxy_trust_rate_limit_wiring.test.js": "68f10a273308ebbe",
         "test/integration/server_websocket.test.js": "2c414fbb86440ec6",
         "test/integration/snapshot_concurrency.test.js": "cad1d26d53c24f5a",
+        "test/integration/state_checkpoints/scope_real.test.js": "17cd65b985544f4c",
         "test/integration/status_height_labels_real.test.js": "ff5ff8150abe0ded",
         "test/integration/subtree_armed_follower.test.js": "f4f95d87d6f86904",
         "test/integration/subtree_shadow_cross_twin.test.js": "20ed0b54513008c0",
