@@ -1,11 +1,11 @@
 {
-  "armed_map_fingerprint": "cca1ccc663a7b5945f6fbb73186e5093e7582caefe60da7c93d78c7584d6b3ff",
+  "armed_map_fingerprint": "8c4eec7ab9a74c257df89d9bb5b16b4cdcc1b7ccc368b9f1c77e7bd953fb9dcb",
   "armed_map_fingerprint_version": 2,
   "armedMapRows": {
     "archive_rollback_author_scope_activation.ARCHIVE_AUTHOR_SCOPE_JOIN_SQL": "c8b6c1753f86fb65689fbc5d72f001e9467d5553a91895a21c9cf48d643e8895",
     "archive_rollback_author_scope_activation.ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION": "836a49c98ea3f001fac17d3a831f71792f76aaa9f6853f06da929bcdc70aa69e",
     "checkpoint_commitment_activation.CHECKPOINT_COMMITMENT_ACTIVATION": "1450d2dd4426997367731e5e4319fda5ace64a4a210ed561e7e85d78aa568d83",
-    "checkpoint_supersede_activation.CHECKPOINT_SUPERSEDE_ACTIVATION": "5b58163679e1ae57122419066fabde267ad4b8e0170a685108911dd312ee2ead",
+    "checkpoint_supersede_activation.CHECKPOINT_SUPERSEDE_ACTIVATION": "62a8a04d6d4866cbf29238b8ec126cbdb5b7ce5febf2c2a0416ae6c8cca7c0f3",
     "consensus-constants.ACTIVATION_DELAY_BLOCKS_BY_COIN": "45244de8d1fcca9378f43477b7b255a71a7c2d45c7d9016c6ec33ffbb9a3e2cb",
     "consensus-constants.BTC_STAKE_CAPABILITIES": "a4ce5ddab357e4e71e4e5fe3f5b56665191c1e7a7458d77e7480d742917f9a4c",
     "consensus-constants.GAS_TICK": "89ea3e0f234780ff4c05e114707ab76d4a7d22e69148ff9bd2d6a36e85a5d691",
