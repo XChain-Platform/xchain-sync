@@ -253,7 +253,8 @@ describe('Security: /halt/clear and the WebSocket upgrade guard, against the REA
 // (src/db/state_checkpoints.js, a Database mixin). Exercised directly against
 // the mixin's own SQL, not the HTTP layer above it, since what varies between
 // the three reads is the query shape and its bound params, not how api.js
-// turns a 404/500 around them.
+// turns a 404/500 around them. Each read is scoped to one (chain, network),
+// since the hub mirrors every chain's checkpoints into one table.
 describe('Unit: state_checkpoints reads (SQL shape, limit, empty result)', function(){
 
     function fakeDb(rows){
@@ -264,18 +265,18 @@ describe('Unit: state_checkpoints reads (SQL shape, limit, empty result)', funct
 
         it('takes the newest row overall: DESC by block_index then checkpoint_seq, capped at one', async function(){
             let db = fakeDb([{ block_index: 5 }]);
-            await checkpointReads.getLatestCheckpoint.call(db);
+            await checkpointReads.getLatestCheckpoint.call(db, 'LTC', 'testnet');
 
             let [sql, params] = db.doQuery.firstCall.args;
-            assert.ok(/FROM state_checkpoints\b/.test(sql));
+            assert.ok(/FROM state_checkpoints WHERE chain=\? AND network=\? /.test(sql));
             assert.ok(/ORDER BY block_index DESC, checkpoint_seq DESC/.test(sql));
             assert.ok(/LIMIT 1\s*$/.test(sql.trim()));
-            assert.strictEqual(params, undefined);
+            assert.deepStrictEqual(params, ['LTC', 'testnet']);
         });
 
         it('returns an empty array when the table has no rows', async function(){
             let db = fakeDb([]);
-            let rows = await checkpointReads.getLatestCheckpoint.call(db);
+            let rows = await checkpointReads.getLatestCheckpoint.call(db, 'LTC', 'testnet');
             assert.deepStrictEqual(rows, []);
         });
     });
@@ -284,18 +285,18 @@ describe('Unit: state_checkpoints reads (SQL shape, limit, empty result)', funct
 
         it('bounds block_index to [from, to], keeps only the max checkpoint_seq per height, and passes the caller limit through', async function(){
             let db = fakeDb([]);
-            await checkpointReads.findCheckpointsInRange.call(db, 10, 20, 500);
+            await checkpointReads.findCheckpointsInRange.call(db, 'LTC', 'testnet', 10, 20, 500);
 
             let [sql, params] = db.doQuery.firstCall.args;
-            assert.ok(/WHERE block_index >= \? AND block_index <= \?/.test(sql));
-            assert.ok(/checkpoint_seq = \(SELECT MAX\(s2\.checkpoint_seq\) FROM state_checkpoints s2 WHERE s2\.block_index = sc\.block_index\)/.test(sql));
-            assert.ok(/ORDER BY block_index ASC LIMIT \?/.test(sql));
-            assert.deepStrictEqual(params, [10, 20, 500]);
+            assert.ok(/WHERE sc\.chain=\? AND sc\.network=\? AND sc\.block_index >= \? AND sc\.block_index <= \?/.test(sql));
+            assert.ok(/sc\.checkpoint_seq = \(SELECT MAX\(s2\.checkpoint_seq\) FROM state_checkpoints s2 WHERE s2\.chain = sc\.chain AND s2\.network = sc\.network AND s2\.block_index = sc\.block_index\)/.test(sql));
+            assert.ok(/ORDER BY sc\.block_index ASC LIMIT \?/.test(sql));
+            assert.deepStrictEqual(params, ['LTC', 'testnet', 10, 20, 500]);
         });
 
         it('returns an empty array when nothing falls in range', async function(){
             let db = fakeDb([]);
-            let rows = await checkpointReads.findCheckpointsInRange.call(db, 1, 2, 10);
+            let rows = await checkpointReads.findCheckpointsInRange.call(db, 'LTC', 'testnet', 1, 2, 10);
             assert.deepStrictEqual(rows, []);
         });
     });
@@ -304,17 +305,17 @@ describe('Unit: state_checkpoints reads (SQL shape, limit, empty result)', funct
 
         it('filters on the exact height and takes the newest checkpoint_seq there', async function(){
             let db = fakeDb([]);
-            await checkpointReads.getCheckpointAtHeight.call(db, 42);
+            await checkpointReads.getCheckpointAtHeight.call(db, 'LTC', 'testnet', 42);
 
             let [sql, params] = db.doQuery.firstCall.args;
-            assert.ok(/WHERE block_index=\?/.test(sql));
+            assert.ok(/WHERE chain=\? AND network=\? AND block_index=\?/.test(sql));
             assert.ok(/ORDER BY checkpoint_seq DESC LIMIT 1/.test(sql));
-            assert.deepStrictEqual(params, [42]);
+            assert.deepStrictEqual(params, ['LTC', 'testnet', 42]);
         });
 
         it('returns an empty array when no checkpoint exists at that height', async function(){
             let db = fakeDb([]);
-            let rows = await checkpointReads.getCheckpointAtHeight.call(db, 999);
+            let rows = await checkpointReads.getCheckpointAtHeight.call(db, 'LTC', 'testnet', 999);
             assert.deepStrictEqual(rows, []);
         });
     });

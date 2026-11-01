@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.1] - 2026-11-01
+
+### Fixed
+- Checkpoint routes now serve only the requested chain and network, so a replica is never handed another chain's checkpoint.
+
 ## [0.27.0] - 2026-11-01
 
 ### Added

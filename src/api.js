@@ -42,6 +42,7 @@ const { createApiKeyMiddleware, safeEqual } = require('./http/middleware');
 const { createShutdown, createSyncDrain } = require('./http/shutdown');
 const { getReplicatedTables, missingReplicatedTables } = require('./schema/replicated_tables');
 const coins       = require('./coins');
+const { coinTicker } = require('./consensus-constants');
 
 // Stateless helper for the advisory index-map parity checksum published on
 // /status (server mode). getDataHash holds no per-call state, so one shared
@@ -52,6 +53,14 @@ const statusUtil = new Utility();
 // the version that names the algorithm, and the logic digest beside it. The _v2 alias of
 // the W1 to W4 window is gone since W5 (activation-registry C4).
 function consensusIdentityFields(){ return { armed_map_fingerprint: computeArmedMapFingerprint().hex, armed_map_fingerprint_version: 2, carrier_logic_digest: carrierLogicDigest() }; }
+
+// The (chain, network) a /checkpoint route reads its rows under. Every indexer DB holds
+// the hub-mirrored checkpoints of EVERY chain, and the rows carry the ticker, while the
+// route carries whichever form the client used (litecoin or LTC), so the ticker is folded
+// here the way the client folds it before checking the served row's binding.
+function checkpointScope(chain, network){
+    return [String(coinTicker(String(chain))).toUpperCase(), String(network).toLowerCase()];
+}
 
 function hubConsensusHashFields(syncService){
     let hub = syncService.hubClient;
@@ -827,8 +836,9 @@ function createApp(syncService, cfg, app = express()){
     // signatures are self-authenticating; the client verifies them against its OWN
     // out-of-band pinned validator set, never a set this endpoint supplies. The table
     // is append-only (a reorged height is superseded by a higher checkpoint_seq), so
-    // both routes take the MAX checkpoint_seq. The /latest literal is registered
-    // before /:height so it is not parsed as a height.
+    // both routes take the MAX checkpoint_seq. Every read is scoped to the route's
+    // chain and network (checkpointScope), since the table mirrors all chains. The
+    // /latest literal is registered before /:height so it is not parsed as a height.
     function serializeCheckpoint(r){
         return {
             chain: r.chain, network: r.network,
@@ -853,7 +863,7 @@ function createApp(syncService, cfg, app = express()){
         let db = syncService.getDatabase(chain, network, dbType);
         if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found', code: 'NOT_FOUND' });
         try {
-            let rows = await db.getLatestCheckpoint();
+            let rows = await db.getLatestCheckpoint(...checkpointScope(chain, network));
             if(!rows || !rows.length) return res.status(404).json({ error: 'No checkpoints', code: 'NOT_FOUND' });
             res.json(serializeCheckpoint(rows[0]));
         } catch(e){
@@ -888,7 +898,7 @@ function createApp(syncService, cfg, app = express()){
         let db = syncService.getDatabase(chain, network, dbType);
         if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found', code: 'NOT_FOUND' });
         try {
-            let rows = await db.findCheckpointsInRange(from, to, CHECKPOINT_RANGE_LIMIT);
+            let rows = await db.findCheckpointsInRange(...checkpointScope(chain, network), from, to, CHECKPOINT_RANGE_LIMIT);
             res.json({ checkpoints: (rows || []).map(serializeCheckpoint) });
         } catch(e){
             console.error('[API error] /checkpoint/.../range:', e);
@@ -906,7 +916,7 @@ function createApp(syncService, cfg, app = express()){
         let db = syncService.getDatabase(chain, network, dbType);
         if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found', code: 'NOT_FOUND' });
         try {
-            let rows = await db.getCheckpointAtHeight(h);
+            let rows = await db.getCheckpointAtHeight(...checkpointScope(chain, network), h);
             if(!rows || !rows.length) return res.status(404).json({ error: 'No checkpoint at that height', code: 'NOT_FOUND' });
             res.json(serializeCheckpoint(rows[0]));
         } catch(e){
