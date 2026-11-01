@@ -92,6 +92,25 @@ function registerFullSnapshotCases1(){
     });
 }
 
+function registerFullSnapshotRepairCase(){
+    // A source records leaves only from the tip it started at and prunes below a
+    // committed epoch, so a replica holds the leaves it was sent and never derives
+    // more from its own blocks.
+    it('never derives sync_meta leaves from local blocks on a full indexer snapshot', async function(){
+        db.dbType = 'indexer';
+        await applier.applyFullSnapshot({
+            schema_version: SCHEMA_VERSION.indexer,
+            block_height: 10,
+            tables: {
+                blocks: [{ block_index: 10 }],
+                sync_meta: [{ block_index: 8, ledger_hash: 'l8' }]
+            }
+        });
+        const derived = db.doQuery.getCalls().filter(c => /INTO sync_meta[\s\S]*FROM blocks/.test(c.args[0]));
+        assert.deepStrictEqual(derived, [], 'a full snapshot must not fabricate leaves the source never recorded');
+    });
+}
+
 function registerFullSnapshotCases2(){
     it('does NOT clear replica-local control tables sync_halt / sync_state on full-snapshot apply @regression', async function(){
         // These durable control tables are never shipped in a snapshot; the clear
@@ -274,6 +293,7 @@ describe('ClientApplier', function(){
 
     describe('applyFullSnapshot', function(){
         registerFullSnapshotCases1();
+        registerFullSnapshotRepairCase();
         registerFullSnapshotCases2();
         registerFullSnapshotCases3();
         registerFullSnapshotCases4();

@@ -13,6 +13,7 @@ const sinon  = require('sinon');
 const ClientRollback = require('../../../src/client/rollback');
 const Utility = require('../../../src/util');
 const balanceHelpers = require('../../../src/db/balance_helpers');
+const tokenRefold = require('../../../src/db/token_refold');
 
 function createMockDb(){
     return {
@@ -69,6 +70,14 @@ describe('ClientRollback', function(){
             assert.ok(supplies.calledOnce, 'tokens.supply is recomputed on reorg');
             assert.ok(rebuild.calledBefore(supplies), 'balances first, then supply (supply reads the rebuilt ledger)');
             assert.ok(supplies.calledBefore(db.commitTransaction), 'supply recompute lands inside the rollback txn');
+        });
+
+        it('refolds token metadata before recomputing supplies', async function(){
+            const refold = sinon.stub(tokenRefold, 'refoldTokenRows').resolves({ skipped: [] });
+            const supplies = sinon.stub(balanceHelpers, 'recomputeTokenSupplies').resolves();
+            await rollback.rollback(100);
+            assert.ok(refold.calledOnce, 'token metadata is refolded on reorg');
+            assert.ok(refold.calledBefore(supplies), 'supply reads the refolded token decimals');
         });
 
         it('logs (does not rethrow) a 1146 error from recomputeTokenSupplies', async function(){

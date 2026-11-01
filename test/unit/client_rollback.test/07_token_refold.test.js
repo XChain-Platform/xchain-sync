@@ -58,7 +58,7 @@ const EXPECTED = editedRow({ last_action_index: 300 });
 function replica(issues, tokenRow, firstActionIndex){
     let world = { issues: issues.slice(), token: Object.assign({}, tokenRow), updates: 0 };
     let doQuery = sinon.stub().callsFake(async (sql, args) => {
-        if(/^SELECT DISTINCT tick_id FROM issues WHERE action_index >= \?/.test(sql))
+        if(/^SELECT DISTINCT m\.tick_id AS tick_id FROM issues m /.test(sql))
             return [...new Set(world.issues.filter(i => i.action_index >= args[0]).map(i => i.tick_id))].map(t => ({ tick_id: t }));
         if(sql === 'DELETE FROM `issues` WHERE action_index >= ?'){ world.issues = world.issues.filter(i => i.action_index < args[0]); return { affectedRows: 1 }; }
         if(/FROM issues i INNER JOIN actions a1/.test(sql))

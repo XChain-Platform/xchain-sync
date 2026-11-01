@@ -45,7 +45,7 @@ function registerHooks(){
 
 function registerIncrementalSnapshotCases1(){
     it('inserts rows without truncation', async function(){
-        let snapshot = {
+        const snapshot = {
             schema_version: SCHEMA_VERSION.indexer,
             block_height: 20,
             since_block: 10,
@@ -56,6 +56,7 @@ function registerIncrementalSnapshotCases1(){
         assert.strictEqual(db.beginTransaction.calledOnce, true);
         assert.strictEqual(db.commitTransaction.calledOnce, true);
     });
+    registerRecommittedEpochCase();
     it('skips null snapshot', async function(){
         await applier.applyIncrementalSnapshot(null);
         assert.strictEqual(db.beginTransaction.called, false);
@@ -80,20 +81,64 @@ function registerIncrementalSnapshotCases1(){
                 source_id: 7, signing_pubkey_id: 3, amount: '1.00000000', reward_block_index: 961500,
                 reward_derive_block_index: 961700, block_index: 961700 }] }
         });
-        let del = db.doQuery.getCalls().find(c => /^DELETE vr FROM validator_rewards vr JOIN anchor_reward_reconcile_log d/.test(c.args[0]));
+        const del = db.doQuery.getCalls().find(c => /^DELETE vr FROM validator_rewards vr JOIN anchor_reward_reconcile_log d/.test(c.args[0]));
         assert.ok(del, 'expected the loser-row delete mirror on the incremental path');
         assert.ok(/WHERE d\.block_index >= \?$/.test(del.args[0]));
         assert.deepStrictEqual(del.args[1], [961600]);
     });
     it('rebuilds balances when the catch-up touches credits/debits', async function(){
         db.dbType = 'indexer';
-        let rb  = sinon.stub(balanceHelpers, 'rebuildBalances').resolves();
+        const rb  = sinon.stub(balanceHelpers, 'rebuildBalances').resolves();
         await applier.applyIncrementalSnapshot({
             schema_version: SCHEMA_VERSION.indexer,
             since_block: 10,
             tables: { debits: [{ id: 1 }] }
         });
         assert.strictEqual(rb.calledOnce, true);
+    });
+}
+
+function registerRecommittedEpochCase(){
+    it('authoritatively refreshes recommitted epoch roots without carrying the source id', async function(){
+        await applier.applyIncrementalSnapshot({
+            schema_version: SCHEMA_VERSION.indexer,
+            block_height: 20,
+            since_block: 10,
+            tables: { merkle_epochs: [{ id: 91, epoch: 2, start_block: 10, end_block: 19,
+                merkle_root: 'corrected', leaf_count: 10 }] }
+        });
+        const query = db.doQuery.getCalls().map(c => c.args[0])
+            .find(sql => /^INSERT INTO `merkle_epochs`/.test(sql));
+        assert.ok(query, 'the authoritative epoch set must use a plain INSERT upsert');
+        assert.ok(query.includes('ON DUPLICATE KEY UPDATE'), 'a duplicate epoch must refresh its root');
+        assert.ok(!query.includes('`id`'), 'the source-local surrogate id must not reach the replica');
+        assert.ok(query.includes('`merkle_root` = VALUES(`merkle_root`)'));
+        assert.ok(query.includes('`leaf_count` = VALUES(`leaf_count`)'));
+    });
+}
+
+function registerIncrementalSnapshotRepairCases(){
+    it('never derives sync_meta leaves from local blocks on an incremental indexer snapshot', async function(){
+        db.dbType = 'indexer';
+        await applier.applyIncrementalSnapshot({
+            schema_version: SCHEMA_VERSION.indexer,
+            block_height: 20,
+            since_block: 10,
+            tables: { blocks: [{ block_index: 11 }] }
+        });
+        const derived = db.doQuery.getCalls().filter(c => /INTO sync_meta[\s\S]*FROM blocks/.test(c.args[0]));
+        assert.deepStrictEqual(derived, [],
+            'a source that was down records no leaves for those blocks, so the replica must not invent them');
+    });
+    it('writes no sync_meta leaves on decoder snapshots', async function(){
+        db.dbType = 'decoder';
+        await applier.applyIncrementalSnapshot({
+            schema_version: SCHEMA_VERSION.decoder,
+            block_height: 20,
+            since_block: 10,
+            tables: { blocks: [{ block_index: 11 }] }
+        });
+        assert.ok(!db.doQuery.getCalls().some(c => /INSERT IGNORE INTO sync_meta/.test(c.args[0])));
     });
 }
 
@@ -114,6 +159,7 @@ describe('ClientApplier', function(){
 
     describe('applyIncrementalSnapshot', function(){
         registerIncrementalSnapshotCases1();
+        registerIncrementalSnapshotRepairCases();
         registerIncrementalSnapshotCases2();
     });
 });

@@ -124,6 +124,55 @@ describe('ClientSync: strict cross-source gate survives catch-up (M-22)', functi
 });
 
 describe('ClientSync: strict cross-source gate survives catch-up (M-22)', function(){
+    let sync, applier;
+
+    beforeEach(function(){
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+    });
+    afterEach(function(){ sinon.restore(); });
+
+    it('a prompt split stays strict-pending in log-only mode @regression', async function(){
+        ({ sync, applier } = makeSync({
+            SYNC_SOURCES: 'http://src1:3006,http://src2:3006',
+            VERIFY_HASHES: true, HASH_CONFIRM_STRICT: true,
+            HALT_ON_DIVERGENCE: false, HASH_CONFIRM_TIMEOUT: 1000
+        }));
+        sync.lastAppliedBlock = 5;
+        sync.lastHashes = null;
+        await sync.handleBlock({ type: 'block', block_index: 6,
+            ledger_hash: 'L6a', actions_hash: 'A6a', contract_hash: 'C6a' }, 0);
+        await sync.handleBlock({ type: 'block', block_index: 6,
+            ledger_hash: 'L6b', actions_hash: 'A6b', contract_hash: 'C6b' }, 1);
+
+        assert.ok(sync._strictConfirmPending.has(6));
+        let runner = sinon.stub(sync, 'runIncrementalCatchUp').resolves();
+        await sync.incrementalCatchUp(6);
+        assert.strictEqual(runner.called, false);
+        assert.strictEqual(applier.applyBlock.called, false);
+    });
+
+    it('a late split cannot clear a timed-out strict height @regression', async function(){
+        let clock = sinon.useFakeTimers();
+        ({ sync } = makeSync({
+            SYNC_SOURCES: 'http://src1:3006,http://src2:3006',
+            VERIFY_HASHES: true, HASH_CONFIRM_STRICT: true,
+            HALT_ON_DIVERGENCE: false, HASH_CONFIRM_TIMEOUT: 1000
+        }));
+        sync.lastAppliedBlock = 5;
+        sync.lastHashes = null;
+        await sync.handleBlock({ type: 'block', block_index: 6,
+            ledger_hash: 'L6a', actions_hash: 'A6a', contract_hash: 'C6a' }, 0);
+        await clock.tickAsync(1000);
+        await sync.handleBlock({ type: 'block', block_index: 6,
+            ledger_hash: 'L6b', actions_hash: 'A6b', contract_hash: 'C6b' }, 1);
+
+        assert.ok(sync._strictConfirmPending.has(6));
+        clock.restore();
+    });
+});
+
+describe('ClientSync: strict cross-source gate survives catch-up (M-22)', function(){
     let sync, db, applier;
 
     function makeStrictSync(){

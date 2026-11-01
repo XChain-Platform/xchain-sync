@@ -222,7 +222,8 @@ describe('ClientSync bootstrapFromHeight', function(){
 
     it('retry wrapper throws (never live-follows empty) when no sources configured', async function(){
         ({ sync } = makeSync({ SYNC_SOURCES: '' }));
-        await assert.rejects(() => sync.bootstrapFromHeightRetry(50000), /no sync sources configured/);
+        await assert.rejects(() => sync.bootstrapFromHeightRetry(50000), e =>
+            e instanceof ClientSync.BootstrapExhaustedError && /no sync sources configured/.test(e.message));
     });
 });
 
@@ -270,6 +271,63 @@ describe('ClientSync bootstrapFromHeight', function(){
     it('retry wrapper THROWS on exhaustion', async function(){
         ({ sync } = makeSync({ BOOTSTRAP_MAX_RETRIES: 0 }));
         sinon.stub(sync, 'bootstrapFromHeight').rejects(new Error('boom'));
-        await assert.rejects(() => sync.bootstrapFromHeightRetry(50000), /exhausted after 1 round/);
+        await assert.rejects(() => sync.bootstrapFromHeightRetry(50000), e =>
+            e instanceof ClientSync.BootstrapExhaustedError && /exhausted after 1 round/.test(e.message));
+    });
+});
+
+// A real schema-apply halt: the schema serves one table whose CREATE fails with a
+// persistent DDL fault (disk full), so fetchAndApplySchema records the halt.
+function schemaFaultSync(configOverrides){
+    let built = makeSync(configOverrides);
+    sinon.stub(axios, 'get').callsFake(async (url) => {
+        if(url.indexOf('/status/') !== -1) return { data: { source_height: 1000000 } };
+        if(url.indexOf('/schema/') !== -1) return { data: { tables: { C: 'CREATE TABLE `C` (id INT)' } } };
+        if(url.indexOf('/snapshot-rows/') !== -1)
+            return { data: Buffer.from(JSON.stringify({ schema_version: SCHEMA_VERSION.indexer,
+                table: 'x', max_id: 0, has_more: false, rows: [] })) };
+        if(url.indexOf('/snapshot/') !== -1)
+            return { data: Buffer.from(JSON.stringify({ schema_version: SCHEMA_VERSION.indexer,
+                block_height: 1000000, since_block: 950000, tables: {} })) };
+        throw new Error('unexpected url ' + url);
+    });
+    built.db.doQuery.callsFake(async (sql) => {
+        if(/information_schema\.tables/.test(sql)) return [];
+        if(/CREATE TABLE/.test(sql)){ let e = new Error('disk full'); e.errno = 1021; throw e; }
+        return [];
+    });
+    return built;
+}
+
+function quietConsole(){
+    beforeEach(function(){
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+        sinon.stub(console, 'warn');
+    });
+    afterEach(function(){ sinon.restore(); });
+}
+
+describe('ClientSync bootstrapFromHeight stops at a schema-apply halt @regression', function(){
+    quietConsole();
+
+    it('retry wrapper rejects on the schema halt after one round, as a plain halt abort', async function(){
+        let { sync, applier } = schemaFaultSync({ BOOTSTRAP_MAX_RETRIES: 3 });
+        let sleep = sinon.stub(sync.util, 'sleep').resolves();
+        let round = sinon.spy(sync, 'bootstrapFromHeight');
+        let lookups = sinon.spy(sync, 'syncLookupTablesPaged');
+        let persistBase = sinon.spy(sync, 'persistBootstrapBase');
+
+        let err = await sync.bootstrapFromHeightRetry(50000).then(() => null, e => e);
+
+        assert.ok(err && /aborted by schema-apply-failed/.test(err.message),
+            'expected schema halt abort, got ' + (err && err.message));
+        assert.strictEqual(err instanceof ClientSync.BootstrapExhaustedError, false,
+            'a halt keeps the replica idle-halted rather than taking the exhaustion exit');
+        assert.strictEqual(round.callCount, 1);
+        assert.strictEqual(sleep.called, false, 'no backoff round after a halt');
+        assert.strictEqual(lookups.called, false, 'no lookup rows are written after the halt');
+        assert.strictEqual(persistBase.called, false, 'the bootstrap base is not advanced after the halt');
+        assert.strictEqual(applier.applyIncrementalSnapshot.called, false);
     });
 });

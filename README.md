@@ -4,8 +4,8 @@
 # XChain Sync
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.21.0-blue" alt="Version">
-  <img src="https://img.shields.io/badge/tests-2%2C779%2B%20passing-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/version-0.27.0-blue" alt="Version">
+  <img src="https://img.shields.io/badge/tests-3%2C863%2B%20passing-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node">
   <img src="https://img.shields.io/badge/license-AGPL--3.0--or--later-blue" alt="License">
 </p>
@@ -32,7 +32,7 @@ Database replication service for the XChain Platform. Syncs indexer and decoder 
 - **Cross-source comparison**: clients can sync from 2+ independent servers and hold blocks until all sources confirm identical hashes
 - **Transparency log**: append-only per-block hash record with SHA-256 Merkle epoch roots and inclusion proofs (indexer only)
 - **SPV state-commitment recompute**: apply-time rebuild of per-block light-client roots (`state_tree_roots`/`state_tree_nodes`) that halts on divergence from the source (indexer only, opt-out via `VERIFY_STATE_COMMITMENT=false`)
-- **Checkpoint-quorum anchor**: optional federation anchor that fetches the server's quorum-signed checkpoint, verifies it against a pinned validator set, and asserts the committed state root matches the replica's own recomputed value (indexer only, opt-in via `VERIFY_CHECKPOINT_QUORUM=true`)
+- **Checkpoint-quorum anchor**: optional federation anchor that fetches the server's quorum-signed checkpoint, verifies it against a pinned validator set, and asserts the committed state root matches the replica's own recomputed value (indexer only; on by default for testnet, off for mainnet until its launch validator set is pinned and for regtest; `VERIFY_CHECKPOINT_QUORUM=true` or `=false` overrides every chain and network)
 - **Rate limiting**: configurable per-IP limits on snapshot downloads and WebSocket connections
 - **Reorg propagation**: detects chain reorganizations from the source database and broadcasts rollback events to all subscribers, then rolls back the replica
 - **Automatic catch-up**: clients detect block gaps on reconnect and self-heal via incremental REST snapshots
@@ -145,15 +145,15 @@ npm run api
 |---|---|
 | `npm run api` | Start the sync service |
 | `bin/run-db-tiers.sh` | Run the DB-backed tiers against a throwaway MariaDB it starts and drops |
-| `npm test` | Run unit tests (2,280 tests) |
+| `npm test` | Run unit tests (3,335 tests) |
 | `npm run ci` | Unit tests plus the security tier, exits on completion |
 | `npm run coverage` | Unit tests under `c8` coverage instrumentation |
 | `npm run test:boundary` | Boundary condition tests (consensus constants, 7 tests) |
-| `npm run test:regression` | Unit tests tagged `@regression` (587 tests) |
+| `npm run test:regression` | Unit tests tagged `@regression` (1,057 tests) |
 | `npm run test:smoke` | Smoke tests (server + client startup, config loading, 17 tests) |
-| `npm run test:integration` | Integration tests (requires MariaDB + running indexer, 109 tests) |
-| `npm run test:e2e` | End-to-end tests (full server/client lifecycle, 75 tests) |
-| `npm run test:security` | Security tests (validation, injection, auth, 157 tests) |
+| `npm run test:integration` | Integration tests (requires MariaDB + running indexer, 135 tests) |
+| `npm run test:e2e` | End-to-end tests (full server/client lifecycle, 77 tests) |
+| `npm run test:security` | Security tests (validation, injection, auth, 158 tests) |
 | `npm run test:fuzz` | Fuzz tests (property-based via fast-check, 55 tests) |
 | `npm run test:fuzz:tier1` | Tier 1 fuzz (client applier, hash verifier, 25 tests) |
 | `npm run test:fuzz:tier2` | Tier 2 fuzz (rollback, server poller, hub client, 23 tests) |

@@ -295,6 +295,13 @@
  *       DERIVED in src/table_lifecycle/action_tables.js and rolled back by
  *       `action_index >= ?`. The migration is mode=auto, so the forced schema refresh
  *       creates the table on followers. Decoder is unaffected and stays at 5.
+ *  21 - (indexer only) `index_tickers` unique key widens from tick(200) to tick(250)
+ *       (2026-10-23-index-tickers-full-tick-prefix). It is stream:index wire-replicated,
+ *       and above TICK_NORMALIZE_ACTIVATION two names that share their first 200
+ *       characters both stream, so a v20 follower still on tick(200) hits
+ *       ER_DUP_ENTRY under ClientApplier and stalls the queue. The migration is
+ *       mode=auto, so the forced schema refresh widens the key on followers.
+ *       Decoder is unaffected and stays at 5.
  *
  * MIGRATION_FRONTIER is the machine-readable half of that accounting: `through`
  * is the newest migration DATE whose replicated DDL is folded into the version
@@ -317,11 +324,11 @@
  *
  ********************************************************************/
 
-const SCHEMA_VERSION = { indexer: 20, decoder: 5 };
+const SCHEMA_VERSION = { indexer: 21, decoder: 5 };
 
 const MIGRATION_FRONTIER = {
     indexer: {
-        through: '2026-10-21',
+        through: '2026-10-23',
         before: [
             '2026-05-30-balances-composite-index.sql',
             '2026-06-03-unique-full-column-index-addresses.sql',
@@ -390,14 +397,15 @@ const MIGRATION_FRONTIER = {
             '2026-10-17-dispensers-sweeps-column-order.sql',
             '2026-10-17-ledger-address-tick-amount-index.sql',
             '2026-10-18-anchor-actions-pre-archive-status.sql',
-            '2026-10-19-bridge-escrow-anchor-axis-checkpoint-idx.sql'
-        ],
-        accounted: [
+            '2026-10-19-bridge-escrow-anchor-axis-checkpoint-idx.sql',
             '2026-10-21-rollcall-actions.sql'
         ],
+        accounted: [
+            '2026-10-23-index-tickers-full-tick-prefix.sql'
+        ],
         hashes: {
-            '2026-10-21-rollcall-actions.sql':
-                '95bc2659cf2f16a331a16bced6daa2e5ad412c832db1ce3ba695b7d5137af167'
+            '2026-10-23-index-tickers-full-tick-prefix.sql':
+                'c2adf41f4b0074c88bd1953f27a001045f9fd8bcf81ade37c6dea6c17e96ec46'
         }
     },
     decoder: {

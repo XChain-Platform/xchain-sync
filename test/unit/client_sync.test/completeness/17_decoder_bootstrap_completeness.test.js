@@ -85,8 +85,59 @@ function registerBootstrapFromSnapshotWiringTests(){
                     'decoder completeness check must run regardless of VERIFY_HASHES');
                 assert.strictEqual(s.verifyDecoderCompleteness.firstCall.args[0], 'http://source2:3006');
                 assert.strictEqual(s.verifyDecoderCompleteness.firstCall.args[1], 500);
+                assert.deepStrictEqual([...s.verifyDecoderCompleteness.firstCall.args[2]], ['dispensers']);
                 // The indexer-only hash path must never run for decoder.
                 assert.strictEqual(s.verifyAgainstSource.called, false);
+            });
+
+            it('ignores pre-reconcile dispenser drift during snapshot verification', async function(){
+                let { s, decoderDb } = decoderSync(config);
+                s.lastAppliedBlock = 500;
+                decoderDb.getTableCount = async (table) => ({ blocks: 100, dispensers: 10 })[table];
+                sinon.stub(axios, 'get').resolves({ data: {
+                    block_height: 500, table_counts: { blocks: 100, dispensers: 12 }
+                } });
+
+                assert.strictEqual(await s.bootstrapVerifySnapshot(), true);
+                const logged = console.error.getCalls().some(call =>
+                    String(call.args[0]).includes('TABLE_COUNT_MISMATCH'));
+                assert.strictEqual(logged, false);
+            });
+
+            it('still reports non-dispenser drift during snapshot verification', async function(){
+                let { s, decoderDb } = decoderSync(config);
+                s.lastAppliedBlock = 500;
+                decoderDb.getTableCount = async (table) => ({ blocks: 100, transactions: 9 })[table];
+                sinon.stub(axios, 'get').resolves({ data: {
+                    block_height: 500, table_counts: { blocks: 100, transactions: 10 }
+                } });
+
+                assert.strictEqual(await s.bootstrapVerifySnapshot(), true);
+                const logged = console.error.getCalls().some(call =>
+                    String(call.args[0]).includes('TABLE_COUNT_MISMATCH'));
+                assert.strictEqual(logged, true);
+            });
+        });
+    });
+}
+
+function registerBootstrapFromSnapshotFallbackTests(){
+    describe('decoder bootstrap completeness', function(){
+        describe('bootstrapFromSnapshot wiring', function(){
+
+            it('tries the next decoder source when an alternate cannot be read', async function(){
+                const cfg = Object.assign({}, config, {
+                    SYNC_SOURCES: 'http://source1:3006,http://source2:3006,http://source3:3006'
+                });
+                const { s } = decoderSync(cfg);
+                s.lastAppliedBlock = 500;
+                const verify = sinon.stub(s, 'verifyDecoderCompleteness');
+                verify.onFirstCall().resolves(null);
+                verify.onSecondCall().resolves([]);
+
+                assert.strictEqual(await s.bootstrapVerifySnapshot(1), true);
+                assert.deepStrictEqual(verify.getCalls().map(call => call.args[0]),
+                    ['http://source3:3006', 'http://source1:3006']);
             });
 
             it('does not run the decoder check in single-source mode', async function(){
@@ -120,4 +171,5 @@ describe('ClientSync', function(){
     registerClientSyncHooks(assignState);
     registerVerifyDecoderCompletenessTests();
     registerBootstrapFromSnapshotWiringTests();
+    registerBootstrapFromSnapshotFallbackTests();
 });

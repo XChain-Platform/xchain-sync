@@ -10,9 +10,9 @@
  *
  **********************************************************************
  * Vendored checkpoint verifier conformance. src/checkpoint.js (+ its
- * consensus/stake_weighted_quorum and consensus/equivocation_header siblings; the
- * CHECKPOINT_COMMITMENT flag day is a registry row) is a code-identical TWIN of the
- * xchain-sdk copies. This guards that
+ * consensus/stake_weighted_quorum and consensus/equivocation_header siblings and the
+ * supersession suffix module it signs with; the CHECKPOINT_COMMITMENT flag day is a
+ * registry row) is a code-identical TWIN of the xchain-sdk copies. This guards that
  * the vendored copy actually verifies a real federation-signed checkpoint and
  * rejects a tampered one, so drift from the SDK is caught here rather than in
  * production (mirrors how merkle.js is golden-vector guarded).
@@ -35,6 +35,10 @@ const SDK_SRC  = path.join(__dirname, '../../../xchain-sdk/src');
 // gate is a row in consensus/gate_registry/, whose part files are byte-checked against the
 // reference-impl in consensus_primitive_conformance.test.js, so they are not listed here.
 const TWINS =['checkpoint.js', 'consensus/stake_weighted_quorum.js', 'consensus/equivocation_header.js'];
+// Twins whose sync implementation sits at another path, as [path under xchain-sdk/src,
+// path under src]. checkpoint.js requires the suffix module at the SDK's path, where sync
+// keeps only a re-export, so the comparison targets the module that re-export loads.
+const MAPPED_TWINS = [['protocol/light_client/supersede_suffix.js', 'client/supersede_suffix.js']];
 
 // Cut unquoted // comments (tracking ' " ` quote state per line) so the two
 // sides compare on CODE. The prose is independently worded in both copies and
@@ -354,18 +358,27 @@ describe('vendored checkpoint verifier (twin conformance) @regression', function
     // backtracking URL-trim replaced with a loop, and commitmentMissing added to
     // module.exports. Neither touched canonicalCheckpoint, so nothing here went
     // red. This compares the whole file, code only, against the sibling.
-    for(const file of TWINS) it('src/' + file + ' is code-identical to the xchain-sdk copy (comments excepted)', function(){
-        const theirs = path.join(SDK_SRC, file);
-        if(!skipOrFail(this, siblingCheckout(__dirname, theirs), 'the checkpoint twin guard')) return;
-        const mine = codeOnly(fs.readFileSync(path.join(SYNC_SRC, file), 'utf8'));
-        const sdk  = codeOnly(fs.readFileSync(theirs, 'utf8'));
-        if(mine === sdk) return;
-        const a = mine.split('\n'), b = sdk.split('\n');
-        let at = 0;
-        while(at < a.length && at < b.length && a[at] === b[at]) at++;
-        assert.fail('src/' + file + ' has drifted from the xchain-sdk twin at code line ' + (at + 1)
-            + '\n  sync: ' + JSON.stringify(a[at])
-            + '\n  sdk : ' + JSON.stringify(b[at])
-            + '\nPort the edit to BOTH copies; this set carries one of the six XCHECKPOINT canonical builders.');
+    for(const [sdkRel, file] of TWINS.map(f => [f, f]).concat(MAPPED_TWINS)){
+        const theirName = sdkRel === file ? 'copy' : 'src/' + sdkRel + ' copy';
+        it('src/' + file + ' is code-identical to the xchain-sdk ' + theirName + ' (comments excepted)', function(){
+            const theirs = path.join(SDK_SRC, sdkRel);
+            if(!skipOrFail(this, siblingCheckout(__dirname, theirs), 'the checkpoint twin guard')) return;
+            const mine = codeOnly(fs.readFileSync(path.join(SYNC_SRC, file), 'utf8'));
+            const sdk  = codeOnly(fs.readFileSync(theirs, 'utf8'));
+            if(mine === sdk) return;
+            const a = mine.split('\n'), b = sdk.split('\n');
+            let at = 0;
+            while(at < a.length && at < b.length && a[at] === b[at]) at++;
+            assert.fail('src/' + file + ' has drifted from the xchain-sdk ' + theirName + ' at code line ' + (at + 1)
+                + '\n  sync: ' + JSON.stringify(a[at])
+                + '\n  sdk : ' + JSON.stringify(b[at])
+                + '\nPort the edit to BOTH copies; this set carries one of the six XCHECKPOINT canonical builders.');
+        });
+    }
+
+    it('the SDK-path supersede_suffix module is a pure re-export of the compared sync implementation', function(){
+        assert.strictEqual(require('../../src/protocol/light_client/supersede_suffix.js'),
+            require('../../src/client/supersede_suffix.js'),
+            'src/checkpoint.js loads the SDK path, so it must stay a re-export of src/client/supersede_suffix.js');
     });
 });

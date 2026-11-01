@@ -97,6 +97,10 @@ function backfillGapsTests(){
         assert.deepStrictEqual(recorded, [150, 201]);
         let recomputed = log.recommitEpoch.getCalls().map(c => c.args[0]).sort();
         assert.deepStrictEqual(recomputed, [2, 3], 'epochs spanning the holes are rebuilt');
+        let lines = console.log.getCalls().map(c => String(c.args[0]));
+        assert.ok(lines.some(line => line.includes('recorded blocks [150,201]') &&
+            line.includes('recomputed epochs [2,3]')),
+        'completion log must identify the repaired ranges');
     });
 
     it('skips a gap whose source block has vanished (reorg) without recording it', async function(){
@@ -108,6 +112,16 @@ function backfillGapsTests(){
         assert.strictEqual(n, 1);  // counted as detected
         assert.strictEqual(log.recordBlock.called, false);
         assert.strictEqual(log.recommitEpoch.called, false);
+    });
+
+    it('returns the recorded identity for recent and cursor heights', function(){
+        poller.recentBroadcastHashes.set(40, 'recent');
+        poller.lastPolledBlock = 41;
+        poller.lastPolledBlockHash = 'cursor';
+
+        assert.strictEqual(poller.getRecordedIdentity(40), 'recent');
+        assert.strictEqual(poller.getRecordedIdentity(41), 'cursor');
+        assert.strictEqual(poller.getRecordedIdentity(39), null);
     });
 }
 

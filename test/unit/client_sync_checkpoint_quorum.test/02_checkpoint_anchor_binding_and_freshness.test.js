@@ -138,6 +138,23 @@ describe('ClientSync: strict freshness counts unanchored cycles @regression', fu
         await sync.verifyCheckpointQuorum();
         assert.strictEqual(haltReason(), 'checkpoint-freshness-stale');
     });
+
+    it('HALTS when supersession fields make the signed form malformed', async function(){
+        armStale();
+        serve(Object.assign(signedCp(signer), { supersedes_from: 5 }));
+        await sync.verifyCheckpointQuorum();
+        assert.strictEqual(haltReason(), 'checkpoint-freshness-stale');
+        assert.ok(warnLines().some(line => /malformed signed form/.test(line)));
+    });
+
+    it('HALTS when malformed supersession fields make canonicalization throw', async function(){
+        armStale();
+        const cp = signedCp(signer);
+        cp.supersedes_from = 1;
+        serve(cp);
+        await sync.verifyCheckpointQuorum();
+        assert.strictEqual(haltReason(), 'checkpoint-freshness-stale');
+    });
 });
 
 describe('ClientSync: strict freshness counts unanchored cycles @regression', function(){
@@ -173,22 +190,46 @@ describe('ClientSync: strict freshness counts unanchored cycles @regression', fu
         await sync.recordVerifiedCheckpointBlock(500);
         assert.strictEqual(sync._lastVerifiedCheckpointBlock, 990);
         assert.strictEqual(syncState.get('verified_checkpoint_block:indexer'), '990');
+        assert.strictEqual(syncState.get('verified_checkpoint_seq:indexer'), '9');
     });
+});
+
+describe('ClientSync: strict freshness counts unanchored cycles @regression', function(){
+    registerHooks();
 
     it('retries persistence after a sync-state write failure', async function(){
         const cp = signedCp(signer);
         rootsByHeight[990] = { state_root: cp.state_root, block_merkle_root: cp.block_merkle_root };
         serve(cp);
-        sync.db.setSyncState.onFirstCall().resolves(false);
+        let blockWrites = 0;
+        sync.db.setSyncState.callsFake(async (key, value) => {
+            if(key === 'verified_checkpoint_block:indexer' && blockWrites++ === 0) return false;
+            syncState.set(key, value);
+        });
 
         await sync.verifyCheckpointQuorum();
         assert.strictEqual(sync._lastVerifiedCheckpointBlock, null);
         assert.strictEqual(syncState.has('verified_checkpoint_block:indexer'), false);
 
         await sync.verifyCheckpointQuorum();
-        assert.strictEqual(sync.db.setSyncState.callCount, 2);
+        assert.strictEqual(blockWrites, 2);
         assert.strictEqual(sync._lastVerifiedCheckpointBlock, 990);
         assert.strictEqual(syncState.get('verified_checkpoint_block:indexer'), '990');
+    });
+
+    it('retries seq persistence without lowering the in-memory mark', async function(){
+        let seqWrites = 0;
+        sync.db.setSyncState.callsFake(async (key, value) => {
+            if(key === 'verified_checkpoint_seq:indexer' && seqWrites++ === 0) return false;
+            syncState.set(key, value);
+        });
+        await sync.recordVerifiedCheckpointSeq(9);
+        assert.strictEqual(sync._lastVerifiedCheckpointSeq, 9);
+        assert.strictEqual(syncState.has('verified_checkpoint_seq:indexer'), false);
+        await sync.recordVerifiedCheckpointSeq(9);
+        await sync.recordVerifiedCheckpointSeq(8);
+        assert.strictEqual(syncState.get('verified_checkpoint_seq:indexer'), '9');
+        assert.strictEqual(seqWrites, 2);
     });
 });
 
@@ -212,6 +253,19 @@ describe('ClientSync: strict freshness counts unanchored cycles @regression', fu
 
         await sync.start();
         assert.strictEqual(haltReason(), 'checkpoint-freshness-stale');
+    });
+
+    it('reloads the verified seq and skips a replay after restart', async function(){
+        syncState.set('verified_checkpoint_seq:indexer', '9');
+        makeSync('BTC');
+        await sync.loadVerifiedCheckpointSeq();
+        const cp = signedCp(signer, { checkpoint_seq: 8 });
+        rootsByHeight[990] = { state_root: cp.state_root, block_merkle_root: cp.block_merkle_root };
+        serve(cp);
+        await sync.verifyCheckpointQuorum();
+        assert.strictEqual(sync._lastVerifiedCheckpointSeq, 9);
+        assert.strictEqual(sync._lastVerifiedCheckpointBlock, null);
+        assert.ok(warnLines().some(line => /seq regression/.test(line)));
     });
 });
 

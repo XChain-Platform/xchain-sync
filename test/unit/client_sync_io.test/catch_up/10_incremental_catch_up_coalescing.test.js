@@ -142,4 +142,59 @@ describe('ClientSync: incrementalCatchUp coalescing', function(){
         assert.strictEqual(sync.runIncrementalCatchUp.callCount, 1,
             'must not loop forever when no progress');
     });
+
+    it('does not re-run after the first pass halts a decoder @regression', async function(){
+        ({ sync } = makeSync({}, { dbType: 'decoder' }));
+        sync.running = true;
+        sinon.stub(sync, 'runIncrementalCatchUp').callsFake(async function(){
+            sync.lastAppliedBlock = 1;
+            sync._catchUpPending = true;
+            sync._halted = { blockIndex: 1, reason: 'reorg-rollback-failed' };
+        });
+
+        await sync.incrementalCatchUp(1);
+
+        assert.strictEqual(sync.runIncrementalCatchUp.callCount, 1,
+            'the coalesced pass must re-check the durable halt');
+    });
+});
+
+describe('ClientSync: incrementalCatchUp coalescing', function(){
+    let sync;
+
+    beforeEach(function(){
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+    });
+    afterEach(function(){ sinon.restore(); });
+
+    it('does not re-run after strict confirmation becomes pending @regression', async function(){
+        ({ sync } = makeSync({ HASH_CONFIRM_STRICT: true, VERIFY_RECOMPUTE: false }));
+        sync.running = true;
+        sinon.stub(sync, 'runIncrementalCatchUp').callsFake(async function(){
+            sync.lastAppliedBlock = 1;
+            sync._catchUpPending = true;
+            sync._strictConfirmPending.add(2);
+        });
+
+        await sync.incrementalCatchUp(1);
+
+        assert.strictEqual(sync.runIncrementalCatchUp.callCount, 1,
+            'the coalesced pass must re-check strict pending heights');
+    });
+
+    it('does not re-run after a strict reorg becomes pending @regression', async function(){
+        ({ sync } = makeSync({ HASH_CONFIRM_STRICT: true, VERIFY_RECOMPUTE: false }));
+        sync.running = true;
+        sinon.stub(sync, 'runIncrementalCatchUp').callsFake(async function(){
+            sync.lastAppliedBlock = 1;
+            sync._catchUpPending = true;
+            sync._strictReorgPending.add(2);
+        });
+
+        await sync.incrementalCatchUp(1);
+
+        assert.strictEqual(sync.runIncrementalCatchUp.callCount, 1,
+            'the coalesced pass must re-check strict reorg heights');
+    });
 });

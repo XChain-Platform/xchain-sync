@@ -30,6 +30,7 @@ const { isStateCommitmentActive, isStateCommitmentActivationBlock } = require('.
 const { coinTicker }      = require('../consensus-constants');
 const { OPERATOR_LOCAL_TABLES, SOURCE_UNSTREAMED_TABLES, REPLICA_LEDGER_TABLES, orderSnapshotTables } = require('../server/snapshot_builder');
 const lifecycle           = require('../table_lifecycle');
+const { rollbackPreservingError } = require('./rollback_preserving_error');
 const util = require('node:util');
 const { getLogger } = require('../observability');
 const logger = getLogger();
@@ -134,6 +135,11 @@ function initializeUpsertFullDumpTables(applier) {
         'markets',
         'attest_validator_stats'
     ]);
+    // These tables are append-only on ordinary delivery but authoritative when
+    // an incremental snapshot re-sends their complete set.
+    applier.authoritativeSnapshotUpsertTables = new Set([
+        'merkle_epochs'
+    ]);
 }
 
 function initializeLocalSurrogateIdTables(applier) {
@@ -159,7 +165,10 @@ function initializeLocalSurrogateIdOnlyTables(applier) {
         // Keep sync_meta keyed by its unique block_index (first write wins, as on
         // the source). The live stream omits id, so a catch-up row carrying the
         // source id can hit another block's local id and be silently IGNOREd.
-        'sync_meta'
+        'sync_meta',
+        // Epoch is the shared identity. A recommit may replace the root while
+        // source and replica allocate unrelated local surrogate ids.
+        'merkle_epochs'
     ]);
 }
 
@@ -231,7 +240,7 @@ class ClientApplier {
             if((await this.db.commitTransaction()) === false)
                 throw new Error('block ' + payload.block_index + ': no open transaction at commit; nothing was committed');
         } catch(e){
-            await this.db.rollbackTransaction();
+            await rollbackPreservingError(this.db, e, 'Block apply');
             logger.error(util.format('Error applying block %s:', payload.block_index, e));
             throw e;
         }
@@ -394,15 +403,19 @@ class ClientApplier {
         return dbType === 'indexer' && isStateCommitmentActive(snapshotData.block_height, this.network, this.coinTicker);
     }
 
+    assertSnapshotSchemaVersion(snapshotData, dbType){
+        let expectedVersion = SCHEMA_VERSION[dbType];
+        if(snapshotData.schema_version !== expectedVersion){
+            throw new Error('Schema version mismatch: server=' + snapshotData.schema_version + ' client=' + expectedVersion + '; restart the validator after upgrading the server');
+        }
+    }
+
     // Apply a full snapshot after confirming that its schema matches this replica.
     async applyFullSnapshot(snapshotData){
         if(!snapshotData || !snapshotData.tables) return;
 
         let dbType = (this.db && this.db.dbType) || 'indexer';
-        let expectedVersion = SCHEMA_VERSION[dbType];
-        if(snapshotData.schema_version !== expectedVersion){
-            throw new Error('Schema version mismatch: server=' + snapshotData.schema_version + ' client=' + expectedVersion + '; restart the validator after upgrading the server');
-        }
+        this.assertSnapshotSchemaVersion(snapshotData, dbType);
 
         logger.info('Applying full snapshot (block height: ' + snapshotData.block_height + ')...');
         let timer = this.util.startTimer();
@@ -450,7 +463,7 @@ class ClientApplier {
                 throw new Error('full snapshot: no open transaction at commit; nothing was committed');
             logger.info('Full snapshot applied (' + this.util.getTimer(timer) + ')');
         } catch(e){
-            await this.db.rollbackTransaction();
+            await rollbackPreservingError(this.db, e, 'Full snapshot apply');
             logger.error(util.format('Error applying full snapshot:', e));
             throw e;
         }
@@ -514,7 +527,7 @@ class ClientApplier {
                 throw new Error('incremental snapshot: no open transaction at commit; nothing was committed');
             logger.info('Incremental snapshot applied (' + this.util.getTimer(timer) + ')');
         } catch(e){
-            await this.db.rollbackTransaction();
+            await rollbackPreservingError(this.db, e, 'Incremental snapshot apply');
             logger.error(util.format('Error applying incremental snapshot:', e));
             throw e;
         }
@@ -526,6 +539,7 @@ class ClientApplier {
     // natural-key collision and a wrong row hidden by a PRIMARY collision are
     // corrected.
     async insertSnapshotTables(tables, opts){
+        let snapshotOpts = { ...(opts || {}), authoritativeSnapshot: true };
         for(let table in tables){
             let rows = tables[table];
             if(!rows || rows.length === 0) continue;
@@ -533,7 +547,7 @@ class ClientApplier {
             let repairKeyColumns = this.repairNaturalKeyColumns.get(table);
             if(opts && opts.strictIgnoreCheck && repairKeyColumns)
                 await this.reconcileLookupRows(table, rows, repairKeyColumns);
-            await this.insertRows(table, rows, opts);
+            await this.insertRows(table, rows, snapshotOpts);
         }
     }
 
@@ -557,7 +571,7 @@ class ClientApplier {
             if((await this.db.commitTransaction()) === false)
                 throw new Error('dispensers reconcile: no open transaction at commit; nothing was committed');
         } catch(e){
-            await this.db.rollbackTransaction();
+            await rollbackPreservingError(this.db, e, 'Dispensers reconcile');
             logger.error(util.format('Error applying dispensers reconcile:', e));
             throw e;
         }
@@ -645,10 +659,11 @@ class ClientApplier {
         }
     }
 
-    prepareTableRows(table, rows){
+    prepareTableRows(table, rows, opts){
         this.validateInsertTable(table);
-        let useIgnore = this.ignoreTables.has(table);
-        let useUpsert = this.upsertFullDumpTables.has(table);
+        let useUpsert = this.upsertFullDumpTables.has(table)
+            || !!(opts && opts.authoritativeSnapshot && this.authoritativeSnapshotUpsertTables.has(table));
+        let useIgnore = this.ignoreTables.has(table) && !useUpsert;
         let prepared = this.prepareNaturalKeyRows(table, rows, this.prepareInsertColumns(table, rows));
         return { ...prepared, useIgnore, useUpsert };
     }
@@ -738,7 +753,7 @@ class ClientApplier {
 
     async insertRows(table, rows, opts){
         if(!rows || rows.length === 0) return;
-        let prepared = this.prepareTableRows(table, rows);
+        let prepared = this.prepareTableRows(table, rows, opts);
 
         // Chunked to keep the IN list bounded on a large catch-up window.
         let deleteBatch = 500;

@@ -24,6 +24,7 @@ function registerMaybeVerifyCompletenessTests(){
             config.COMPLETENESS_CHECK_INTERVAL = 60000;
             sync.lastAppliedBlock = 100;
             db.getTableCount = sinon.stub().resolves(9);
+            sinon.stub(console, 'warn');
             sinon.stub(axios, 'get').resolves({
                 data: { block_height: 100, table_counts: { blocks: 10 } }
             });
@@ -34,9 +35,12 @@ function registerMaybeVerifyCompletenessTests(){
 
             assert.strictEqual(axios.get.calledOnce, true);
             assert.ok(/\/status\/indexer\/bitcoin\/mainnet$/.test(axios.get.firstCall.args[0]));
-            let logged = console.error.getCalls().map(c => String(c.args[0])).join('\n');
-            assert.ok(/TABLE_COUNT_MISMATCH/.test(logged),
+            // One sweep's shortfall is a detection at warn; only a persistent gap is an error.
+            let warned = console.warn.getCalls().map(c => String(c.args[0])).join('\n');
+            let errored = console.error.getCalls().map(c => String(c.args[0])).join('\n');
+            assert.ok(/TABLE_COUNT_MISMATCH/.test(warned),
                 'a follower short rows the hashes cannot cover must be reported');
+            assert.ok(!/TABLE_COUNT_MISMATCH/.test(errored), 'a single sweep never logs the mismatch at error');
         });
 
         it('does not sweep while the replica is behind the source', async function(){

@@ -28,12 +28,17 @@
 const crypto = require('crypto');
 const eq     = require('./consensus/equivocation_header.js');
 const swq    = require('./consensus/stake_weighted_quorum.js');
+const supersede = require('./protocol/light_client/supersede_suffix.js');
 // The CHECKPOINT_COMMITMENT flag day is a registry row read by its literal key (W5);
 // the predicate is activeAt over the checkpoint's BTC-anchored snapshot_block.
 const { activeAt } = require('./consensus/gate_registry');
 const CHECKPOINT_COMMITMENT_KEY = 'checkpoint_commitment_activation.CHECKPOINT_COMMITMENT_ACTIVATION';
+const CHECKPOINT_SUPERSEDE_KEY = 'checkpoint_supersede_activation.CHECKPOINT_SUPERSEDE_ACTIVATION';
 function isCheckpointCommitmentActive(snapshotBlock, network){
     return activeAt(CHECKPOINT_COMMITMENT_KEY, network, null, snapshotBlock, null);
+}
+function isCheckpointSupersedeActive(snapshotBlock, network){
+    return activeAt(CHECKPOINT_SUPERSEDE_KEY, network, 'BTC', snapshotBlock, null);
 }
 
 // ASN.1 DER prefix for Ed25519 SPKI. Mirrors the hub's ValidatorIdentity and
@@ -61,6 +66,8 @@ function canonicalCheckpoint(cp){
        cp.state_root_version != null && cp.block_merkle_version != null)
         raw += '|' + [String(cp.state_root).toLowerCase(), String(cp.state_root_version),
                       String(cp.block_merkle_root).toLowerCase(), String(cp.block_merkle_version)].join('|');
+    if(isCheckpointSupersedeActive(cp.snapshot_block, cp.network) && supersede.hasSupersedeFields(cp))
+        raw += supersede.supersedeSuffix(cp);
     // An ANCHOR v3 wrapper section is signed over its folded archive as well (the hub's
     // foldArchiveCanonical): the batch fields follow the roots and the round id gains the seq.
     const fold = cp.fold_archive;
@@ -75,6 +82,11 @@ function canonicalCheckpoint(cp){
             cp.chain + '|' + cp.network + '|' + cp.block_index + '|' + cp.checkpoint_seq
             + (fold != null ? '|' + fold.match_batch_seq : ''), 0, raw);
     return raw;
+}
+
+function tryCanonicalCheckpoint(cp){
+    try { return canonicalCheckpoint(cp); }
+    catch (e) { return null; }
 }
 
 // Verify one Ed25519 signature over a UTF-8 payload (never throws).
@@ -109,6 +121,11 @@ function commitmentActive(cp){
     return !!cp && isCheckpointCommitmentActive(cp.snapshot_block, cp.network);
 }
 
+function supersessionDisallowed(cp){
+    return supersede.hasSupersedeFields(cp)
+        && !isCheckpointSupersedeActive(cp.snapshot_block, cp.network);
+}
+
 // Does one validator entry carry the stake fields the weighted regime requires?
 // Blank source and a missing, blank or nonnumeric weight are all disqualifying.
 // meetsStakeThreshold also fails closed on each of these (its decimal check is the
@@ -134,7 +151,6 @@ function isWeightedEntry(v){
 // trusting the server's `verified` flag or any supplied `is_weighted`, and only the stake
 // WEIGHTS come from the supplied set, exactly as the pubkeys always have.
 function verifyCheckpoint(checkpoint, validators){
-    let canonical = canonicalCheckpoint(checkpoint);
     let vset      = validators || [];
     let qualified = new Set(vset.map(p => String(p && p.pubkey !== undefined ? p.pubkey : p).toLowerCase()));
     let quorum    = (qualified.size <= 1) ? 1 : Math.max(2 * Math.floor((qualified.size - 1) / 3) + 1, Math.ceil((qualified.size + 1) / 2));
@@ -143,13 +159,14 @@ function verifyCheckpoint(checkpoint, validators){
     // network, byte-for-byte the same flag-day the hub/indexer flip on, and the
     // same gating the canonical signing string already applies for the equiv header.
     let weighted = swq.isStakeWeightedQuorumActive(checkpoint && checkpoint.snapshot_block, checkpoint && checkpoint.network);
+    let canonical = tryCanonicalCheckpoint(checkpoint);
 
     // Post-activation a checkpoint MUST carry the commitment fields. canonicalCheckpoint's
     // all-four-present guard is correct there (its bytes must match the hub, indexer and
     // explorer), but it lets a ROOTLESS post-flag-day row fall back to the legacy preimage
     // so its signatures verify against that. Structural rejection therefore lives here, in
     // the verifier, where failing closed masks nothing.
-    if (commitmentMissing(checkpoint))
+    if (canonical === null || commitmentMissing(checkpoint) || supersessionDisallowed(checkpoint))
         return { valid: false, validSigs: 0, quorum: quorum, weighted: weighted, canonical: canonical };
 
     let sigs = checkpoint.validator_signatures;
@@ -216,6 +233,9 @@ function verifyServedCheckpoint(body, supplied){
     let set = supplied !== null ? supplied : (body.validators || []);
     let result = verifyCheckpoint(body.checkpoint, set);
     return Object.assign({ checkpoint: body.checkpoint, snapshotAvailable: !!body.snapshot_available,
+        // The explorer's replay-window answer: false while a replay is open at or below
+        // this height. Only an explorer older than the field omits it; absent reads as true.
+        final: body.final === undefined ? true : body.final === true,
         validatorSource: supplied !== null ? 'supplied' : 'explorer' }, result);
 }
 
@@ -247,11 +267,13 @@ async function fetchAndVerifyCheckpoint(explorerUrl, coin, blockIndex, fetchImpl
 
 module.exports = {
     canonicalCheckpoint,
+    tryCanonicalCheckpoint,
     verifySignature,
     // Exported so callers enforce THIS predicate rather than a second copy that can
     // drift from it: here client/sync.js checkpointSkipsAnchoring, and in the SDK twin
     // protocol/light_client/validator_set_follow.js verifyCheckpointWithProvenSet.
     commitmentMissing,
+    supersessionDisallowed,
     // Exported so client/sync.js gates a served root on THIS predicate, not a copy.
     commitmentActive,
     verifyCheckpoint,

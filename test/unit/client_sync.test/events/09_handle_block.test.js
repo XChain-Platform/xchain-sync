@@ -43,7 +43,9 @@ function registerBlockEventHook(){
     function decoderSync(){
         let decoderDb = createMockDb();
         decoderDb.dbType = 'decoder';
-        let s = new ClientSync('bitcoin', 'mainnet', decoderDb, applier, rollback, hashVerifier, config, util);
+        let singleSourceConfig = Object.assign({}, config, { SYNC_SOURCES: 'http://source1:3006' });
+        let s = new ClientSync('bitcoin', 'mainnet', decoderDb, applier, rollback, hashVerifier,
+            singleSourceConfig, util);
         s.lastAppliedBlock = 100;
         s.lastHashes = { block_hash: 'hash100' };
         return s;
@@ -55,6 +57,8 @@ function registerHandleBlockGroup1Tests(){
 
         it('skips blocks already applied', async function(){
             sync.lastAppliedBlock = 101;
+            sync.lastHashes = { ledger_hash: blockEvent.ledger_hash,
+                actions_hash: blockEvent.actions_hash, contract_hash: blockEvent.contract_hash };
             await sync.handleBlock(blockEvent, 0);
             assert.strictEqual(applier.applyBlock.called, false);
         });

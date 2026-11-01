@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-11-01
+
+### Added
+- Sync clients now verify superseding checkpoints, and admit quorum-authorized retroactive rewinds with a per-chain cap.
+- Carried the new gate rows, including the LTC admission margin, so the sync map matches the indexer.
+
+### Changed
+- Armed this release's testnet gates and keyed the roll-call and supersede gates per testnet chain.
+- Checkpoint quorum anchors now default per chain and network, and the live testnet checkpoint validators are pinned.
+- Armed ARCHIVE_ROLLCALL_PRESENCE_ACTIVATION on BTC:testnet at 158557.
+- Armed ARCHIVE_ROLLCALL_PRESENCE_ACTIVATION on LTC:testnet at 4949697.
+- Armed ARCHIVE_ROLLCALL_PRESENCE_ACTIVATION on DOGE:testnet at 68035864.
+- Armed CHECKPOINT_SUPERSEDE_ACTIVATION on BTC:testnet at 158557.
+- Armed CHECKPOINT_SUPERSEDE_ACTIVATION on LTC:testnet at 4949697.
+- Armed CHECKPOINT_SUPERSEDE_ACTIVATION on DOGE:testnet at 68035864.
+- Armed ADMIT_CHAIN_MARGIN_ACTIVATION on LTC:testnet at 4949697.
+
+### Fixed
+- Sync streams now recover after a source restart, and a persistently short stream table is replaced from the source.
+- Orphaned replica price snapshots are now purged in bounded chunks.
+- Malformed checkpoints served by a source are now treated as unanchored or waiting, and strict freshness still halts past its bound.
+- Sync clients are safer on rollback and apply: rollback state is preserved on error, supersede suffixes are handled, and applier writes are validated.
+- Token refold, replicated table and updated-row handling were corrected so replicas match the source after token changes.
+- Hub config fetch and server snapshot, poller and recovery reward paths were hardened.
+
 ## [0.26.2] - 2026-10-21
 
 ### Changed

@@ -98,3 +98,53 @@ describe('ClientSync: stop()', function(){
         assert.strictEqual(sync.running, false);
     });
 });
+
+describe('ClientSync: stop()', function(){
+    let sync;
+
+    beforeEach(function(){
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+    });
+    afterEach(function(){ sinon.restore(); });
+
+    it('cancels block and reorg quorum timers before draining', async function(){
+        let clock = sinon.useFakeTimers();
+        let built = makeSync({ SYNC_SOURCES: 'http://a:3006,http://b:3006' });
+        sync = built.sync;
+        sync.lastAppliedBlock = 100;
+        let blockEvent = { type: 'block', block_index: 101,
+            ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch' };
+        sync.pendingHashes.set(101, new Map([[0, blockEvent]]));
+        let applyBlock = sinon.stub(sync, 'applyBlockEvent').resolves();
+        sync.armBlockQuorumTimer(blockEvent);
+        sync.recordReorgVote({ type: 'reorg', block_index: 95 }, 0, false);
+        let applyReorg = sinon.stub(sync, 'applyAgreedReorg').resolves();
+        sync.armReorgQuorumTimer(95);
+
+        await sync.stop();
+        await clock.tickAsync(sync.config.HASH_CONFIRM_TIMEOUT + 100);
+
+        assert.strictEqual(applyBlock.called, false);
+        assert.strictEqual(applyReorg.called, false);
+        assert.strictEqual(sync._applyTimers.size, 0);
+        assert.strictEqual(sync._pendingReorgs.size, 0);
+        clock.restore();
+    });
+
+    it('does not arm quorum timers after stop', async function(){
+        let clock = sinon.useFakeTimers();
+        ({ sync } = makeSync({ SYNC_SOURCES: 'http://a:3006,http://b:3006' }));
+        await sync.stop();
+        let event = { type: 'block', block_index: 101,
+            ledger_hash: 'lh', actions_hash: 'ah', contract_hash: 'ch' };
+        sync.pendingHashes.set(101, new Map([[0, event]]));
+        sync.armBlockQuorumTimer(event);
+        sync.recordReorgVote({ type: 'reorg', block_index: 95 }, 0, false);
+        sync.armReorgQuorumTimer(95);
+        await clock.tickAsync(sync.config.HASH_CONFIRM_TIMEOUT + 100);
+        assert.strictEqual(sync._applyTimers.size, 0);
+        assert.strictEqual(sync._pendingReorgs.get(95).timer, null);
+        clock.restore();
+    });
+});

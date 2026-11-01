@@ -52,7 +52,7 @@ const POLL_FINALIZE_TABLES = ['polls'];
 
 // Surviving unstake rows whose status_id was flipped to 'completed' in place when their
 // cooldown matured (markCooldownsCompleted). Keyed by cooldown_end_block (the maturity
-// block), exactly as ClientRollback's reverse reset and cooldownCredits.js's forward
+// block), exactly as ClientRollback's reverse reset and cooldown_credits.js's forward
 // credit select. action_index is UNIQUE on both, so the follower's upsert lands cleanly.
 const COOLDOWN_STATUS_TABLES = ['unstakes', 'contract_unstakes'];
 

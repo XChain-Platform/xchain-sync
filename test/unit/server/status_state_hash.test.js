@@ -35,14 +35,14 @@ function mockDb(dbType, state){
     };
 }
 
-function serverSyncService(){
+function serverSyncService(poller){
     return {
         getBroadcaster: () => ({
             getStatus: () => ({ block_height: 99, source_block_height: 99 }),
             getSubscribers: () => []
         }),
         getSnapshotBuilder: () => ({ snapshotsServed: 0, snapshotsRejected: 0 }),
-        getPoller: () => null
+        getPoller: () => poller || null
     };
 }
 
@@ -69,6 +69,39 @@ describe('/status state_hash', function(){
         assert.strictEqual(indexer.state_hash, 'sh99');
         let decoder = await buildStatusRow(serverSyncService(), mockDb('decoder', 'sh99'), 'decoder', 'bitcoin', 'mainnet');
         assert.strictEqual('state_hash' in decoder, false);
+    });
+
+    it('marks and publishes a live hash row that matches the poller identity', async function(){
+        let { buildStatusRow } = loadApi('server');
+        let poller = { getRecordedIdentity: sinon.stub().returns('a|b|c') };
+        let row = await buildStatusRow(serverSyncService(poller), mockDb('indexer', 'sh99'),
+            'indexer', 'bitcoin', 'mainnet');
+        assert.strictEqual(row.hash_identity_consistent, true);
+        assert.strictEqual(row.ledger_hash, 'a');
+        assert.strictEqual(row.state_hash, 'sh99');
+    });
+
+    it('withholds hashes when the polled height was rolled back from the live database', async function(){
+        let { buildStatusRow } = loadApi('server');
+        let db = mockDb('indexer', 'sh99');
+        db.getBlockHashRow.resolves(null);
+        let poller = { getRecordedIdentity: sinon.stub().returns('a|b|c') };
+        let row = await buildStatusRow(serverSyncService(poller), db, 'indexer', 'bitcoin', 'mainnet');
+        assert.strictEqual(row.block_height, 99);
+        assert.strictEqual(row.hash_identity_consistent, false);
+        assert.strictEqual(row.ledger_hash, null);
+        assert.strictEqual(row.state_hash, null);
+    });
+
+    it('withholds new-branch live hashes while the poller still names the old identity', async function(){
+        let { buildStatusRow } = loadApi('server');
+        let poller = { getRecordedIdentity: sinon.stub().returns('old-l|old-a|old-c') };
+        let row = await buildStatusRow(serverSyncService(poller), mockDb('indexer', 'new-state'),
+            'indexer', 'bitcoin', 'mainnet');
+        assert.strictEqual(row.hash_identity_consistent, false);
+        assert.strictEqual(row.ledger_hash, null);
+        assert.strictEqual(row.actions_hash, null);
+        assert.strictEqual(row.contract_hash, null);
     });
 
     it('publishes state_hash on a client indexer row, null before it exists', async function(){

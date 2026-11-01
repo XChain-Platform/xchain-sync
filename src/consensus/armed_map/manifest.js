@@ -35,6 +35,7 @@ const EXPECTED_KEYS = Object.freeze([
     'archive_rollback_author_scope_activation.ARCHIVE_AUTHOR_SCOPE_JOIN_SQL',
     'archive_rollback_author_scope_activation.ARCHIVE_ROLLBACK_AUTHOR_SCOPE_ACTIVATION',
     'checkpoint_commitment_activation.CHECKPOINT_COMMITMENT_ACTIVATION',
+    'checkpoint_supersede_activation.CHECKPOINT_SUPERSEDE_ACTIVATION',
     'consensus-constants.ACTIVATION_DELAY_BLOCKS_BY_COIN',
     'consensus-constants.BTC_STAKE_CAPABILITIES',
     'consensus-constants.GAS_TICK',

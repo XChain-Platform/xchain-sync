@@ -71,6 +71,13 @@ function ownConfigBranch(obj, key){
     return obj[key];
 }
 
+// The hub reports a config-store read failure as an HTTP-200 JSON-RPC result.
+// Keep a wrapped config response usable even if it happens to carry an unrelated
+// error field; only the standalone failure envelope is rejected.
+function isErrorEnvelope(result){
+    return !!result && typeof result === 'object' && typeof result.error === 'string' && !result.configs;
+}
+
 // If call failed over to a different endpoint than the one our cursor came
 // from, the delta we just received was filtered against a stale cross-hub
 // cursor and may have skipped rows (each hub's updated_at for the same config
@@ -78,14 +85,16 @@ function ownConfigBranch(obj, key){
 // reset cursor; the configs table is small and the merge is idempotent.
 async function refetchAfterEndpointChange(hub, result, sentCursor, cursorEndpoint){
     if(sentCursor > 0 && hub._lastGoodIdx !== cursorEndpoint){
-        hub.lastWatermark = 0;
-        hub.configs       = null;
         result = await hub.call({
             jsonrpc: '2.0',
             method:  'getallconfigs',
             params:  hub.configParams(0),
             id:      1
         }, 10000);
+        if(result !== null && !isErrorEnvelope(result)){
+            hub.lastWatermark = 0;
+            hub.configs       = null;
+        }
     }
     return result;
 }
@@ -105,14 +114,16 @@ async function refetchAfterConfigRegression(hub, result){
                      '/watermark ' + (Number(result.watermark) || 0) + ', below last-seen ' + hub.lastSeq +
                      '/' + hub.lastWatermark +
                      ' (hub restart or restore from an older snapshot); discarding cached config and re-fetching the full tree.');
-        hub.lastWatermark = 0;
-        hub.configs       = null;
         result = await hub.call({
             jsonrpc: '2.0',
             method:  'getallconfigs',
             params:  hub.configParams(0),
             id:      1
         }, 10000);
+        if(result !== null && !isErrorEnvelope(result)){
+            hub.lastWatermark = 0;
+            hub.configs       = null;
+        }
     }
     return result;
 }
@@ -153,19 +164,18 @@ module.exports = {
         }, 10000);
         // call returns null when every endpoint failed; preserve that signal so
         // extractDbConfigs (which treats null as "no configs") stays unchanged.
-        if(result === null) return null;
+        if(result === null || isErrorEnvelope(result)) return null;
 
         result = await refetchAfterEndpointChange(this, result, sentCursor, cursorEndpoint);
-        if(result === null) return null;
+        if(result === null || isErrorEnvelope(result)) return null;
         result = await refetchAfterConfigRegression(this, result);
-        if(result === null) return null;
+        if(result === null || isErrorEnvelope(result)) return null;
 
         this.warnIfRedacted(result);
         this.configs = this.applyConfigResult(result);
         // Bind the (possibly advanced) cursor to the endpoint that answered.
         this._watermarkEndpointIdx = this._lastGoodIdx;
-        // A non-null result means at least one endpoint answered; record the fetch time
-        // even on a delta poll that changed nothing, so the age reflects last hub contact.
+        // Record only a usable config answer, including a delta that changed nothing.
         this.lastSuccessfulFetchAt = Date.now();
         return this.configs;
     },
