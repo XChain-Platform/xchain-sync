@@ -1080,11 +1080,18 @@ function createApp(syncService, cfg, app = express()){
         if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'", code: 'BAD_REQUEST' });
 
         let { chain, network, table } = req.params;
-        let afterId = parseInt(req.query.after_id);
-        if(isNaN(afterId)) afterId = 0;
-        if(afterId < 0) return res.status(400).json({ error: 'Invalid after_id', code: 'BAD_REQUEST' });
-        let limit = parseInt(req.query.limit);
-        if(isNaN(limit)) limit = undefined; // builder applies its default
+        // Paging params are plain decimal integers or absent; anything else is a 400
+        // before any SQL runs (parseInt would prefix-parse '12abc' and '1e3').
+        const pagingInt = (v) => v === undefined ? null :
+            (typeof v === 'string' && /^[0-9]{1,15}$/.test(v) ? Number(v) : NaN);
+        let afterId = pagingInt(req.query.after_id);
+        if(Number.isNaN(afterId)) return res.status(400).json({ error: 'Invalid after_id', code: 'BAD_REQUEST' });
+        if(afterId === null) afterId = 0;
+        let limit = pagingInt(req.query.limit);
+        if(Number.isNaN(limit)) return res.status(400).json({ error: 'Invalid limit', code: 'BAD_REQUEST' });
+        if(limit === null) limit = undefined; // builder applies its default
+        if(req.query.max_block !== undefined && Number.isNaN(pagingInt(req.query.max_block)))
+            return res.status(400).json({ error: 'Invalid max_block', code: 'BAD_REQUEST' });
 
         let db = syncService.getDatabase(chain, network, dbType);
         if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found', code: 'NOT_FOUND' });

@@ -34,11 +34,15 @@ const REISSUING_LOOKUPS = new Set(['index_addresses', 'index_tickers']);
 
 // The optional max_block query bound: ids in these tables are minted in block order
 // and reissued on a reorg, so a page never carries a row from above the caller's tip.
+// Absent means "no bound". Anything present must be a plain non-negative decimal
+// integer; a malformed bound returns NaN so the caller rejects it rather than
+// silently serving rows above the caller's tip.
 function parseMaxBlock(res){
     let raw = res && res.req && res.req.query ? res.req.query.max_block : undefined;
-    if(raw === undefined || raw === null || raw === '') return null;
-    let n = parseInt(raw, 10);
-    return Number.isInteger(n) && n >= 0 ? n : null;
+    if(raw === undefined) return null;
+    if(typeof raw === 'number') return Number.isSafeInteger(raw) && raw >= 0 ? raw : NaN;
+    if(typeof raw !== 'string' || !/^[0-9]{1,15}$/.test(raw)) return NaN;
+    return Number(raw);
 }
 
 const methods = {
@@ -96,6 +100,9 @@ const methods = {
             // only these hardcoded names are ever interpolated into the query).
             return res.status(400).json({ error: 'Table not pageable: ' + table });
         }
+        let maxBlock = parseMaxBlock(res);
+        if(Number.isNaN(maxBlock))
+            return res.status(400).json({ error: 'Invalid max_block', code: 'BAD_REQUEST' });
         let after = Number.isFinite(afterId) ? Math.max(0, Math.floor(afterId)) : 0;
         let lim   = Number.isFinite(limit) ? Math.floor(limit) : ROWS_PAGE_DEFAULT;
         lim = Math.max(1, Math.min(ROWS_PAGE_MAX, lim));
@@ -106,8 +113,7 @@ const methods = {
         let col = replicatedTables.lookupCursorColumn(table);
         let rows = await db.findLookupPageAfter(table, col, after, lim);
         let hasMore = rows.length === lim;
-        let maxBlock = REISSUING_LOOKUPS.has(table) ? parseMaxBlock(res) : null;
-        if(maxBlock != null){
+        if(maxBlock != null && REISSUING_LOOKUPS.has(table)){
             let cut = rows.findIndex(r => r.block_index != null && Number(r.block_index) > maxBlock);
             if(cut !== -1){
                 rows = rows.slice(0, cut);
