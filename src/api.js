@@ -1569,6 +1569,15 @@ function installCrashHandlers(){
     });
 }
 
+// The only message a subscriber sends is a small heartbeat, so inbound frames
+// are capped far below the ws 100 MiB default; an oversize frame closes the
+// connection with 1009 before it is buffered or parsed.
+const WS_SUBSCRIBER_MAX_PAYLOAD = 64 * 1024;
+
+function createSubscriberWss(){
+    return new WebSocket.Server({ noServer: true, maxPayload: WS_SUBSCRIBER_MAX_PAYLOAD });
+}
+
 async function startApi(){
     // Pin check precedes any port, poller or source-DB handle; a null pin skips,
     // a mismatch on an armed network throws, uncaught.
@@ -1579,7 +1588,7 @@ async function startApi(){
     createApp(syncService, cfg, app);
     const server = http.createServer(app);
 
-    const wss = new WebSocket.Server({ noServer: true });
+    const wss = createSubscriberWss();
 
     server.on('upgrade', createUpgradeHandler(syncService, wss, app));
 
@@ -1609,5 +1618,5 @@ if(require.main === module){
     startApi();
 }
 
-module.exports = { trustProxyHops, snapshotKey, createRateLimiters, applyReplicaFreshness, applyProtocolHaltFreshness,
+module.exports = { createSubscriberWss, WS_SUBSCRIBER_MAX_PAYLOAD, trustProxyHops, snapshotKey, createRateLimiters, applyReplicaFreshness, applyProtocolHaltFreshness,
                    buildHealthEntry, healthEntryDegraded, buildStatusRow, createApp, createUpgradeHandler, startApi };
