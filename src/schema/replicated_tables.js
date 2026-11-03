@@ -28,8 +28,9 @@
  * streamed: a table added to live sync automatically joins the check, and a
  * table removed from it automatically leaves.
  *
- * Decoder coverage is 8 of 10 schema tables, not every table:
- * mempool_transactions and dispenser_extension_undo stay local. Scope note:
+ * Decoder coverage is 8 of 11 schema tables, not every table:
+ * mempool_transactions, dispenser_extension_undo and block_tx_index_end stay
+ * local. Scope note:
  * this is deliberately the *per-block streamed* set. Tables that
  * converge through other channels (a full/incremental snapshot ride-along, or
  * no xchain-sync channel at all) are intentionally excluded, because their
@@ -73,6 +74,13 @@
  *                                     reconcile, never through this journal, so it is neither
  *                                     streamed, counted nor content-checked, and it must stay
  *                                     out of every channel like mempool_transactions.
+ *   - block_tx_index_end             decoder-local parse cursor: the tx_index the decoder's
+ *                                     parse loop held at the end of each stored block, so a
+ *                                     restart resumes numbering past a trailing skipped
+ *                                     carrier. Written in the decoder's own block transaction
+ *                                     and deleted with the block on reorg. A replica assigns
+ *                                     no tx_index, so it is neither streamed, counted nor
+ *                                     content-checked, and stays out of every channel.
  *   - cross_chain_calls,              hub-mirrored via hub_db_sync, not produced by block
  *     cross_chain_matches,            processing, and pushed or retracted by the hub out
  *     oracle_prices,                  of band with block apply (its price and dex reorg

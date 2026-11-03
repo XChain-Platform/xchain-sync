@@ -29,9 +29,9 @@ const tableLifecycle = require('../../table_lifecycle');
 // rollback lists (replicaRollbackTables) already have. A new registry entry
 // with one of those modes is excluded automatically; before this derivation a
 // new local table passed every guard and silently rode consensus snapshots
-// unless someone also hand-edited this Set. The four names appended
-// after the spread have no registry entry (mempool_transactions and
-// dispenser_extension_undo are decoder-DB tables; sync_halt / sync_state are
+// unless someone also hand-edited this Set. The five names appended
+// after the spread have no registry entry (mempool_transactions,
+// dispenser_extension_undo and block_tx_index_end are decoder-DB tables; sync_halt / sync_state are
 // replica-created control tables) and are the ONLY permitted non-registry members; F-5 in
 // test/unit/rollback_coverage.test.js pins both directions against the registry.
 //
@@ -80,6 +80,9 @@ const OPERATOR_LOCAL_TABLES = new Set([
     // dispenser_extension_undo: decoder-local reorg bookkeeping for dispenser expiration
     // extends (no registry entry); each node rebuilds it from its own decoder writes.
     'dispenser_extension_undo',
+    // block_tx_index_end: the decoder's per-block parse cursor (no registry entry); each
+    // node's decoder writes its own, and a replica assigns no tx_index.
+    'block_tx_index_end',
     // sync_halt, sync_state: replica-local durable CONTROL tables the source never
     // ships (created by db.verifySyncTables for both dbTypes; no registry entry).
     // sync_halt holds the durable divergence-halt audit record; sync_state holds the
@@ -204,7 +207,7 @@ function decoderIncrementalSets(){
         blockScoped: new Set(topology.blockScoped),
         txScoped:    new Set(topology.txScoped),
         fullDump:    new Set(topology.index),
-        skip:        new Set(['mempool_transactions', 'dispensers', 'dispenser_extension_undo'])
+        skip:        new Set(['mempool_transactions', 'dispensers', 'dispenser_extension_undo', 'block_tx_index_end'])
     };
 }
 

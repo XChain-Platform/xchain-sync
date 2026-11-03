@@ -1592,10 +1592,10 @@ describe('Rollback coverage guard @regression', function(){
         const { OPERATOR_LOCAL_TABLES } = require('../../src/server/snapshot_builder');
         const derived = lifecycleTwin.tablesWhere(t =>
             ['local', 'hub-mirror', 'follower-derived'].includes(t.replication));
-        // The ONLY permitted members with no registry entry: mempool_transactions and
-        // dispenser_extension_undo are decoder-DB tables (registry covers the indexer DB); sync_halt / sync_state are
+        // The ONLY permitted members with no registry entry: mempool_transactions,
+        // dispenser_extension_undo and block_tx_index_end are decoder-DB tables (registry covers the indexer DB); sync_halt / sync_state are
         // replica-created control tables the full-snapshot clear loop must never wipe.
-        const NON_REGISTRY = ['mempool_transactions', 'dispenser_extension_undo', 'sync_halt', 'sync_state'];
+        const NON_REGISTRY = ['mempool_transactions', 'dispenser_extension_undo', 'block_tx_index_end', 'sync_halt', 'sync_state'];
         const expected = new Set([...derived, ...NON_REGISTRY]);
 
         for(const t of expected){
