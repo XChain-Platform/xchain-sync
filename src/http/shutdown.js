@@ -38,6 +38,10 @@ const envConfig = require('../config');
 // SHUTDOWN_TIMEOUT_MS overrides.
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 8000;
 
+// How long a subscriber gets to answer our close frame before its socket is
+// destroyed; well under the drain budget above.
+const DEFAULT_WS_CLOSE_GRACE_MS = 1000;
+
 function resolveTimeoutMs(timeoutMs, env){
     if(Number.isFinite(timeoutMs) && timeoutMs > 0) return timeoutMs;
     const raw = parseInt((env || envConfig.envSource()).SHUTDOWN_TIMEOUT_MS, 10);
@@ -132,7 +136,7 @@ function createShutdown({ drain, timeoutMs, exit, log } = {}){
  * @param {number[]} [opts.timers]     interval handles owned by the entry point
  * @param {object}   [opts.log]        console-shaped logger
  */
-function createSyncDrain({ syncService, server, wss, timers, log } = {}){
+function createSyncDrain({ syncService, server, wss, timers, log, closeGraceMs = DEFAULT_WS_CLOSE_GRACE_MS } = {}){
     const logger = log || console;
     return async function drain(){
         // Clear the entry point's own status/eviction intervals first: both reach
@@ -144,17 +148,46 @@ function createSyncDrain({ syncService, server, wss, timers, log } = {}){
         // Close subscriber sockets before the poll loops stop, so a replica client
         // sees a clean close and reconnects elsewhere rather than sitting on a
         // socket that has silently stopped receiving blocks.
+        // Each client gets a real close frame (1001 Going Away) so a subscriber can
+        // tell a planned shutdown from a crash (terminate() would surface as 1006).
+        // A peer that never completes the close handshake is terminated after a
+        // short grace so it cannot hold the http server open past the drain budget.
+        let graceTimer = null;
         if(wss && typeof wss.close === 'function'){
             try {
-                if(wss.clients && typeof wss.clients.forEach === 'function')
-                    wss.clients.forEach((client) => { try { client.terminate(); } catch(_){} });
+                const pending = [];
+                if(wss.clients && typeof wss.clients.forEach === 'function'){
+                    wss.clients.forEach((client) => {
+                        try {
+                            if(typeof client.close === 'function'){
+                                client.close(1001, 'server shutting down');
+                                pending.push(client);
+                            } else {
+                                client.terminate();
+                            }
+                        } catch(_){
+                            try { client.terminate(); } catch(__){}
+                        }
+                    });
+                }
+                if(pending.length){
+                    graceTimer = setTimeout(() => {
+                        for(const client of pending){
+                            try { client.terminate(); } catch(_){}
+                        }
+                    }, closeGraceMs);
+                }
                 wss.close();
             } catch(err){
                 logger.warn('Shutdown: closing the WebSocket server failed: ' + (err && err.message ? err.message : err));
             }
         }
 
-        await closeServer(server);
+        try {
+            await closeServer(server);
+        } finally {
+            if(graceTimer) clearTimeout(graceTimer);
+        }
 
         if(syncService && typeof syncService.stop === 'function') await syncService.stop();
     };
