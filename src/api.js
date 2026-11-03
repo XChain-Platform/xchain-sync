@@ -714,13 +714,16 @@ function createApp(syncService, cfg, app = express()){
     app.set('trust proxy', trustProxyHops(cfg['TRUST_PROXY']));
     app.use(helmet());
     app.use(cors({ origin: cfg['CORS_ORIGIN'], methods: ['GET', 'POST'] }));
-    app.use(express.json({ limit: '16kb' }));
-    app.use(createApiKeyMiddleware(cfg['SYNC_API_KEY']));
 
     const { backstopLimiter, fullSnapshotLimiter, incrSnapshotLimiter,
             transparencyLimiter, heartbeatLimiter } = createRateLimiters(cfg);
 
+    // The backstop runs ahead of the body parser and the API-key check so
+    // requests they reject (malformed or oversize bodies, wrong keys) still
+    // spend the caller's budget instead of being free to repeat.
     app.use(backstopLimiter);
+    app.use(express.json({ limit: '16kb' }));
+    app.use(createApiKeyMiddleware(cfg['SYNC_API_KEY']));
 
     // REST Routes (server mode only, but status works in client mode too)
     //
