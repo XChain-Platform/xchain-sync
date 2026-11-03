@@ -1323,6 +1323,28 @@ function createApp(syncService, cfg, app = express()){
         }
     });
 
+    // Last in the chain: without these, express answers malformed paths and
+    // bodies and unrouted methods with its HTML page (a stack trace when
+    // NODE_ENV is unset). Every failure keeps the JSON {error, code} contract.
+    app.use((req, res) => {
+        res.status(404).json({ error: 'Not found', code: 'NOT_FOUND' });
+    });
+
+    // eslint-disable-next-line no-unused-vars
+    app.use((err, req, res, next) => {
+        let status = Number(err && (err.status || err.statusCode));
+        if(!(status >= 400 && status < 500)){
+            console.error('[API error] unhandled:', err);
+            return res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
+        }
+        // Client faults carry no stack: log the type only.
+        console.error('[API error] rejected request:', status, err && err.type ? err.type : '');
+        if(res.headersSent) return res.end();
+        let code = status === 413 ? 'PAYLOAD_TOO_LARGE' : 'BAD_REQUEST';
+        let msg  = status === 413 ? 'Request body too large' : 'Malformed request';
+        res.status(status).json({ error: msg, code });
+    });
+
     return app;
 }
 
