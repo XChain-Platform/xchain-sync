@@ -18,6 +18,12 @@ const util = require('node:util');
 const { getLogger } = require('../../observability');
 const logger = getLogger();
 
+// Assign an own, enumerable property even for caller-supplied names such as
+// '__proto__', where plain assignment would re-parent the object instead.
+function setOwn(obj, key, value){
+    Object.defineProperty(obj, key, { value, writable: true, enumerable: true, configurable: true });
+}
+
 function buildInfraMessage(event, infraTables, subs){
     let infraMessage = null;
 
@@ -305,7 +311,7 @@ module.exports = {
                     ? Math.max(0, sourceHeight - entry.applied_height)
                     : null;
                 if(lagBlocks === null) unknownCount++;
-                validators[id] = {
+                let out = {
                     applied_height:     entry.applied_height,
                     applied_block_time: entry.applied_block_time,
                     last_seen:          new Date(entry.last_seen).toISOString(),
@@ -318,21 +324,22 @@ module.exports = {
                                           : (lagBlocks === null ? 'unknown' : 'known')
                 };
                 if(entry.status === 'stale' && entry.evicted_at != null)
-                    validators[id].evicted_at = new Date(entry.evicted_at).toISOString();
+                    out.evicted_at = new Date(entry.evicted_at).toISOString();
+                setOwn(validators, id, out);
             }
         }
 
         // Fill in roster members that have never reported for this leaf. A stale roster
         // member is already in the map above, so this only adds the never-seen ones.
         for(let id of expected){
-            if(validators[id]) continue;
-            validators[id] = {
+            if(Object.hasOwn(validators, id)) continue;
+            setOwn(validators, id, {
                 applied_height:     null,
                 applied_block_time: null,
                 last_seen:          null,
                 lag_blocks:         null,
                 status:             'absent'
-            };
+            });
         }
 
         return { validators, total, expected_total: expectedTotal, unknown_count: unknownCount };
