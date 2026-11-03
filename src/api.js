@@ -898,10 +898,13 @@ function createApp(syncService, cfg, app = express()){
         let dbType = validateDbType(req.params.dbType);
         if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'", code: 'BAD_REQUEST' });
         if(dbType !== 'indexer') return res.status(400).json({ error: 'Checkpoints exist only for indexer DBs', code: 'BAD_REQUEST' });
-        let from = parseInt(req.query.from, 10);
-        let to = parseInt(req.query.to, 10);
-        if(!Number.isFinite(from) || from < 0) return res.status(400).json({ error: 'Invalid from', code: 'BAD_REQUEST' });
-        if(!Number.isFinite(to) || to < from) return res.status(400).json({ error: 'Invalid to (must be >= from)', code: 'BAD_REQUEST' });
+        // Plain unsigned decimal integers only: parseInt would quietly truncate
+        // 1e12, 0x10 or 1.9 and serve a range the caller never asked for.
+        const strictBound = (v) => (typeof v === "string" && /^\d+$/.test(v)) ? Number(v) : NaN;
+        let from = strictBound(req.query.from);
+        let to = strictBound(req.query.to);
+        if(!Number.isSafeInteger(from)) return res.status(400).json({ error: 'Invalid from', code: 'BAD_REQUEST' });
+        if(!Number.isSafeInteger(to) || to < from) return res.status(400).json({ error: 'Invalid to (must be >= from)', code: 'BAD_REQUEST' });
         let { chain, network } = req.params;
         let db = syncService.getDatabase(chain, network, dbType);
         if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found', code: 'NOT_FOUND' });
