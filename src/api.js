@@ -1162,7 +1162,7 @@ function createApp(syncService, cfg, app = express()){
 
         if(typeof validator_id !== 'string' || !validator_id.trim() || validator_id.length > 256)
             return res.status(400).json({ error: 'validator_id must be a non-empty string (max 256 chars)', code: 'BAD_REQUEST' });
-        if(typeof applied_height !== 'number' || !Number.isInteger(applied_height) || applied_height < 0)
+        if(!Number.isSafeInteger(applied_height) || applied_height < 0)
             return res.status(400).json({ error: 'applied_height must be a non-negative integer', code: 'BAD_REQUEST' });
         if(applied_block_time !== undefined && applied_block_time !== null && typeof applied_block_time !== 'number')
             return res.status(400).json({ error: 'applied_block_time must be a number', code: 'BAD_REQUEST' });
@@ -1170,7 +1170,9 @@ function createApp(syncService, cfg, app = express()){
         let broadcaster = syncService.getBroadcaster();
         if(!broadcaster) return res.status(503).json({ error: 'Broadcaster not initialized', code: 'SERVICE_UNAVAILABLE' });
 
-        broadcaster.recordValidatorHeartbeat(chain, network, dbType, validator_id.trim(), applied_height, applied_block_time || null);
+        // Refused when the height is above the tip this server serves; the prior entry stays.
+        if(!broadcaster.recordValidatorHeartbeat(chain, network, dbType, validator_id.trim(), applied_height, applied_block_time || null))
+            return res.status(400).json({ error: 'applied_height is above the served tip', code: 'BAD_REQUEST' });
         res.json({ ok: true });
     });
 
