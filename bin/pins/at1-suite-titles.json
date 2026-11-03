@@ -4100,6 +4100,12 @@
       "Boundary: Transparency Log Pagination limit parameter limit=1: minimum valid",
       "Boundary: Transparency Log Pagination limit parameter limit=999: just below max"
     ],
+    "cfe39ea1c0e8b23b": [
+      "backstop limiter runs before the body parser and API-key check counts malformed JSON bodies and then refuses with 429",
+      "backstop limiter runs before the body parser and API-key check counts oversize bodies and then refuses with 429",
+      "backstop limiter runs before the body parser and API-key check counts wrong API keys and then refuses with 429",
+      "backstop limiter runs before the body parser and API-key check still serves a valid call under the limit"
+    ],
     "cfe77aacb98b3e42": [
       "Database.findEditedTokens runs the valid-issues tokens query with [from, to] and conn third",
       "collectTokenEditRows leaves acc.tokens undefined for an empty result",
@@ -4907,8 +4913,8 @@
   },
   "scripts": {
     "test": {
-      "fileCount": 409,
-      "titleCount": 3203,
+      "fileCount": 411,
+      "titleCount": 3212,
       "files": {
         "test/unit/anchor_fold_state_hash_twin.test.js": "4fbe28f32fa63c5b",
         "test/unit/anchor_recovery_field_twin.test.js": "6c93dad4cd12104b",
@@ -5214,6 +5220,7 @@
         "test/unit/schema_version.test.js": "6324961ce2aed7c0",
         "test/unit/schema_version_gate.test.js": "884c398f329d8e1e",
         "test/unit/security/configuration/dependency_advisories.test.js": "5cc2b8143bdd5808",
+        "test/unit/server/api_limiter_before_body_and_key.test.js": "cfe39ea1c0e8b23b",
         "test/unit/server/poller_reorg_marker.test.js": "c810e94285998642",
         "test/unit/server/retroactive_rewind_fields.test.js": "1cfd474206588129",
         "test/unit/server/reward_identity.test.js": "76012416eb4db01f",
