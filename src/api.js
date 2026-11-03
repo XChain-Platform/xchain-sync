@@ -725,6 +725,11 @@ function createApp(syncService, cfg, app = express()){
     app.use(express.json({ limit: '16kb' }));
     app.use(createApiKeyMiddleware(cfg['SYNC_API_KEY']));
 
+    // WebSocket upgrades arrive as 'upgrade' events and never enter this
+    // middleware chain, so the upgrade handler reads the same limiter instance
+    // and key from here: one per-IP budget across REST and WS.
+    upgradeGuards.set(app, { backstopLimiter, apiKey: cfg['SYNC_API_KEY'] });
+
     // REST Routes (server mode only, but status works in client mode too)
     //
     // All routes use the /:dbType/:chain/:network namespace.
@@ -1321,10 +1326,63 @@ function createApp(syncService, cfg, app = express()){
     return app;
 }
 
+// Per-app guards for the WebSocket upgrade path, filled in by createApp.
+const upgradeGuards = new WeakMap();
+
+// Runs a raw upgrade request through the app's backstop limiter. The request
+// is given express's request prototype first (as express does for every
+// 'request' event), so req.ip resolves through the same trust-proxy setting
+// and lands in the same bucket as the caller's REST traffic. The limiter
+// either calls next() (within budget) or answers through its 429 handler
+// without calling next, so the shim settles on whichever comes first.
+// Resolves to 'pass', or 'refused' after answering 429 and destroying the socket.
+function spendUpgradeBackstop(app, backstopLimiter, request, socket){
+    Object.setPrototypeOf(request, app.request);
+    request.app = app;
+
+    return new Promise((resolve) => {
+        let settled = false;
+        let headers = {};
+        let refuse = (status, reason, body) => {
+            if(settled) return;
+            settled = true;
+            if(!socket.destroyed){
+                let text = body === undefined ? '' : JSON.stringify(body);
+                let lines = ['HTTP/1.1 ' + status + ' ' + reason];
+                for(let name of Object.keys(headers)) lines.push(name + ': ' + headers[name]);
+                lines.push('Content-Type: application/json', 'Content-Length: ' + Buffer.byteLength(text), 'Connection: close');
+                socket.write(lines.join('\r\n') + '\r\n\r\n' + text);
+                socket.destroy();
+            }
+            resolve('refused');
+        };
+        let res = {
+            statusCode:    200,
+            headersSent:   false,
+            writableEnded: false,
+            setHeader(name, value){ headers[name] = value; },
+            getHeader(name){ return headers[name]; },
+            status(code){ this.statusCode = code; return this; },
+            send(body){ this.writableEnded = true; refuse(this.statusCode, 'Too Many Requests', body); },
+            json(body){ this.send(body); }
+        };
+        backstopLimiter(request, res, (err) => {
+            if(settled) return;
+            if(err){
+                // Fail closed: a limiter or store error must not wave the upgrade through.
+                getLogger().error('[API] WebSocket upgrade backstop error: ' + (err && err.message));
+                refuse(503, 'Service Unavailable', undefined);
+                return;
+            }
+            settled = true;
+            resolve('pass');
+        });
+    });
+}
+
 // API key check for WebSocket upgrades, enforced only when a key is configured
 // because managed validators replicate keyless. Returns false after rejecting.
-function authorizeUpgrade(request, socket){
-    let apiKey = cfg['SYNC_API_KEY'];
+function authorizeUpgrade(request, socket, apiKey){
     if(!apiKey) return true;
     let authHeader = request.headers['authorization'];
     if(!authHeader || !safeEqual(authHeader, 'Bearer ' + apiKey)){
@@ -1357,9 +1415,26 @@ function parseSubscribePath(url){
 
 // A manual handleUpgrade does not emit 'connection', so the emit below runs the
 // keepalive wiring that the ping interval depends on.
-function createUpgradeHandler(syncService, wss){
-    return function handleWebSocketUpgrade(request, socket, head){
-        if(!authorizeUpgrade(request, socket)) return;
+// Every upgrade spends the app's backstop budget before anything else runs,
+// mirroring the REST order: wrong keys, malformed paths and valid subscribe
+// churn all count, and an IP already refused on REST is refused here too.
+function createUpgradeHandler(syncService, wss, app){
+    let guard = upgradeGuards.get(app);
+    if(!guard) throw new Error('createUpgradeHandler needs an app built by createApp');
+    let { backstopLimiter, apiKey } = guard;
+
+    return async function handleWebSocketUpgrade(request, socket, head){
+        // Node removes its own socket error listener before 'upgrade'; keep a
+        // reset during the limiter await from becoming an uncaught error. ws
+        // installs its own listener in handleUpgrade.
+        let onEarlyError = () => socket.destroy();
+        socket.on('error', onEarlyError);
+        let verdict = await spendUpgradeBackstop(app, backstopLimiter, request, socket);
+        socket.removeListener('error', onEarlyError);
+        if(verdict !== 'pass') return;
+        if(socket.destroyed) return;
+
+        if(!authorizeUpgrade(request, socket, apiKey)) return;
 
         let sub = parseSubscribePath(request.url);
         if(!sub){
@@ -1472,7 +1547,7 @@ async function startApi(){
 
     const wss = new WebSocket.Server({ noServer: true });
 
-    server.on('upgrade', createUpgradeHandler(syncService, wss));
+    server.on('upgrade', createUpgradeHandler(syncService, wss, app));
 
     startPingInterval(wss);
 
@@ -1501,4 +1576,4 @@ if(require.main === module){
 }
 
 module.exports = { trustProxyHops, snapshotKey, createRateLimiters, applyReplicaFreshness, applyProtocolHaltFreshness,
-                   buildHealthEntry, healthEntryDegraded, buildStatusRow, createApp, startApi };
+                   buildHealthEntry, healthEntryDegraded, buildStatusRow, createApp, createUpgradeHandler, startApi };
