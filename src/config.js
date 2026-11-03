@@ -49,6 +49,23 @@ function parseIntAtLeast(val, min, defaultVal){
     return parsed < min ? defaultVal : parsed;
 }
 
+// TRUST_PROXY is a switch: on means express believes exactly one forwarded hop
+// (api.js trustProxyHops). 'true' and '1' turn it on; unset, empty, 'false' and
+// '0' leave it off. Any other value also leaves it off, but says so loudly: a
+// typo here silently keys every caller behind the proxy on the proxy's own
+// address, so one client's rejected requests drain the budget all of them share.
+const TRUST_PROXY_ON = new Set(['true', '1']);
+const TRUST_PROXY_OFF = new Set(['', 'false', '0']);
+function parseTrustProxy(raw){
+    const value = String(raw === undefined || raw === null ? '' : raw).trim().toLowerCase();
+    if(TRUST_PROXY_ON.has(value)) return true;
+    if(!TRUST_PROXY_OFF.has(value)){
+        logger.warn('WARNING: TRUST_PROXY=' + JSON.stringify(String(raw)) + ' is not recognized (use true or false);' +
+            ' X-Forwarded-For is ignored and every caller behind a reverse proxy shares one rate-limit bucket.');
+    }
+    return false;
+}
+
 // A comma-separated list as trimmed, de-duplicated, non-empty entries; unset -> [].
 function parseCsvSet(val){
     return [...new Set((val || '').split(',').map(s => s.trim()).filter(s => s.length > 0))];
@@ -400,7 +417,7 @@ function addWebSocketAndAccessConfig(config){
     config['HUB_PROTOCOL'] = (process.env.HUB_PROTOCOL || '').toLowerCase() === 'https' ? 'https' : 'http';
 
     // Security: Trust x-forwarded-for header (only enable behind a reverse proxy)
-    config['TRUST_PROXY'] = (process.env.TRUST_PROXY || '').toLowerCase() === 'true';
+    config['TRUST_PROXY'] = parseTrustProxy(process.env.TRUST_PROXY);
 
     // Security: Maximum rollback depth from a single source (blocks)
     config['MAX_ROLLBACK_DEPTH'] = parseIntMin1(process.env.MAX_ROLLBACK_DEPTH, 100);
