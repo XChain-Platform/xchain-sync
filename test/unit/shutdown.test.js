@@ -44,6 +44,25 @@ function makeDb(order, name){
     return { closed: false, async close(){ this.closed = true; order.push('close:' + name); } };
 }
 
+// A real http server whose handler sends headers and one chunk and never ends the
+// response, standing in for a snapshot stream longer than the drain budget.
+async function startHungServer(){
+    const http = require('http');
+    const server = http.createServer((req, res) => { res.writeHead(200); res.write('x'); });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const state = { server, client: null };
+    await new Promise((resolve) => {
+        const req = http.get({ host: '127.0.0.1', port: server.address().port, path: '/' }, (res) => {
+            state.client = res.socket;
+            res.on('error', () => {});
+            res.on('data', () => {});
+            resolve();
+        });
+        req.on('error', () => {});
+    });
+    return state;
+}
+
 describe('graceful shutdown', function(){
 
     describe('createShutdown', function(){
@@ -149,6 +168,35 @@ describe('graceful shutdown', function(){
         it('resolves on a missing server rather than hanging the drain', async function(){
             await closeServer(null);
             await closeServer({});
+        });
+
+        it('destroys a response still streaming after the grace so close() completes', async function(){
+            const { server, client } = await startHungServer();
+            const t0 = Date.now();
+            await Promise.race([
+                closeServer(server, { graceMs: 50 }),
+                new Promise((_, rej) => setTimeout(() => rej(new Error('closeServer never resolved')), 2000))
+            ]);
+            assert.ok(Date.now() - t0 < 1500);
+            await waitFor(() => client.destroyed || client.ended, 1000);
+        });
+    });
+
+    describe('createSyncDrain with an in-flight response', function(){
+        it('still stops the service and exits 0 before the hard-exit timer', async function(){
+            const { server } = await startHungServer();
+            let stopped = false;
+            const svc = { async stop(){ stopped = true; } };
+            const errors = [];
+            const codes = [];
+            const log = { log(){}, warn(){}, error(m){ errors.push(String(m)); } };
+            const drain = createSyncDrain({ syncService: svc, server, log, serverGraceMs: 50 });
+            const shutdown = createShutdown({ drain, timeoutMs: 1500, exit: (c) => codes.push(c), log });
+            shutdown('SIGTERM');
+            await waitFor(() => codes.length === 1, 3000);
+            assert.strictEqual(stopped, true, 'SyncService.stop must run');
+            assert.deepStrictEqual(codes, [0]);
+            assert.ok(!errors.some((m) => m.includes('exiting hard')));
         });
     });
 });

@@ -42,6 +42,10 @@ const DEFAULT_SHUTDOWN_TIMEOUT_MS = 8000;
 // destroyed; well under the drain budget above.
 const DEFAULT_WS_CLOSE_GRACE_MS = 1000;
 
+// How long in-flight HTTP responses get to finish before their sockets are
+// destroyed; leaves most of the 8 s budget for stopping the pollers and pools.
+const DEFAULT_SERVER_GRACE_MS = 3000;
+
 function resolveTimeoutMs(timeoutMs, env){
     if(Number.isFinite(timeoutMs) && timeoutMs > 0) return timeoutMs;
     const raw = parseInt((env || envConfig.envSource()).SHUTDOWN_TIMEOUT_MS, 10);
@@ -52,14 +56,31 @@ function resolveTimeoutMs(timeoutMs, env){
 // sockets would otherwise hold close() open indefinitely while no request is in
 // flight, so they are dropped explicitly; requests already being served are left
 // to finish, which is the whole point of draining rather than exiting.
-function closeServer(server){
+//
+// In-flight requests get `graceMs` to finish. A long snapshot stream can outlast
+// the whole drain budget, and an unbounded wait here would starve the steps after
+// it (poller stop, pool teardown) until the hard exit cut everything off. When
+// the grace runs out the remaining sockets are destroyed so close() completes and
+// the drain moves on.
+function closeServer(server, { graceMs = DEFAULT_SERVER_GRACE_MS } = {}){
     return new Promise((resolve) => {
         if(!server || typeof server.close !== 'function') return resolve();
         let settled = false;
-        const done = () => { if(!settled){ settled = true; resolve(); } };
+        let graceTimer = null;
+        const done = () => {
+            if(settled) return;
+            settled = true;
+            if(graceTimer) clearTimeout(graceTimer);
+            resolve();
+        };
         try {
             server.close(done);
             if(typeof server.closeIdleConnections === 'function') server.closeIdleConnections();
+            if(!settled && typeof server.closeAllConnections === 'function'){
+                graceTimer = setTimeout(() => {
+                    try { server.closeAllConnections(); } catch(_){ done(); }
+                }, graceMs);
+            }
         } catch(_){
             done();
         }
@@ -136,7 +157,7 @@ function createShutdown({ drain, timeoutMs, exit, log } = {}){
  * @param {number[]} [opts.timers]     interval handles owned by the entry point
  * @param {object}   [opts.log]        console-shaped logger
  */
-function createSyncDrain({ syncService, server, wss, timers, log, closeGraceMs = DEFAULT_WS_CLOSE_GRACE_MS } = {}){
+function createSyncDrain({ syncService, server, wss, timers, log, closeGraceMs = DEFAULT_WS_CLOSE_GRACE_MS, serverGraceMs = DEFAULT_SERVER_GRACE_MS } = {}){
     const logger = log || console;
     return async function drain(){
         // Clear the entry point's own status/eviction intervals first: both reach
@@ -184,7 +205,7 @@ function createSyncDrain({ syncService, server, wss, timers, log, closeGraceMs =
         }
 
         try {
-            await closeServer(server);
+            await closeServer(server, { graceMs: serverGraceMs });
         } finally {
             if(graceTimer) clearTimeout(graceTimer);
         }
