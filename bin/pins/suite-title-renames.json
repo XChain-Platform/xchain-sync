@@ -1,6 +1,7 @@
 {
   "Database.beginTransaction() if transactionConnection already exists: releases it first, then opens new one": "Database.beginTransaction() if transactionConnection already exists: refuses and leaves the open transaction untouched",
   "contract_stakes reset joins contract_unstakes on pubkey+contract+tick": "contract_stakes reset joins contract_unstakes on source_id",
+  "replicatedTables getReplicatedTables (decoder) pins the decoder replicated set by value (8 of 10 decoder tables)": "replicatedTables getReplicatedTables (decoder) pins the decoder replicated set by value (8 of 11 decoder tables)",
   "contractStateSubtree.js": "contract_state_subtree.js",
   "escrowLeafSubtree.js": "escrow_leaf_subtree.js",
   "tableLifecycle.js": "table_lifecycle.js",

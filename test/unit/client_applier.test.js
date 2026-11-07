@@ -71,7 +71,8 @@ function registerApplyBlockCases1(){
     });
     it('skips existing block (duplicate detection)', async function(){
         db.getBlockHashRow.resolves({ block_index: 1, ledger_hash: 'abc' });
-        await applier.applyBlock({ schema_version: liveVersion(), block_index: 1, data: { blocks: [{ block_index: 1 }] } });
+        let committed = await applier.applyBlock({ schema_version: liveVersion(), block_index: 1, data: { blocks: [{ block_index: 1 }] } });
+        assert.strictEqual(committed, false);
         assert.strictEqual(db.beginTransaction.called, false);
     });
     // A fail-soft read answers "block absent" for a DB blip too, and that answer
@@ -99,7 +100,8 @@ function registerApplyBlockCases1(){
                 transactions: [{ tx_index: 1, block_index: 5 }]
             }
         };
-        await applier.applyBlock(payload);
+        let committed = await applier.applyBlock(payload);
+        assert.strictEqual(committed, true);
         assert.strictEqual(db.beginTransaction.calledOnce, true);
         assert.strictEqual(db.commitTransaction.calledOnce, true);
         assert.ok(db.doQuery.called);

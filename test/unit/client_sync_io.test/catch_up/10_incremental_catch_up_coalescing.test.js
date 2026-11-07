@@ -103,9 +103,10 @@ describe('ClientSync: incrementalCatchUp coalescing', function(){
         sinon.stub(sync, 'runIncrementalCatchUp').callsFake(async function(){
             runCount++;
             if(runCount === 1){
-                // Simulate progress + pending request arriving during first run
-                sync.lastAppliedBlock = (sync.lastAppliedBlock || 0) + 1;
+                // Count an in-lock DB tip change as progress even before the live
+                // path advances the in-memory cursor.
                 sync._catchUpPending = true;
+                sync._catchUpTipMoved = true;
             }
             // Second run: no more pending
         });

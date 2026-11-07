@@ -62,6 +62,37 @@ function makeSync(configOverrides, dbOverrides){
     let sync = new ClientSync('bitcoin', 'mainnet', withDbMixins(db), applier, rb, hv, config, util);
     return { sync, db, applier, rb, hv, util, config };
 }
+
+async function assertMovedTipRetries(getStub){
+    let state = makeSync();
+    let { sync, db, applier } = state;
+    sync.running = true;
+    db.getLastBlock.onCall(0).resolves(10);
+    db.getLastBlock.onCall(1).resolves(11);
+    db.getLastBlock.onCall(2).resolves(11);
+    let noRows = new Error('no newer rows');
+    noRows.response = { status: 404 };
+    getStub.resetHistory();
+    getStub.resetBehavior();
+    getStub.onFirstCall().resolves({ data: Buffer.from(JSON.stringify({ block_height: 15, tables: {} })) });
+    getStub.onSecondCall().rejects(noRows);
+
+    await sync.incrementalCatchUp(11);
+
+    assert.strictEqual(applier.applyIncrementalSnapshot.called, false);
+    assert.strictEqual(sync.lastAppliedBlock, null);
+    assert.strictEqual(getStub.callCount, 2, 'a moved tip must trigger one fresh pass');
+    assert.ok(getStub.firstCall.args[0].indexOf('/since/11') !== -1);
+    assert.ok(getStub.secondCall.args[0].indexOf('/since/12') !== -1);
+
+    state = makeSync({}, { dbType: 'decoder' });
+    sinon.stub(state.sync, 'rewindIfCatchUpForked').resolves(false);
+    state.db.getLastBlock.resolves(11);
+    let consumed = await state.sync.applyIncrementalCatchUpSnapshot(
+        'http://src1:3006', { block_height: 15, tables: {} }, 11, 10, false);
+    assert.strictEqual(consumed, true);
+    assert.strictEqual(state.applier.applyIncrementalSnapshot.called, false);
+}
 describe('ClientSync: runIncrementalCatchUp', function(){
     let sync, db, applier;
 
@@ -136,13 +167,15 @@ describe('ClientSync: runIncrementalCatchUp', function(){
         ({ sync, db, applier } = makeSync());
         db.getLastBlock.resolves(10);
         let payload = Buffer.from(JSON.stringify({ block_height: 15, tables: {} }));
-        sinon.stub(axios, 'get').resolves({ data: payload });
+        let getStub = sinon.stub(axios, 'get').resolves({ data: payload });
 
         await sync.runIncrementalCatchUp();
 
         let url = axios.get.firstCall.args[0];
         assert.ok(url.indexOf('/since/11') !== -1, 'since=11 when dbTip=10');
         assert.strictEqual(sync.lastAppliedBlock, 15);
+        assert.strictEqual(db.getLastBlock.callCount, 2, 'the tip is re-read under the apply lock');
+        await assertMovedTipRetries(getStub);
     });
 
     it('logs error when axios.get rejects', async function(){

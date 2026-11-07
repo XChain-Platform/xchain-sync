@@ -114,15 +114,15 @@ describe('replicatedTables', function(){
                       'expected decoder replicated set to exclude mempool_transactions');
         });
 
-        it('pins the decoder replicated set by value (8 of 10 decoder tables)', function(){
+        it('pins the decoder replicated set by value (8 of 11 decoder tables)', function(){
             // F-5-style by-value pin (see rollback_coverage.test.js): the decoder
             // has no lifecycle registry to cross-check against, so an explicit
             // literal is the only guard that makes BOTH directions - a table added
             // to TOPOLOGY.decoder and a table dropped from it - deliberate,
-            // visible changes. The decoder schema declares 10 tables; two are
-            // excluded by design (DECODER_EXCLUDED in
-            // decoder_table_classification.test.js): mempool_transactions and the
-            // decoder-local reorg journal dispenser_extension_undo.
+            // visible changes. The decoder schema declares 11 tables; three are
+            // excluded by design (DECODER_EXCLUDED in decoder_table_classification.test.js):
+            // mempool_transactions, the decoder-local reorg journal dispenser_extension_undo,
+            // and the decoder's per-block parse cursor block_tx_index_end.
             let expected = ['blocks', 'dispensers', 'events', 'index_addresses',
                             'index_transactions', 'pubkeys', 'transaction_outputs',
                             'transactions'];

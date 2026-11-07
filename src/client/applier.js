@@ -193,6 +193,7 @@ class ClientApplier {
      *
      * @param {object} payload the server's block event: block_index, data (a
      *                         { table: [rows] } map) and any updated_rows
+     * @returns {boolean|undefined} true when committed, false when already present
      */
     async applyBlock(payload){
         // Clear computed roots before every attempt so early returns cannot expose
@@ -205,10 +206,11 @@ class ClientApplier {
         let existing = await this.db.getBlockHashRow(payload.block_index, null, { rethrow: true });
         if(existing){
             logger.info('Block ' + payload.block_index + ' already exists, skipping');
-            return;
+            return false;
         }
 
         await this.applyBlockTransaction(payload);
+        return true;
     }
 
     // Fail closed like the snapshot and page gates: every current server stamps the

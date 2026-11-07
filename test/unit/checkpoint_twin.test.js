@@ -25,6 +25,8 @@ const path   = require('path');
 const checkpoint = require('../../src/checkpoint');
 const swq    = require('../../src/consensus/stake_weighted_quorum');
 const { siblingCheckout, skipOrFail } = require('../helpers/sibling_checkout.js');
+const CHECKPOINT_VECTORS = require('../fixtures/checkpoint_canonical_vectors.json');
+const { assertMissingCommitments } = require('./checkpoint_twin.test/helpers/checkpoint_assertions.js');
 
 // Sibling resolution goes through siblingCheckout: skip when the SDK checkout is
 // absent or links into a live main checkout, and throw where
@@ -103,6 +105,10 @@ describe('vendored checkpoint verifier (twin conformance) @regression', function
             'XCHECKPOINT|BTC|mainnet|900123|' + 'ab'.repeat(32) + '|' + 'cd'.repeat(32) +
             '|' + 'ef'.repeat(32) + '|' + '01'.repeat(32) + '|417|900120',
             'sync canonicalCheckpoint drifted from the canonical XCHECKPOINT signing string; re-align the vendored twin to the SDK copy');
+        for (const vector of CHECKPOINT_VECTORS.cases) {
+            if (vector.throws) assert.throws(() => checkpoint.canonicalCheckpoint(vector.checkpoint), undefined, vector.name);
+            else assert.strictEqual(checkpoint.canonicalCheckpoint(vector.checkpoint), vector.expected, vector.name);
+        }
     });
 
     // Byte-parity guard for the ACTIVE (post-CHECKPOINT_COMMITMENT) canonical: the
@@ -243,11 +249,7 @@ describe('vendored checkpoint verifier (twin conformance) @regression', function
     it('rejects a post-flag-day empty-string root even when the signature covers it', function(){
         const s = makeSigner();
         const validators = [{ pubkey: s.pubkeyHex, source: s.pubkeyHex, weight: '100' }];
-        for(const field of ['state_root', 'block_merkle_root']){
-            const cp = signedCheckpoint(s, { [field]: '' });
-            assert.strictEqual(checkpoint.commitmentMissing(cp), true, 'empty ' + field + ' is missing');
-            assert.strictEqual(checkpoint.verifyCheckpoint(cp, validators).valid, false);
-        }
+        assertMissingCommitments({ assert, checkpoint, signedCheckpoint, signer: s, validators });
     });
 
     it('an empty validator set can never verify', function(){

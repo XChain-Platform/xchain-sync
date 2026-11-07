@@ -1,5 +1,9 @@
 {
   "titleSets": {
+    "0c164f88bef4b5fc": [
+      "API numeric parameters are parsed strictly passes exact integer values and keeps absent query defaults",
+      "API numeric parameters are parsed strictly refuses malformed unsigned integers before downstream work"
+    ],
     "0040f816c21c3133": [
       "ClientSync: a live recompute error is recorded durably @regression a clean recompute records nothing",
       "ClientSync: a live recompute error is recorded durably @regression a recompute error still holds the tip when the durable record cannot be written",
@@ -4913,8 +4917,8 @@
   },
   "scripts": {
     "test": {
-      "fileCount": 411,
-      "titleCount": 3212,
+      "fileCount": 412,
+      "titleCount": 3214,
       "files": {
         "test/unit/anchor_fold_state_hash_twin.test.js": "4fbe28f32fa63c5b",
         "test/unit/anchor_recovery_field_twin.test.js": "6c93dad4cd12104b",
@@ -5221,6 +5225,7 @@
         "test/unit/schema_version_gate.test.js": "884c398f329d8e1e",
         "test/unit/security/configuration/dependency_advisories.test.js": "5cc2b8143bdd5808",
         "test/unit/server/api_limiter_before_body_and_key.test.js": "cfe39ea1c0e8b23b",
+        "test/unit/server/api_numeric_params_strict.test.js": "0c164f88bef4b5fc",
         "test/unit/server/poller_reorg_marker.test.js": "c810e94285998642",
         "test/unit/server/retroactive_rewind_fields.test.js": "1cfd474206588129",
         "test/unit/server/reward_identity.test.js": "76012416eb4db01f",

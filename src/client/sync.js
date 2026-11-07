@@ -421,6 +421,9 @@ class ClientSync {
         this.lastAppliedBlock     = null;
         this.lastHashes           = null;
         this.lastKnownServerBlock = null;
+        this._catchUpInFlight     = null;
+        this._catchUpPending      = false;
+        this._catchUpTipMoved     = false;
 
         // Wall-clock of the last WebSocket event received from ANY source. Drives the
         // source_height_stale signal on /status: lastKnownServerBlock only advances on
@@ -1962,18 +1965,9 @@ class ClientSync {
 
     // Incremental catch-up.
     //
-    // Range-idempotent and serialized. Callers pass an advisory sinceBlock, but it
-    // is intentionally ignored: catch-up always resumes from the replica's actual
-    // committed tip (re-read from the DB), never from the in-memory cursor, which
-    // can lag a concurrently-applied block. A single in-flight guard coalesces
-    // overlapping calls: two status/gap triggers firing under fault would
-    // otherwise fetch overlapping ranges and re-insert already-applied rows,
-    // crashing on keyed tables (blocks.id, tx_index) or silently duplicating
-    // keyless ones (credits/debits). Together these guarantee each applied range
-    // begins strictly above committed data, so the non-IGNORE INSERTs never
-    // collide. (applyIncrementalSnapshot is itself atomic, one transaction, so a
-    // failed catch-up leaves the committed tip unchanged and the next attempt
-    // re-reads the same resume point.)
+    // Serialize catch-ups against each other and resume from the committed DB tip.
+    // A concurrent live apply can still advance that tip during the download, so
+    // applyIncrementalCatchUpSnapshot re-checks it under the shared apply lock.
     async incrementalCatchUp(sinceBlock){
         if(this.incrementalCatchUpBlocked(sinceBlock)) return;
         // Serialize catch-ups so two never apply overlapping ranges. A request that
@@ -1990,6 +1984,7 @@ class ClientSync {
             let keepGoing = true;
             while(keepGoing){
                 this._catchUpPending = false;
+                this._catchUpTipMoved = false;
                 if(this.incrementalCatchUpBlocked(sinceBlock)) break;
                 let before = this.lastAppliedBlock;
                 await this.runIncrementalCatchUp();
@@ -2003,7 +1998,8 @@ class ClientSync {
                 // fresh catch-up once the source has actually advanced. (`this.running`
                 // gates only the re-run, not the initial pass; callers invoke catch-up
                 // directly before start() sets running.)
-                keepGoing = this._catchUpPending && (this.lastAppliedBlock !== before) && this.running;
+                keepGoing = this._catchUpPending &&
+                    (this.lastAppliedBlock !== before || this._catchUpTipMoved) && this.running;
             }
         })().finally(() => { this._catchUpInFlight = null; });
         return this._catchUpInFlight;
@@ -2074,10 +2070,23 @@ class ClientSync {
         // therefore cannot arrive through the live block event stream.
         if(await this.rewindIfCatchUpForked(snapshotData, sinceBlock, dbTip, skipLookups ? source : null)) return true;
 
-        // Apply the entire incremental snapshot under the same lock as live events.
-        // The lock prevents an event from interleaving writes with this range and
-        // exposing a partially advanced replica.
-        await this.withApplyLock(() => this.applier.applyIncrementalSnapshot(snapshotData));
+        // Confirm the downloaded range still starts above committed data while no
+        // live writer can advance the tip, then apply it under the same lock.
+        let tipMoved = await this.withApplyLock(async () => {
+            let currentTip = await this.db.getLastBlock(null, { rethrow: true });
+            if(currentTip === dbTip){
+                await this.applier.applyIncrementalSnapshot(snapshotData);
+                return false;
+            }
+            getLogger().info('Skipping incremental catch-up from block ' + sinceBlock +
+                ': committed tip moved from ' + dbTip + ' to ' + currentTip + ' during download');
+            return true;
+        });
+        if(tipMoved){
+            this._catchUpPending = true;
+            this._catchUpTipMoved = true;
+            return true;
+        }
 
         // Clear duplicate-key attribution after a successful apply. The in-memory cursor
         // advances below, after the lookup re-page, and only when the source supplies a
@@ -4399,6 +4408,12 @@ class ClientSync {
     }
 
     finishAppliedBlock(event){
+        // Preserve the cursor/hash pair when delayed work reaches an older block.
+        if(this.lastAppliedBlock !== null && event.block_index < this.lastAppliedBlock){
+            getLogger().error('Refusing to move applied tip backwards from ' +
+                this.lastAppliedBlock + ' to ' + event.block_index);
+            return;
+        }
         // Advance the verified tip and publish its hashes to local status consumers.
         this._unverifiedRoots     = null;
         this.lastAppliedBlock     = event.block_index;
@@ -4498,7 +4513,17 @@ class ClientSync {
         if(await this.liveBlockBlockedByUnverifiedTail(event)) return;
         let generation = this.rowGeneration();
         try {
-            await this.withApplyLock(() => this.applier.applyBlock(event));
+            let stale = await this.withApplyLock(async () => {
+                let committed = await this.applier.applyBlock(event);
+                if(committed !== false) return false;
+                let dbTip = await this.db.getLastBlock(null, { rethrow: true });
+                return dbTip !== null && Number(dbTip) > Number(event.block_index);
+            });
+            if(stale){
+                getLogger().info('Skipping stale live block ' + event.block_index +
+                    ': a concurrent apply committed a newer stored tip');
+                return;
+            }
             let computedRoots = this.carryUnverifiedRoots(event);
             if(this.dbType === 'indexer' && this.config['VERIFY_RECOMPUTE']){
                 let mismatches = await this.verifyRecompute(event, null, { recordUnverified: true, holdTip: true });

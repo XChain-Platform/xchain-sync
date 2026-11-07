@@ -704,6 +704,14 @@ async function buildStatusRow(syncService, db, dbType, chain, network){
 // running service and the e2e harness mount the same middleware order, limiters
 // and routes. Listening, the WebSocket upgrade path and process lifecycle stay in
 // startApi.
+function parseStrictUint(value, maxDigits = null){
+    if(value === undefined) return null;
+    if(typeof value !== 'string' || !/^\d+$/.test(value)) return NaN;
+    if(maxDigits !== null && value.length > maxDigits) return NaN;
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) ? parsed : NaN;
+}
+
 function createApp(syncService, cfg, app = express()){
 
     // Must precede every limiter: they read req.ip, which express only derives
@@ -900,9 +908,8 @@ function createApp(syncService, cfg, app = express()){
         if(dbType !== 'indexer') return res.status(400).json({ error: 'Checkpoints exist only for indexer DBs', code: 'BAD_REQUEST' });
         // Plain unsigned decimal integers only: parseInt would quietly truncate
         // 1e12, 0x10 or 1.9 and serve a range the caller never asked for.
-        const strictBound = (v) => (typeof v === "string" && /^\d+$/.test(v)) ? Number(v) : NaN;
-        let from = strictBound(req.query.from);
-        let to = strictBound(req.query.to);
+        const from = parseStrictUint(req.query.from);
+        const to = parseStrictUint(req.query.to);
         if(!Number.isSafeInteger(from)) return res.status(400).json({ error: 'Invalid from', code: 'BAD_REQUEST' });
         if(!Number.isSafeInteger(to) || to < from) return res.status(400).json({ error: 'Invalid to (must be >= from)', code: 'BAD_REQUEST' });
         let { chain, network } = req.params;
@@ -921,8 +928,9 @@ function createApp(syncService, cfg, app = express()){
         let dbType = validateDbType(req.params.dbType);
         if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'", code: 'BAD_REQUEST' });
         if(dbType !== 'indexer') return res.status(400).json({ error: 'Checkpoints exist only for indexer DBs', code: 'BAD_REQUEST' });
-        let h = parseInt(req.params.height, 10);
-        if(!Number.isFinite(h) || h < 0) return res.status(400).json({ error: 'Invalid height', code: 'BAD_REQUEST' });
+        // Accept only a complete unsigned decimal height.
+        const h = parseStrictUint(req.params.height);
+        if(!Number.isSafeInteger(h)) return res.status(400).json({ error: 'Invalid height', code: 'BAD_REQUEST' });
         let { chain, network } = req.params;
         let db = syncService.getDatabase(chain, network, dbType);
         if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found', code: 'NOT_FOUND' });
@@ -1042,8 +1050,9 @@ function createApp(syncService, cfg, app = express()){
         if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'", code: 'BAD_REQUEST' });
 
         let { chain, network, blockHeight } = req.params;
-        let sinceBlock = parseInt(blockHeight);
-        if(isNaN(sinceBlock) || sinceBlock < 0)
+        // Accept only a complete unsigned decimal snapshot height.
+        const sinceBlock = parseStrictUint(blockHeight);
+        if(!Number.isSafeInteger(sinceBlock))
             return res.status(400).json({ error: 'Invalid blockHeight', code: 'BAD_REQUEST' });
 
         let db = syncService.getDatabase(chain, network, dbType);
@@ -1085,15 +1094,13 @@ function createApp(syncService, cfg, app = express()){
         let { chain, network, table } = req.params;
         // Paging params are plain decimal integers or absent; anything else is a 400
         // before any SQL runs (parseInt would prefix-parse '12abc' and '1e3').
-        const pagingInt = (v) => v === undefined ? null :
-            (typeof v === 'string' && /^[0-9]{1,15}$/.test(v) ? Number(v) : NaN);
-        let afterId = pagingInt(req.query.after_id);
+        let afterId = parseStrictUint(req.query.after_id, 15);
         if(Number.isNaN(afterId)) return res.status(400).json({ error: 'Invalid after_id', code: 'BAD_REQUEST' });
         if(afterId === null) afterId = 0;
-        let limit = pagingInt(req.query.limit);
+        let limit = parseStrictUint(req.query.limit, 15);
         if(Number.isNaN(limit)) return res.status(400).json({ error: 'Invalid limit', code: 'BAD_REQUEST' });
         if(limit === null) limit = undefined; // builder applies its default
-        if(req.query.max_block !== undefined && Number.isNaN(pagingInt(req.query.max_block)))
+        if(req.query.max_block !== undefined && Number.isNaN(parseStrictUint(req.query.max_block, 15)))
             return res.status(400).json({ error: 'Invalid max_block', code: 'BAD_REQUEST' });
 
         let db = syncService.getDatabase(chain, network, dbType);
@@ -1130,10 +1137,11 @@ function createApp(syncService, cfg, app = express()){
         if(dbType !== 'decoder') return res.status(400).json({ error: 'dispensers reconcile is decoder-only', code: 'BAD_REQUEST' });
 
         let { chain, network } = req.params;
-        let afterTx   = (req.query.after_tx   !== undefined) ? parseInt(req.query.after_tx)   : NaN;
-        let afterAddr = (req.query.after_addr !== undefined) ? parseInt(req.query.after_addr) : NaN;
-        if((req.query.after_tx   !== undefined && (isNaN(afterTx)   || afterTx   < 0)) ||
-           (req.query.after_addr !== undefined && (isNaN(afterAddr) || afterAddr < 0)))
+        // Accept only complete unsigned decimal cursor values.
+        const afterTx = req.query.after_tx === undefined ? NaN : parseStrictUint(req.query.after_tx);
+        const afterAddr = req.query.after_addr === undefined ? NaN : parseStrictUint(req.query.after_addr);
+        if((req.query.after_tx !== undefined && !Number.isSafeInteger(afterTx)) ||
+           (req.query.after_addr !== undefined && !Number.isSafeInteger(afterAddr)))
             return res.status(400).json({ error: 'Invalid cursor', code: 'BAD_REQUEST' });
 
         let db = syncService.getDatabase(chain, network, dbType);
@@ -1241,12 +1249,18 @@ function createApp(syncService, cfg, app = express()){
         if(req.params.dbType !== 'indexer')
             return res.status(400).json({ error: 'Transparency log is indexer-only. Decoder DB has no synthetic chain-of-state hashes.', code: 'BAD_REQUEST' });
 
+        // Keep absent defaults, but refuse malformed page values.
+        const parsedPage = parseStrictUint(req.query.page);
+        if(Number.isNaN(parsedPage)) return res.status(400).json({ error: 'Invalid page', code: 'BAD_REQUEST' });
+        const page = parsedPage === null ? 0 : parsedPage;
+        // Keep absent defaults, but refuse malformed limit values.
+        const parsedLimit = parseStrictUint(req.query.limit);
+        if(Number.isNaN(parsedLimit)) return res.status(400).json({ error: 'Invalid limit', code: 'BAD_REQUEST' });
+        const limit = parsedLimit === null ? 100 : parsedLimit;
+
         let { chain, network } = req.params;
         let log = syncService.getTransparencyLog(chain, network);
         if(!log) return res.status(404).json({ error: 'Chain/network not found', code: 'NOT_FOUND' });
-
-        let page  = parseInt(req.query.page) || 0;
-        let limit = parseInt(req.query.limit) || 100;
 
         try {
             let result = await log.getPage(page, limit);
@@ -1265,11 +1279,15 @@ function createApp(syncService, cfg, app = express()){
             return res.status(400).json({ error: 'Transparency log is indexer-only', code: 'BAD_REQUEST' });
 
         let { chain, network, block_index } = req.params;
+        // Accept only a complete unsigned decimal proof height.
+        const parsedBlockIndex = parseStrictUint(block_index);
+        if(!Number.isSafeInteger(parsedBlockIndex))
+            return res.status(400).json({ error: 'Invalid block_index', code: 'BAD_REQUEST' });
         let log = syncService.getTransparencyLog(chain, network);
         if(!log) return res.status(404).json({ error: 'Chain/network not found', code: 'NOT_FOUND' });
 
         try {
-            let result = await log.getProof(block_index);
+            let result = await log.getProof(parsedBlockIndex);
             if(!result) return res.status(404).json({ error: 'Block not found', code: 'NOT_FOUND' });
             res.json(result);
         } catch(e){
