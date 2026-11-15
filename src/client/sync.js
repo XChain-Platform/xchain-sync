@@ -1061,9 +1061,11 @@ class ClientSync {
 
     // Stop following. Everything that halts intake happens before this returns; the
     // returned promise settles once in-flight work (a live apply and its verification,
-    // a catch-up pass, a verified-tip walk) has finished, so the service drain closes
-    // the pools only after it. A drain cut short is still safe: the verified-tip marker
-    // has not risen past any block whose verification did not finish.
+    // a catch-up pass, a verified-tip walk, the WS event the chain is running) has
+    // finished, so the service drain closes the pools only after it. WS events still
+    // queued behind it are dropped, not run; the next start catches up past them. A
+    // drain cut short is still safe: the verified-tip marker has not risen past any
+    // block whose verification did not finish.
     stop(){
         this.running = false;
         this._stopping = true;
@@ -1088,7 +1090,8 @@ class ClientSync {
     }
 
     async drainInFlightWork(){
-        let work = [...this._inFlightWork, this._catchUpInFlight, this._tailVerify, this._applyLock];
+        const work = [...this._inFlightWork, this._catchUpInFlight, this._tailVerify, this._applyLock,
+            this._wsEventChain];
         await Promise.allSettled(work.filter(Boolean));
     }
 
@@ -3558,7 +3561,10 @@ class ClientSync {
         this.scheduleReconnect(source, sourceIndex);
     }
 
+    // Guard on _stopping rather than running: catch-up deliberately runs before start()
+    // sets running, and a stopped client is never restarted.
     async handleEvent(event, sourceIndex){
+        if(this._stopping) return;
         if(event.type === 'block'){
             updateLastKnownServerBlock(this, event.block_index);
             await this.handleBlock(event, sourceIndex);
@@ -3573,11 +3579,13 @@ class ClientSync {
             let catchUpStart = statusGapStart(this, event.block_height);
             if(catchUpStart !== null)
                 await this.incrementalCatchUp(catchUpStart);
+            if(this._stopping) return;
             if(shouldReconcileDispensersOnStatus(this)){
                 this._dispenserReconcileInFlight = true;
                 try { await this.reconcileDispensers(this.sources[sourceIndex]); }
                 finally { this._dispenserReconcileInFlight = false; }
             }
+            if(this._stopping) return;
             // Sweep completeness on the recurring signal from the primary source.
             // Apply its own throttle and equal-height policy inside the helper.
             // Query the same source that sends this status event.
