@@ -97,6 +97,109 @@ describe('token refold affected-tick parity', function(){
     });
 });
 
+// An affected-tick query reduced to what decides the set: its FROM, the ordered joins, the
+// WHERE and the m.<column> each selected ticker alias resolves to. The SELECT lists
+// differ by design (the source reads tick text and addresses, the replica reads ids), so
+// only the tick column is lifted out of them.
+function tickQueryShape(sql){
+    const s = String(sql).replace(/\s+/g, ' ').toLowerCase().replace(/ ?([(=,<>]) ?/g, '$1').replace(/ \)/g, ')').trim();
+    const from = s.indexOf(' from '), where = s.indexOf(' where ');
+    assert.ok(from > 0 && where > from, 'not an affected-tick SELECT: ' + sql);
+    const select = s.slice(0, from), body = s.slice(from + 6, where).split(/ (?=(?:inner|left) join )/);
+    const aliases = [...select.matchAll(/\b(t\d+)\.tick\b/g)].map(m => m[1]);
+    const own = /^select distinct m\.(\w+) as tick_id$/.exec(select);
+    const tickColumns = own ? [own[1]] : aliases.map(alias => {
+        const join = body.map(j => new RegExp('^(?:inner|left) join index_tickers ' + alias + ' on\\(' + alias + '\\.id=m\\.(\\w+)\\)$').exec(j)).find(Boolean);
+        assert.ok(join, 'no index_tickers join for ' + alias + ' in ' + sql);
+        return join[1];
+    }).sort();
+    return { from: body[0], joins: body.slice(1), where: s.slice(where + 7), tickColumns };
+}
+
+async function replicaTickSql(){
+    const db = collectorDb({});
+    await tokenRefold.collectRefoldTickIds(db, 500, TICK_TABLES);
+    return Object.fromEntries(db.doQuery.getCalls().map(c => [/FROM ([a-z_]+) m/.exec(c.args[0])[1], c.args[0]]));
+}
+
+describe('token refold affected-tick query shape parity', function(){
+    it('restates the indexer joins, filter and tick column for every ticker-bearing table', async function(){
+        const root = siblingCheckout(__dirname, '../../../../xchain-indexer');
+        if(!skipOrFail(this, root, 'the indexer affected-tick shape guard')) return;
+        const readSql = require(path.join(root.path, 'src/db/rollback/read_phase.js'));
+        const queryFor = (table) => readSql.entityQueryForLedgerTables(table) ||
+            readSql.entityQueryForTransferTables(table) || readSql.entityQueryForDexTables(table) ||
+            readSql.entityQueryForCoinpayTables(table);
+        const replica = await replicaTickSql();
+        assert.strictEqual(Object.keys(replica).length, 13, 'the shape guard must compare a nonempty ticker set');
+        for(const table of TICK_TABLES){
+            assert.ok(queryFor(table), table + ' has no indexer affected-tick query');
+            assert.deepStrictEqual(tickQueryShape(replica[table]), tickQueryShape(queryFor(table)),
+                table + ': refoldTickQuery (src/db/token_refold.js) no longer matches the indexer entityQueryFor*Tables ' +
+                '(src/db/rollback/read_phase.js); the replica would refold a different set of ticks');
+        }
+    });
+
+    it('the shape keeps what it compares, and changes under every drift it must catch', async function(){
+        const sql = await replicaTickSql(), shape = tickQueryShape(sql.credits);
+        assert.ok(shape.joins.includes('inner join index_addresses a1 on(a1.id=m.address_id)'), JSON.stringify(shape.joins));
+        assert.deepStrictEqual([shape.where, shape.tickColumns], ['m.action_index>=?', ['tick_id']]);
+        const drifts = {
+            'an INNER JOIN turned LEFT': [sql.credits, 'INNER JOIN index_addresses', 'LEFT JOIN index_addresses'],
+            'an extra INNER JOIN': [sql.credits, 'WHERE ', 'INNER JOIN foo f ON (f.id=m.id) WHERE '],
+            'a different address column': [sql.credits, 'a1.id=m.address_id', 'a1.id=m.source_id'],
+            'an extra WHERE bound': [sql.credits, 'WHERE m.action_index >= ?', 'WHERE m.action_index >= ? AND m.block_index <= ?'],
+            'a different tick column': [sql.swaps, 'm.give_tick_id', 'm.get_tick_id'],
+        };
+        for(const [name, [base, from, to]] of Object.entries(drifts)){
+            const mutated = base.replace(from, to);
+            assert.notStrictEqual(mutated, base, name + ' did not apply to the captured SQL');
+            assert.notDeepStrictEqual(tickQueryShape(mutated), tickQueryShape(base), name + ' is invisible to tickQueryShape');
+        }
+    });
+
+    it('reads a second selected ticker alias as a second tick column', async function(){
+        const sql = await replicaTickSql(), source = 'SELECT t2.tick, t3.tick, a2.address FROM swaps m ' +
+            sql.swaps.slice(sql.swaps.indexOf('INNER JOIN actions')).replace('WHERE ',
+                'INNER JOIN index_tickers t3 ON (t3.id=m.get_tick_id) WHERE ');
+        assert.deepStrictEqual(tickQueryShape(source).tickColumns, ['get_tick_id', 'give_tick_id']);
+        assert.deepStrictEqual(tickQueryShape(sql.swaps).tickColumns, ['give_tick_id']);
+    });
+});
+
+describe('token refold skips a collected tick whose history is not held', function(){
+    function tokensDb(anchorRows, issueRows = []){
+        const updates = [];
+        const doQuery = sinon.stub().callsFake(async (sql, args) => {
+            if(/FROM issues i INNER JOIN actions a1/.test(sql)) return issueRows;
+            if(/^SELECT tick_id, action_index FROM tokens/.test(sql)) return anchorRows.filter(r => args.map(Number).includes(r.tick_id));
+            if(/^UPDATE tokens SET/.test(sql)){ updates.push(args); return { affectedRows: 1 }; }
+            return [];
+        });
+        return { doQuery, updates };
+    }
+
+    it('reports an anchored tick that folds to nothing and leaves its row alone', async function(){
+        const db = tokensDb([{ tick_id: 10, action_index: 100 }]);
+        assert.deepStrictEqual(await tokenRefold.refoldTokenRows(db, [10]), { refolded: 0, skipped: ['10'] });
+        assert.strictEqual(db.updates.length, 0);
+    });
+
+    it('stays silent for a tick whose tokens row went with the delete', async function(){
+        const db = tokensDb([]);
+        assert.deepStrictEqual(await tokenRefold.refoldTokenRows(db, [10]), { refolded: 0, skipped: [] });
+        assert.strictEqual(db.updates.length, 0);
+    });
+
+    it('reports unfolded and tail-only ticks together in tick id order and still refolds the whole one', async function(){
+        const db = tokensDb([{ tick_id: 10, action_index: 100 }, { tick_id: 11, action_index: 100 }, { tick_id: 12, action_index: 100 },
+            { tick_id: 13, action_index: 100 }], [issue(300, { tick_id: 11 }), issue(100, { tick_id: 12, decimals: '8' })]);
+        const out = await tokenRefold.refoldTokenRows(db, [10, 11, 12, 13]);
+        assert.deepStrictEqual(out, { refolded: 1, skipped: ['10', '11', '13'] });
+        assert.deepStrictEqual(db.updates.map(a => a[a.length - 1]), ['12']);
+    });
+});
+
 describe('token refold unsigned boundary parity', function(){
     it('nulls a non-integer callback block at the u64 half-unit boundary', function(){
         const out = tokenRefold.foldIssueRows([issue(100, { decimals: '8' }),

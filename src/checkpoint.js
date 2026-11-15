@@ -66,8 +66,10 @@ function canonicalCheckpoint(cp){
        cp.state_root_version != null && cp.block_merkle_version != null)
         raw += '|' + [String(cp.state_root).toLowerCase(), String(cp.state_root_version),
                       String(cp.block_merkle_root).toLowerCase(), String(cp.block_merkle_version)].join('|');
-    if(isCheckpointSupersedeActive(cp.snapshot_block, cp.network) && supersede.hasSupersedeFields(cp))
-        raw += supersede.supersedeSuffix(cp);
+    const supersedeActive = isCheckpointSupersedeActive(cp.snapshot_block, cp.network);
+    if(!supersedeActive && supersede.hasSupersedeFields(cp))
+        throw new Error('checkpoint supersession fields are not active for snapshot_block ' + cp.snapshot_block);
+    if(supersedeActive) raw += supersede.supersedeSuffix(cp);
     // An ANCHOR v3 wrapper section is signed over its folded archive as well (the hub's
     // foldArchiveCanonical): the batch fields follow the roots and the round id gains the seq.
     const fold = cp.fold_archive;
@@ -233,9 +235,9 @@ function verifyServedCheckpoint(body, supplied){
     let set = supplied !== null ? supplied : (body.validators || []);
     let result = verifyCheckpoint(body.checkpoint, set);
     return Object.assign({ checkpoint: body.checkpoint, snapshotAvailable: !!body.snapshot_available,
-        // The explorer's replay-window answer: false while a replay is open at or below
-        // this height. Only an explorer older than the field omits it; absent reads as true.
-        final: body.final === undefined ? true : body.final === true,
+        // final and snapshotAvailable are explorer assertions, not locally verified.
+        // A missing or non-true final value proves no finality and reads as false.
+        final: body.final === true,
         validatorSource: supplied !== null ? 'supplied' : 'explorer' }, result);
 }
 

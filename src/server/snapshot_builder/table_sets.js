@@ -138,10 +138,10 @@ const PRIORITY_TABLES = [
 ];
 
 // Tables to put last (derived/computed; they depend on everything else).
-// pubkeys trails index_addresses: pubkeys.sql declares a FK on index_addresses(id),
-// so the reverse-delete path in applyFullSnapshot must drop pubkeys rows before
-// index_addresses rows.  Appended after sync_meta because neither balances nor
-// sync_meta carries a FK on pubkeys.
+// pubkeys trails index_addresses: xchain-decoder's pubkeys.sql declares a FK on
+// index_addresses(id), so applyFullSnapshot must delete pubkeys rows first.
+// xchain-indexer's pubkeys.sql has no FK; the shared order is harmless there.
+// Recheck this order if the indexer table gains a surrogate id or FK.
 const TRAILING_TABLES = ['balances', 'sync_meta', 'pubkeys'];
 
 // Indexer full-dump tables outside the lookup topology that are still append-only,
@@ -200,7 +200,8 @@ function orderSnapshotTables(allTables){
 // DISPENSERS_RECONCILE_MAX_INTERVAL_MS. Its decoder /status completeness count
 // (replicatedTables `special`) is a post-replace equality sanity check, not a
 // backstop: a soft-expire UPDATE leaves counts equal and a hard-purge DELETE
-// leaves the replica ahead, which verifyTableCounts does not report.
+// leaves the replica ahead, which verifyTableCounts does not report for a decoder
+// (replica-ahead is indexer exact-parity tables at equal height only).
 function decoderIncrementalSets(){
     let topology = replicatedTables.getTopology('decoder');
     return {

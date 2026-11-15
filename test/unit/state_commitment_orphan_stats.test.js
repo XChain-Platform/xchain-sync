@@ -14,7 +14,7 @@
  * test/unit/state_commitment/state_commitment_orphan_stats.test.js
  *
  * Sync-follower twin of the indexer reportOrphanStats test. Kept IDENTICAL in
- * cases to guard against the two stateCommitment.js copies drifting. Read-only
+ * cases to guard against the two state_commitment/index.js copies drifting. Read-only
  * orphan-count observability over the COW state_tree_nodes store; marks from the
  * UNION of all RETAINED state_tree_roots rows; never deletes.
  */

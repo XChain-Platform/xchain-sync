@@ -459,7 +459,7 @@ describe('Rollback coverage guard @regression', function(){
         const guard = src.lastIndexOf('if(!truncatedReplica){', call);
         assert.ok(guard > -1 && call - guard < 400,
             'the bridged re-derive call must sit inside a !truncatedReplica guard');
-        const escrow = src.indexOf('await rederiveEscrowGate(this.db)');
+        const escrow = src.indexOf('await rederiveEscrowGate(this.db,');
         const coinpay = src.indexOf('await rederiveCoinpayMatchStatus(this.db)');
         assert.ok(escrow > -1 && escrow < call && call < coinpay,
             'the bridged re-derive must run after the escrow re-derive and before the COINPay re-derive, as the source does');
@@ -624,7 +624,7 @@ describe('Rollback coverage guard @regression', function(){
         const indexerPath = indexerFile(INDEXER_ROLLBACK_ENTRY);
         if(!requireSibling(this, indexerPath)) return;
         const SWEEP_RES = {
-            icons:   /DELETE FROM icons WHERE (?:token_id > \? AND )?token_id NOT IN \(SELECT id FROM tokens\)/,
+            icons:   /DELETE FROM icons WHERE token_id > \? AND token_id NOT IN \(SELECT id FROM tokens\)/,
             // The `<> ?` clauses exempt the native-coin sentinel (markets stores 0 for a
             // side that has no ticker); without them the sweep deletes live markets.
             // The `> ?` surviving-MAX(id) bound is required on both sides: without it a
@@ -1579,12 +1579,12 @@ describe('Rollback coverage guard @regression', function(){
         }
     });
 
-    it('F-5: OPERATOR_LOCAL_TABLES equals the registry-derived exclusion set plus the three permitted non-registry names', function(){
+    it('F-5: OPERATOR_LOCAL_TABLES equals the registry-derived exclusion set plus the five permitted non-registry names', function(){
         // Both directions. Forward: every registry table whose
         // replication mode is local / hub-mirror / follower-derived must be
         // snapshot-excluded (a new local table that rode consensus snapshots
         // would ship divergent per-node state to every follower). Reverse:
-        // OPERATOR_LOCAL_TABLES may contain NOTHING else beyond the three
+        // OPERATOR_LOCAL_TABLES may contain NOTHING else beyond the five
         // sanctioned non-registry names, so over-exclusion (silently dropping
         // a consensus table from snapshots) fails just as loudly. Uses the
         // exported Set, not a source-text scrape, so it pins the value the

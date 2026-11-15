@@ -36,8 +36,10 @@
  * no xchain-sync channel at all) are intentionally excluded, because their
  * counts legitimately diverge between nodes and comparing them would raise
  * false incompleteness alarms instead of catching real ones:
- *   - attest_validator_stats          running aggregate, full-snapshot only
- *   - markets                         derived OHLCV, full-snapshot only
+ *   - attest_validator_stats          running aggregate, never per-block; full-dumped in full
+ *                                     and every incremental snapshot (indexerFullDumpSet)
+ *   - markets                         derived OHLCV, never per-block; full-dumped in full
+ *                                     and every incremental snapshot (indexerFullDumpSet)
  *   - mempool_transactions            non-deterministic across nodes
  *   - dispensers (decoder)            mutated in place by decoder writes that ride no per-block
  *                                     stream: the soft-expire UPDATE of expired_block_index
@@ -57,8 +59,10 @@
  *                                     equality sanity check, never a drift detector: a
  *                                     soft-expire leaves the counts equal and a hard-purge
  *                                     leaves the replica AHEAD, which verifyTableCounts does
- *                                     not report, because it records a mismatch only when
- *                                     the remote count is the larger one. Parity rests
+ *                                     not report for a decoder: it reports replica-ahead only
+ *                                     for indexer exact-parity tables at equal height, and the
+ *                                     decoder dispensers table must stay out of any decoder
+ *                                     exact-parity set while the reconcile holds it. Parity rests
  *                                     entirely on the apply-side reconcile,
  *                                     ClientApplier.applyDispensersReplace via
  *                                     ClientSync.reconcileDispensers, whose cadence is set
@@ -157,7 +161,8 @@ const TOPOLOGY = {
         // which is the ONLY thing keeping it in parity (the header's dispensers entry
         // lists the writes that reconcile must capture). The count is a post-replace
         // equality sanity check, not a backstop: the hard-purge DELETE gap leaves
-        // the replica ahead (ClientSync.verifyTableCounts flags remote > local only)
+        // the replica ahead (ClientSync.verifyTableCounts reports replica-ahead only for
+        // indexer exact-parity tables at equal height, never for a decoder)
         // and a soft-expire UPDATE leaves counts equal, so neither can ever fire, and
         // ClientSync.incrementalCatchUp excludes the table on every non-reconcile cycle.
         special:      ['dispensers']

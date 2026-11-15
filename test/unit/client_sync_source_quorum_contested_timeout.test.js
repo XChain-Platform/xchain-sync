@@ -118,4 +118,41 @@ describe('ClientSync: contested height at the quorum timeout @regression', funct
         assert.strictEqual(applier.applyBlock.called, false);
         assert.strictEqual(sync.pendingHashes.has(101), false);
     });
+
+    it('prunes a held block and its timer when a reorg lowers the tip', async function(){
+        let { sync, applier } = makeSync();
+        await sync.handleBlock(blockEvent(101, 'X'), 0);
+        assert.strictEqual(sync._applyTimers.has(101), true);
+
+        await sync.handleReorg({ type: 'reorg', block_index: 98 });
+
+        assert.strictEqual(sync.lastAppliedBlock, 97);
+        assert.strictEqual(sync.pendingHashes.has(101), false);
+        assert.strictEqual(sync._applyTimers.has(101), false);
+        await pastTimeout(sync);
+        assert.strictEqual(applier.applyBlock.called, false);
+    });
+
+    it('refuses a non-contiguous live block inside the apply lock', async function(){
+        let { sync, applier } = makeSync();
+        sync.lastAppliedBlock = 97;
+
+        await sync.applyAndVerifyBlock(blockEvent(101, 'X'));
+
+        assert.strictEqual(applier.applyBlock.called, false);
+        assert.strictEqual(sync.lastAppliedBlock, 97);
+    });
+
+    it('refuses timer work captured before a completed reorg', async function(){
+        let { sync, applier } = makeSync();
+        const capturedGeneration = sync._reorgGeneration;
+        sync._reorgGeneration++;
+
+        await sync.applyAndVerifyBlock(blockEvent(101, 'X'), {
+            reorgGeneration: capturedGeneration
+        });
+
+        assert.strictEqual(applier.applyBlock.called, false);
+        assert.strictEqual(sync.lastAppliedBlock, 100);
+    });
 });

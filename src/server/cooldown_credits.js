@@ -48,8 +48,10 @@
  * follower's escrows table stays short by every release, and the supply its
  * rollback recomputes from credits - debits + escrows comes out too high.
  * collectMaturedCooldownEscrows forwards that row by the same keys. The source's
- * cooldown-maturity rollback removes only the credit, so ClientRollback mirrors it
- * and leaves the release in place too: the replica keeps the rows the source keeps.
+ * cooldown-maturity rollback keeps the release below the cooldown-maturity escrow
+ * reversal activation and deletes it at or above it, keyed on the rollback's target
+ * block. ClientRollback.reverseCooldownMaturities reads the same gate at the same
+ * height, so the replica keeps the rows the source keeps on both sides of the switch.
  *
  * Everything above describes the LEGACY attribution era only. Once the indexer's
  * UNSTAKE_COOLDOWN_COMPLETION_ACTION protocol change is active (genesis on testnet

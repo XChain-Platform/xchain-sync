@@ -157,7 +157,7 @@ describe('ClientRollback', function(){
             db.doQuery.callsFake(async (query) => {
                 if(/price_snapshots|sync_meta|merkle_epochs|attest_validator_stats/.test(query))
                     throw Object.assign(new Error('Table does not exist'), { errno: 1146 });
-                if(/contract_emissions|icons WHERE token_id NOT IN/.test(query))
+                if(/contract_emissions|DELETE FROM icons WHERE/.test(query))
                     throw Object.assign(new Error('Table does not exist'), { errno: 1146 });
                 if(/DELETE FROM `blocks`/.test(query))
                     throw Object.assign(new Error('Table does not exist'), { errno: 1146 }); // blockTables loop
@@ -200,9 +200,7 @@ describe('ClientRollback', function(){
 
     describe('rollback', function(){
         registerHooks();
-        // The contract_emissions delete (consensus table) and the icons orphan-sweep
-        // swallow ONLY errno 1146 (a missing-table schema gap) and abort on any other
-        // error, so a transient fault cannot commit a partial rollback.
+        // The contract_emissions delete and icons sweep swallow schema gaps only.
         it('aborts (fail-closed) on a transient error in the contract_emissions delete', async function(){
             db.doQuery.callsFake(async (query) => {
                 if(/contract_emissions/.test(query))
@@ -216,7 +214,7 @@ describe('ClientRollback', function(){
 
         it('aborts (fail-closed) on a transient error in the icons orphan-sweep', async function(){
             db.doQuery.callsFake(async (query) => {
-                if(/icons WHERE token_id NOT IN/.test(query))
+                if(/DELETE FROM icons WHERE/.test(query))
                     throw Object.assign(new Error('Deadlock found'), { errno: 1213 });
                 return [];
             });
@@ -225,6 +223,37 @@ describe('ClientRollback', function(){
             assert.strictEqual(db.commitTransaction.called, false);
         });
 
+    });
+});
+
+describe('ClientRollback bounded icons sweep', function(){
+    registerHooks();
+
+    it('binds the surviving maximum token id', async function(){
+        db.doQuery.callsFake(async (query) => {
+            if(query === 'SELECT MAX(id) AS max_id FROM tokens') return [{ max_id: 42 }];
+            return [];
+        });
+        await rollback.rollback(100);
+        let call = db.doQuery.getCalls().find(c => /DELETE FROM icons WHERE/.test(c.args[0]));
+        assert.ok(call, 'expected the bounded icons sweep');
+        assert.deepStrictEqual(call.args[1], [42]);
+    });
+
+    it('does not sweep icons when no actions were rolled back', async function(){
+        db.getFirstActionIndex.resolves(null);
+        await rollback.rollback(100);
+        assert.strictEqual(db.doQuery.getCalls().some(c => /DELETE FROM icons WHERE/.test(c.args[0])), false);
+    });
+
+    it('swallows a missing-column schema gap in the icons sweep', async function(){
+        db.doQuery.callsFake(async (query) => {
+            if(/DELETE FROM icons WHERE/.test(query))
+                throw Object.assign(new Error('Unknown column'), { errno: 1054 });
+            return [];
+        });
+        await rollback.rollback(100);
+        assert.strictEqual(db.commitTransaction.calledOnce, true);
     });
 });
 

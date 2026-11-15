@@ -37,5 +37,6 @@
   "pinnedValidators @regression is INERT: every real (chain, network) pins null": "pinnedValidators @regression keeps mainnet and regtest INERT",
   "pinnedValidators: the hub's full coin name @regression is INERT under the full coin names too": "pinnedValidators: the hub's full coin name @regression resolves testnet pins and inert networks under the full coin names too",
   "streamScopeColumns: every streamed table owns the column it is scoped by @regression reads the two close_block tables by close_block on every forward channel": "streamScopeColumns: every streamed table owns the column it is scoped by @regression reads the close_block tables by close_block on every forward channel",
-  "graceful shutdown createSyncDrain drains a partially-built process without throwing": "graceful shutdown createSyncDrain partial drains a partially-built process without throwing"
+  "graceful shutdown createSyncDrain drains a partially-built process without throwing": "graceful shutdown createSyncDrain partial drains a partially-built process without throwing",
+  "Rollback coverage guard @regression F-5: OPERATOR_LOCAL_TABLES equals the registry-derived exclusion set plus the three permitted non-registry names": "Rollback coverage guard @regression F-5: OPERATOR_LOCAL_TABLES equals the registry-derived exclusion set plus the five permitted non-registry names"
 }

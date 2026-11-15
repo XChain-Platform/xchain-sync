@@ -210,8 +210,8 @@ module.exports = {
     /** process.env[key] as it is NOW, for a read a running process re-takes on every call (the state-tree metric cap, shared with the indexer twin). */
     readEnvNow: (key) => process.env[key],
 
-    /** The raw state-tree metric interval, NaN when unset; the caller applies its default. */
-    stateTreeMetricIntervalMsFromEnv: () => parseInt(process.env.STATE_TREE_METRIC_INTERVAL_MS, 10),
+    /** The state-tree metric interval text; the caller validates the timer bounds. */
+    stateTreeMetricIntervalMsFromEnv: () => process.env.STATE_TREE_METRIC_INTERVAL_MS,
 
     /** The raw action-scoped query metric interval, NaN when unset; the caller applies its default. */
     syncQueryMetricIntervalMsFromEnv: () => parseInt(process.env.SYNC_QUERY_METRIC_INTERVAL_MS, 10),

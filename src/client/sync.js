@@ -44,6 +44,7 @@ const { rollbackPreservingError } = require('./rollback_preserving_error');
 const { retroactiveCapBlocks, admitRetroactiveRewind } = require('./retroactive_admission');
 const replicatedTables = require('../schema/replicated_tables');
 const tableLifecycle = require('../table_lifecycle');
+const { isSchemaGapError } = require('../db/tables/schema_gap');
 const { SCHEMA_VERSION } = require('../schema/version');
 const { activationDelayBlocks, gasTickSymbol, coinTicker, btcStakeCapabilities, VALIDATOR_QUERY_LIMIT } = require('../consensus-constants');
 const { bootstrapDepthKey } = require('../config');
@@ -123,6 +124,14 @@ function compareSourceBlockHashes(client, source, blockHeight, remoteStatus, loc
             ', source ' + source + ' height ' + remoteStatus.block_height + ')');
         return { verdict: 'skew', mismatches: null };
     }
+    const unresolvedLocalFields = ['ledger_hash', 'actions_hash', 'contract_hash']
+        .filter(field => localHashes[field] == null);
+    if(unresolvedLocalFields.length){
+        getLogger().warn('Skipping cross-source hash check: unresolved local hash lookup at block ' +
+            blockHeight + ' for ' + unresolvedLocalFields.join(', ') +
+            ' (possible index_transactions gap), not divergence against ' + source);
+        return { verdict: 'unresolved', mismatches: null };
+    }
     const missingRemoteHash = ['ledger_hash', 'actions_hash', 'contract_hash']
         .some(field => localHashes[field] != null && remoteStatus[field] == null);
     if(remoteStatus.hash_identity_consistent === false || missingRemoteHash){
@@ -150,18 +159,18 @@ function compareSourceBlockHashes(client, source, blockHeight, remoteStatus, loc
 // at warn, as ClientSync.reportCompletenessShortfalls does: one sweep's lag heals by
 // itself, and a persistent gap escalates through REPLICA_GAP_PERSISTENT. A one-shot
 // verify keeps the error line.
-function reportDecoderCountResults(source, blockHeight, remoteStatus, countMismatches, periodic){
+function reportDecoderCountResults(source, blockHeight, remoteStatus, countMismatches, periodic, unread){
     if(countMismatches.length){
         let log = periodic ? getLogger().warn.bind(getLogger()) : getLogger().error.bind(getLogger());
         log('TABLE_COUNT_MISMATCH at block ' + blockHeight + ' against ' + source +
             '; decoder snapshot may be truncated or incomplete:');
         log(JSON.stringify(countMismatches));
-    } else if(remoteStatus.table_counts){
+    } else if(remoteStatus.table_counts && !(unread && unread.size)){
         getLogger().info('Table-count verification passed against ' + source);
     }
 }
 
-function reportTableCountResults(source, blockHeight, remoteStatus, countMismatches){
+function reportTableCountResults(source, blockHeight, remoteStatus, countMismatches, unread){
     let shortfalls = countMismatches.filter(m => m.reason !== 'replica-ahead');
     let ahead = countMismatches.filter(m => m.reason === 'replica-ahead');
     if(shortfalls.length){
@@ -174,7 +183,7 @@ function reportTableCountResults(source, blockHeight, remoteStatus, countMismatc
             '; follower holds rows the source deleted (un-replicated forward DELETE?):');
         getLogger().error(JSON.stringify(ahead));
     }
-    if(!countMismatches.length && remoteStatus.table_counts){
+    if(!countMismatches.length && remoteStatus.table_counts && !(unread && unread.size)){
         getLogger().info('Table-count verification passed against ' + source);
     }
 }
@@ -334,7 +343,8 @@ function statusGapStart(client, blockHeight){
 function shouldReconcileDispensersOnStatus(client){
     return client.dbType === 'decoder' && !client._halted && client.lastAppliedBlock !== null &&
         !client._dispenserReconcileInFlight &&
-        (client._dispenserReconcileAfterReorg === true || client.dispenserReconcileIntervalDue(Date.now()));
+        (client._dispenserReconcileAfterReorg === true || client._dispenserReconcilePending === true ||
+         client.dispenserReconcileIntervalDue(Date.now()));
 }
 
 class ClientSync {
@@ -498,6 +508,7 @@ class ClientSync {
         // armed once (regardless of which source arrives first) so a non-primary source
         // that delivers first still triggers the timeout if the other source never arrives.
         this._applyTimers = new Map();
+        this._reorgGeneration = 0;
 
         // Blocks that timed out cross-source confirmation while HASH_CONFIRM_STRICT
         // is on. Strict mode refuses to apply a block that only one source confirmed;
@@ -878,7 +889,7 @@ class ClientSync {
         this._sourceStrikes.delete(sourceIndex);
         let ws = this.wsConns[sourceIndex];
         if(ws){
-            try { ws._xchainEvicted = true; ws.close(); } catch(e){ /* best-effort */ }
+            try { ws.close(); } catch(e){ /* best-effort */ }
         }
         getLogger().error('================================================================');
         getLogger().error('SOURCE EVICTED: ' + label + ' for ' + this.chain + '/' + this.network + '/' + this.dbType);
@@ -957,11 +968,18 @@ class ClientSync {
     }
 
     async synchronizeStoredReplica(){
-        this.lastAppliedBlock = await this.db.getLastBlock();
+        try {
+            this.lastAppliedBlock = await this.db.getLastBlock(null, { rethrow: true });
+        } catch(e){
+            // A brand-new replica has no blocks table until bootstrap applies the
+            // schema. Every other read fault must reach the supervised restart.
+            if(!(e && e.errno === 1146)) throw e;
+            this.lastAppliedBlock = null;
+        }
         // A halt whose sync_halt write never landed comes back from its sync_state copy,
         // before the empty-replica bootstrap as well: a sync_halt row blocks a re-seed at
         // startup, and its copy blocks it the same way.
-        if(await this.restorePendingHalt()) return;
+        if(await this.restorePendingHalt()) return 'halted';
         if(this.lastAppliedBlock === null){
             // A configured truncation depth selects recent-height bootstrap.
             if(this._truncatedDepth >= 1){
@@ -1018,10 +1036,16 @@ class ClientSync {
         await this.loadVerifiedCheckpointBlock();
         await this.loadVerifiedCheckpointSeq();
         if(await this.holdForRollbackGuardState() === 'stop') return;
-        await this.synchronizeStoredReplica();
+        const replicaAction = await this.synchronizeStoredReplica();
+        // An operator can clear the synthetic copy-read halt while its retry sleeps.
+        // Re-run every startup guard rather than entering live-follow without catch-up.
+        if(replicaAction === 'halted' && !this._halted){
+            if(this.running) return this.start();
+            return;
+        }
         // A halt restored before the bootstrap leaves the replica empty, and one whose copy
         // could not be read is not yet known: idle on it as on a sync_halt row, and start
-        // over once an operator clears it.
+        // over once an operator clears a halt that cannot recover by retrying.
         if(this._halted && (this.lastAppliedBlock === null || this._halted.reason === 'halt-state-check-failed')){
             if(await this.waitForStartupHalt() === 'restart') return this.start();
             return;
@@ -1836,11 +1860,15 @@ class ClientSync {
         return page;
     }
 
-    applyLookupPage(table, rows, expected, repairing){
-        return this.withApplyLock(() => this.applier.applyIncrementalSnapshot({
-            schema_version: expected,
-            tables: { [table]: rows }
-        }, repairing ? { strictIgnoreCheck: true } : undefined));
+    applyLookupPage(table, rows, expected, repairing, guard){
+        return this.withApplyLock(async () => {
+            if(guard && guard.reorgGeneration !== this._reorgGeneration) return false;
+            await this.applier.applyIncrementalSnapshot({
+                schema_version: expected,
+                tables: { [table]: rows }
+            }, repairing ? { strictIgnoreCheck: true } : undefined);
+            return true;
+        });
     }
 
     advanceLookupCursor(table, page, afterId){
@@ -1857,7 +1885,7 @@ class ClientSync {
     // A from-zero pass fills holes below a table's high-water mark. Tables that
     // reissue ids on a reorg are paged only up to the replica's applied tip, so the
     // replica never holds a row its own reorg rollback would not delete and reissue.
-    async syncLookupTablesPaged(source, opts){
+    async syncLookupTablesPaged(source, opts, guard){
         let tables = replicatedTables.getTopology(this.dbType).index || [];
         let pageSize = this.lookupPageSize();
         let expected = SCHEMA_VERSION[this.dbType];
@@ -1866,7 +1894,8 @@ class ClientSync {
             let col = replicatedTables.lookupCursorColumn(table);
             let afterId = 0;
             let repairing = !!(fromZero && fromZero.has(table));
-            let tip = this.lastAppliedBlock;
+            let tip = (opts && Number.isInteger(opts.tip) && opts.tip >= 0)
+                ? opts.tip : this.lastAppliedBlock;
             let maxBlock = (REISSUING_LOOKUPS.has(table) && Number.isInteger(tip) && tip >= 0) ? tip : null;
             if(repairing){
                 getLogger().info('Lookup repair: paging ' + table + ' from id 0 to fill a hole ' +
@@ -1885,7 +1914,7 @@ class ClientSync {
                 let page = this.parseLookupPage(response, source, table, expected);
                 let rows = page.rows || [];
                 if(rows.length){
-                    await this.applyLookupPage(table, rows, expected, repairing);
+                    if(!await this.applyLookupPage(table, rows, expected, repairing, guard)) return false;
                 }
                 pages++;
                 if(!page.has_more) break;
@@ -1895,6 +1924,7 @@ class ClientSync {
             }
             if(pages > 1) getLogger().info('Lookup-sync ' + table + ': ' + pages + ' page(s) up to id ' + afterId);
         }
+        return true;
     }
 
     // Serialize all replica-mutating operations (live block apply, incremental
@@ -1966,8 +1996,9 @@ class ClientSync {
     // Incremental catch-up.
     //
     // Serialize catch-ups against each other and resume from the committed DB tip.
-    // A concurrent live apply can still advance that tip during the download, so
-    // applyIncrementalCatchUpSnapshot re-checks it under the shared apply lock.
+    // A concurrent live apply can still advance that tip during the download, or
+    // another path can halt or strict-gate the client, so the snapshot apply
+    // re-checks both conditions under the shared apply lock.
     async incrementalCatchUp(sinceBlock){
         if(this.incrementalCatchUpBlocked(sinceBlock)) return;
         // Serialize catch-ups so two never apply overlapping ranges. A request that
@@ -2057,7 +2088,61 @@ class ClientSync {
         return { snapshotData, skipLookups };
     }
 
+    applyIncrementalCatchUpUnderLock(snapshotData, sinceBlock, dbTip){
+        return this.withApplyLock(async () => {
+            if(this.incrementalCatchUpBlocked(sinceBlock)) return 'blocked';
+            let currentTip = await this.db.getLastBlock(null, { rethrow: true });
+            // The tip read yields while the lock is held. Re-check immediately before
+            // starting the apply so a halt or strict hold raised during that read wins.
+            if(this.incrementalCatchUpBlocked(sinceBlock)) return 'blocked';
+            if(currentTip === dbTip){
+                await this.applier.applyIncrementalSnapshot(snapshotData);
+                return { status: 'applied', reorgGeneration: this._reorgGeneration };
+            }
+            getLogger().info('Skipping incremental catch-up from block ' + sinceBlock +
+                ': committed tip moved from ' + dbTip + ' to ' + currentTip + ' during download');
+            return 'moved';
+        });
+    }
+
+    // Re-page lookup rows and advance the in-memory cursor after a catch-up apply.
+    // Returns true when a reorg moved the generation, so the pass must stop and retry.
+    async repageAndFinalizeCatchUp(source, snapshotData, skipLookups, applyResult){
+        // Fill lookup rows created while the source prepared the block snapshot.
+        // The first paging pass ends at high-water T1 while the snapshot may observe
+        // a later source tip T2, so referenced rows can exist in the interval.
+
+        // Run this second pass before hash refresh and boundary verification, capped at
+        // the window already committed under the apply lock. Missing index rows can make
+        // the local block-hash lookup null, which would otherwise skip the range audit.
+        if(skipLookups){
+            const rePageOpts = (typeof snapshotData.block_height === 'number')
+                ? { tip: snapshotData.block_height } : undefined;
+            const guard = { reorgGeneration: applyResult.reorgGeneration };
+            if(await this.syncLookupTablesPaged(source, rePageOpts, guard) === false){
+                this._catchUpPending = true;
+                this._catchUpTipMoved = true;
+                return true;
+            }
+        }
+        if(typeof snapshotData.block_height === 'number'){
+            const finalized = await this.withApplyLock(async () => {
+                if(applyResult.reorgGeneration !== this._reorgGeneration) return false;
+                this.lastAppliedBlock = snapshotData.block_height;
+                return true;
+            });
+            if(!finalized){
+                this._catchUpPending = true;
+                this._catchUpTipMoved = true;
+                return true;
+            }
+        }
+        return false;
+    }
+
     async applyIncrementalCatchUpSnapshot(source, snapshotData, sinceBlock, dbTip, skipLookups){
+        if(this.incrementalCatchUpBlocked(sinceBlock)) return true;
+
         // Refuse a range whose tip crosses the active platform-train boundary.
         // The whole window lands in one transaction, so no part of a crossing
         // window may apply before the activation gate completes.
@@ -2072,17 +2157,9 @@ class ClientSync {
 
         // Confirm the downloaded range still starts above committed data while no
         // live writer can advance the tip, then apply it under the same lock.
-        let tipMoved = await this.withApplyLock(async () => {
-            let currentTip = await this.db.getLastBlock(null, { rethrow: true });
-            if(currentTip === dbTip){
-                await this.applier.applyIncrementalSnapshot(snapshotData);
-                return false;
-            }
-            getLogger().info('Skipping incremental catch-up from block ' + sinceBlock +
-                ': committed tip moved from ' + dbTip + ' to ' + currentTip + ' during download');
-            return true;
-        });
-        if(tipMoved){
+        let applyResult = await this.applyIncrementalCatchUpUnderLock(snapshotData, sinceBlock, dbTip);
+        if(applyResult === 'blocked') return true;
+        if(applyResult === 'moved'){
             this._catchUpPending = true;
             this._catchUpTipMoved = true;
             return true;
@@ -2093,18 +2170,7 @@ class ClientSync {
         // numeric terminal height, keeping live-event gap checks aligned with the database.
         this._upsertDupKeyTarget = null;
 
-        // Fill lookup rows created while the source prepared the block snapshot.
-        // The first paging pass ends at high-water T1 while the snapshot may observe
-        // a later source tip T2, so referenced rows can exist in the interval.
-
-        // Run this second pass before hash refresh and boundary verification. Missing
-        // index rows can make the local block-hash lookup null, which would otherwise
-        // skip the range audit instead of proving the applied state.
-        if(skipLookups){
-            await this.syncLookupTablesPaged(source);
-        }
-        if(typeof snapshotData.block_height === 'number')
-            this.lastAppliedBlock = snapshotData.block_height;
+        if(await this.repageAndFinalizeCatchUp(source, snapshotData, skipLookups, applyResult)) return true;
 
         // Keep the cached hashes at the applied height before live events read them.
         // Refresh only after the lookup re-page so every hash input referenced by the
@@ -2209,8 +2275,10 @@ class ClientSync {
         // Retry once after a schema repair; the repair debounce bounds recursion.
         // A second schema-shaped failure inside that window falls through instead of
         // nesting another catch-up attempt.
-        if(await this.healSchemaIfStale(error))
+        if(await this.healSchemaIfStale(error)){
+            if(this.incrementalCatchUpBlocked(sinceBlock)) return;
             return this.runIncrementalCatchUp();
+        }
     }
 
     async runIncrementalCatchUp(){
@@ -2261,6 +2329,7 @@ class ClientSync {
             if(this.dbType === 'indexer' && this.config['VERIFY_RECOMPUTE']){
                 if(await this.verifyIncrementalCatchUpRange(snapshotData, sinceBlock)) return;
             }
+            await this.anchorCheckpointAfterCatchUp();
 
             // Run decoder completeness work only after snapshot application and any
             // indexer-only range audit. The database type makes these paths exclusive.
@@ -2279,6 +2348,8 @@ class ClientSync {
     //   'diverge'    same-height mismatch under HALT_ON_DIVERGENCE=false (log-only)
     //   'halted'     divergence halted the replica (caller must stop)
     //   'skew'       tip skew; no same-height comparison was possible
+    //   'unresolved' local committed hash lookup has a null consensus field; never counted
+    //                toward quorum, and the advisory count and content checks still run
     //   'unreachable' transport fault reaching the source
     //   'unverified' hashes agreed but the local recompute errored; not counted toward quorum
     //   'skip'       not applicable (decoder, or no local hash row)
@@ -2310,20 +2381,26 @@ class ClientSync {
             if(!localHashes) return 'skip';
             let comparison = compareSourceBlockHashes(this, source, blockHeight, remoteStatus, localHashes);
             verdict = comparison.verdict;
-            if(comparison.verdict === 'diverge' && this.config['HALT_ON_DIVERGENCE']){
-                await this.haltOnDivergence(blockHeight, comparison.mismatches,
-                    [source], 'cross-source-divergence');
-                return 'halted';
+            // An unresolved local hash is no evidence of a fork, so it neither halts nor
+            // recomputes against the null; the count, index-map and content checks below
+            // still run because a lookup gap is exactly what their shortfalls expose.
+            if(verdict !== 'unresolved'){
+                if(comparison.verdict === 'diverge' && this.config['HALT_ON_DIVERGENCE']){
+                    await this.haltOnDivergence(blockHeight, comparison.mismatches,
+                        [source], 'cross-source-divergence');
+                    return 'halted';
+                }
+                verdict = await this.verifySourceRecompute(source, blockHeight, localHashes, verdict);
+                if(verdict === 'halted') return verdict;
             }
-            verdict = await this.verifySourceRecompute(source, blockHeight, localHashes, verdict);
-            if(verdict === 'halted') return verdict;
             // Compare counts only when the source read them at this height; otherwise log the
             // skip and report neither a shortfall nor a pass for counts taken elsewhere.
             let countMismatches = [];
+            let unread = new Set();
             if(this.remoteCountsAtHeight(remoteStatus, blockHeight)){
                 countMismatches = await this.verifyTableCounts(remoteStatus.table_counts, undefined,
-                    { remoteHeight: this.remoteTableCountsHeight(remoteStatus), localHeight: blockHeight });
-                reportTableCountResults(source, blockHeight, remoteStatus, countMismatches);
+                    { remoteHeight: this.remoteTableCountsHeight(remoteStatus), localHeight: blockHeight, unread });
+                reportTableCountResults(source, blockHeight, remoteStatus, countMismatches, unread);
             } else if(remoteStatus.table_counts){
                 getLogger().info('Table-count check against ' + source + ' skipped: source counts read at ' +
                     this.remoteTableCountsHeight(remoteStatus) + ', replica at ' + blockHeight);
@@ -2549,8 +2626,10 @@ class ClientSync {
                     'completeness count check (' + [...windowed].join(', ') + '); append-only lookups stay strict.');
             }
 
-            let countMismatches = await this.verifyTableCounts(remoteStatus.table_counts, effectiveExcludes);
-            reportDecoderCountResults(source, blockHeight, remoteStatus, countMismatches, opts && opts.requireEqualHeight);
+            let unread = opts && opts.unread;
+            let countMismatches = await this.verifyTableCounts(remoteStatus.table_counts, effectiveExcludes, { unread });
+            reportDecoderCountResults(source, blockHeight, remoteStatus, countMismatches,
+                opts && opts.requireEqualHeight, unread);
 
             // Decoder content parity (advisory). The counts above are the
             // ONLY other signal this DB has: no ledger/actions/contract hash, no state
@@ -2572,13 +2651,13 @@ class ClientSync {
     // skew between the /status read and the local count), EXCEPT when the caller
     // passes `opts.remoteHeight` / `opts.localHeight` and they are equal: then, for
     // the tables whose registry class asserts exact row-set parity (indexer
-    // stream:* with replicaRollback 'mirror'), a replica-AHEAD delta is reported too,
+    // stream:* with mirrored or special rollback), a replica-AHEAD delta is reported too,
     // tagged reason 'replica-ahead' (delta negative). That is the shape an
     // un-replicated source-side forward DELETE leaves (the anchor-reward winner
     // collapse on validator_rewards was invisible here for exactly this reason,
     // #5610); it is advisory and never halts.
-    // Best-effort: a table that can't be counted locally (absent in this replica's
-    // schema) is reported as a full shortfall rather than silently skipped.
+    // Best-effort: a schema gap is reported as a full shortfall. Other count failures
+    // leave the table unread for this sweep, so unknown never becomes zero or converged.
     // True when this client prunes its own sync_meta, i.e. SYNC_META_RETENTION_BLOCKS is
     // a positive window and the DB is writable. Mirrors the conditions
     // SyncService.startSyncMetaRetention starts its timer under, so the count check and
@@ -2614,7 +2693,11 @@ class ClientSync {
             local = Number(await this.db.getTableCount(table));
         } catch(e){
             try { await this.healSchemaIfStale(e); } catch(healErr){ /* advisory only */ }
-            local = 0;
+            if(isSchemaGapError(e)) return 0;
+            let detail = e && (e.code || e.errno || e.message) || 'unknown error';
+            getLogger().warn('TABLE_COUNT_UNREAD: local COUNT(*) on ' + table + ' failed (' + detail +
+                '); left out of this sweep rather than read as 0 rows');
+            return null;
         }
         return Number.isFinite(local) ? local : 0;
     }
@@ -2640,6 +2723,10 @@ class ClientSync {
             let remote = this.validatedRemoteTableCount(table, remoteCounts[table]);
             if(remote === undefined) continue;
             let local = await this.localTableCountForVerification(table);
+            if(local === null){
+                if(opts && opts.unread instanceof Set) opts.unread.add(table);
+                continue;
+            }
             this.appendTableCountMismatch(mismatches, table, remote, local, exactParity);
         }
         return mismatches;
@@ -2807,16 +2894,18 @@ class ClientSync {
         if(!this.beginCompletenessSweep(source, remoteHeight)) return;
         try {
             if(this.dbType === 'decoder'){
-                let decoderShortfalls = await this.verifyCompletenessDecoder(source);
+                let unread = new Set();
+                let decoderShortfalls = await this.verifyCompletenessDecoder(source, unread);
                 if(Array.isArray(decoderShortfalls)){
                     let decoderRepairTried = await this.repairShortLookups(source, decoderShortfalls);
-                    await this.trackCompletenessGaps(source, decoderShortfalls, decoderRepairTried);
+                    await this.trackCompletenessGaps(source, decoderShortfalls, decoderRepairTried, unread);
                 }
                 return;
             }
             let remoteStatus = (await this.fetchCompletenessStatus(source)).data;
             if(!this.remoteStatusMatchesCompletenessHeight(remoteStatus)) return;
-            let mismatches = await this.verifyCompletenessCounts(remoteStatus);
+            let unread = new Set();
+            let mismatches = await this.verifyCompletenessCounts(remoteStatus, unread);
             let { shortfalls, ahead } = this.partitionCompletenessMismatches(mismatches);
             let repairTried = new Set();
             if(shortfalls.length){
@@ -2824,8 +2913,8 @@ class ClientSync {
                 repairTried = await this.repairShortLookups(source, shortfalls);
             }
             if(ahead.length) this.reportCompletenessAhead(source, ahead);
-            await this.trackCompletenessGaps(source, shortfalls, repairTried);
-            if(!mismatches.length && remoteStatus.table_counts)
+            await this.trackCompletenessGaps(source, shortfalls, repairTried, unread);
+            if(!mismatches.length && !unread.size && remoteStatus.table_counts)
                 this.reportCompletenessPass(source);
         } catch(e){
             getLogger().error(util.format('Periodic completeness sweep failed against ' + source + ':', e.message || e));
@@ -2833,9 +2922,9 @@ class ClientSync {
     }
 
     // Dispensers converges only on a reconcile cycle, so the decoder sweep excludes it.
-    verifyCompletenessDecoder(source){
+    verifyCompletenessDecoder(source, unread){
         return this.verifyDecoderCompleteness(source, this.lastAppliedBlock,
-            new Set(['dispensers']), { requireEqualHeight: true });
+            new Set(['dispensers']), { requireEqualHeight: true, unread });
     }
 
     fetchCompletenessStatus(source){
@@ -2844,9 +2933,9 @@ class ClientSync {
     }
 
     // Pass the counts' own height, so replica-ahead fires only on counts taken at ours.
-    verifyCompletenessCounts(remoteStatus){
+    verifyCompletenessCounts(remoteStatus, unread){
         return this.verifyTableCounts(remoteStatus.table_counts, undefined,
-            { remoteHeight: this.remoteTableCountsHeight(remoteStatus), localHeight: this.lastAppliedBlock });
+            { remoteHeight: this.remoteTableCountsHeight(remoteStatus), localHeight: this.lastAppliedBlock, unread });
     }
 
     partitionCompletenessMismatches(mismatches){
@@ -2873,9 +2962,9 @@ class ClientSync {
     }
 
     // A clean completed sweep clears tracked gaps, so this runs even without shortfalls.
-    trackCompletenessGaps(source, shortfalls, repairTried){
+    trackCompletenessGaps(source, shortfalls, repairTried, unread){
         return this.trackReplicaGaps(shortfalls, {
-            source: source, blockIndex: this.lastAppliedBlock, repaired: repairTried
+            source: source, blockIndex: this.lastAppliedBlock, repaired: repairTried, unread
         });
     }
 
@@ -2952,7 +3041,7 @@ class ClientSync {
             // volume the alert used, so an operator who was paged sees the recovery in
             // the same journal rather than inferring it from silence.
             for(let table of [...this._replicaGaps.keys()]){
-                if(seen.has(table)) continue;
+                if(seen.has(table) || (o.unread && o.unread.has(table))) continue;
                 let closed = this._replicaGaps.get(table);
                 this._replicaGaps.delete(table);
                 if(closed.alerts || closed.sweeps >= this._replicaGapAlertSweeps)
@@ -3047,14 +3136,16 @@ class ClientSync {
     }
 
     // Indexer tables whose registry class asserts exact row-set parity with the
-    // source: streamed forward (stream:*) and mirrored on rollback. Derived from
+    // source: streamed forward (stream:*) and mirrored on rollback, including
+    // special mirrored deletes. Derived from
     // tableLifecycle so there is no second hand-maintained list; snapshot / local /
     // hub-mirror / follower-derived / lookup classes (where extra local rows can be
     // legitimate) are excluded by construction.
     exactParityTables(){
         if(!this._exactParityTableSet){
             this._exactParityTableSet = new Set(tableLifecycle.tablesWhere(t =>
-                t.owner === 'indexer' && /^stream:/.test(t.replication) && t.replicaRollback === 'mirror'));
+                t.owner === 'indexer' && /^stream:/.test(t.replication) &&
+                (t.replicaRollback === 'mirror' || t.replicaRollback === 'special')));
         }
         return this._exactParityTableSet;
     }
@@ -3085,10 +3176,11 @@ class ClientSync {
         let firstResume = (this._lastDispenserReconcileAt == null);
         let periodic    = (this._catchUpCount % every === 0);
         let afterReorg  = (this._dispenserReconcileAfterReorg === true);
+        let pending     = (this._dispenserReconcilePending === true);
         // Free function, not this.dispenserReconcileIntervalDue: this method is exercised
         // through prototype.call with hand-built contexts, which carry config and the stamp
         // and nothing else.
-        return firstResume || periodic || afterReorg ||
+        return firstResume || periodic || afterReorg || pending ||
                dispenserIntervalDue(this.config, this._lastDispenserReconcileAt, nowMs);
     }
 
@@ -3112,57 +3204,108 @@ class ClientSync {
     // checked against SCHEMA_VERSION like the lookup-page and snapshot channels, so a
     // code-version mismatch aborts before the replace (the status-tick caller has no
     // earlier version-checked apply in front of it).
+    dispenserPageAnchor(anchor, page){
+        let pinned = Object.prototype.hasOwnProperty.call(page, 'block_height');
+        let mode = pinned ? 'pinned' : 'legacy';
+        let height = page.block_height == null ? null : Number(page.block_height);
+        let hash = page.block_hash == null ? null : String(page.block_hash);
+        if(pinned && height !== null && !Number.isSafeInteger(height))
+            throw new Error('Dispensers page has invalid block_height');
+        if(anchor.mode && (anchor.mode !== mode || anchor.height !== height || anchor.hash !== hash)){
+            let error = new Error('Dispensers pages disagree on source block identity');
+            error.dispenserAnchorMismatch = true;
+            throw error;
+        }
+        return { mode, height, hash };
+    }
+
+    async fetchDispensersDump(source, expected){
+        let all = [], afterTx = null, afterAddr = null;
+        let anchor = { mode: null, height: null, hash: null };
+        for(let guard = 0; guard < 1000000; guard++){
+            let url = source + '/snapshot-dispensers/' + this.dbType + '/' + this.chain + '/' + this.network +
+                (afterTx !== null ? '?after_tx=' + afterTx + '&after_addr=' + afterAddr : '');
+            let response = await axios.get(url, { headers: ClientSync.prototype.upstreamHeaders.call(this),
+                responseType: 'arraybuffer', timeout: 300000, decompress: true,
+                maxContentLength: this.config['SNAPSHOT_MAX_CONTENT'] });
+            let jsonStr = response.data;
+            if(Buffer.isBuffer(jsonStr)){
+                try { jsonStr = zlib.gunzipSync(jsonStr); } catch(e){}
+            }
+            let page = JSON.parse(jsonStr.toString());
+            if(page.schema_version !== expected)
+                throw new Error('Dispensers page schema mismatch: server=' +
+                    page.schema_version + ' client=' + expected);
+            anchor = ClientSync.prototype.dispenserPageAnchor.call(this, anchor, page);
+            let rows = Array.isArray(page.rows) ? page.rows : [];
+            for(let row of rows) all.push(row);
+            if(!page.has_more || rows.length === 0) break;
+            afterTx = page.max_tx; afterAddr = page.max_addr;
+        }
+        return { all, anchor };
+    }
+
+    deferDispenserReconcile(reason){
+        this._dispenserReconcilePending = true;
+        getLogger().warn('Dispensers reconcile skipped: ' + reason);
+        return false;
+    }
+
+    async applyDispensersDump(dump, startHeight){
+        let { all, anchor } = dump;
+        if(anchor.mode === 'pinned'){
+            if(startHeight == null || anchor.height !== Number(startHeight))
+                return ClientSync.prototype.deferDispenserReconcile.call(this, 'source at block ' + anchor.height +
+                    ', replica at ' + startHeight);
+            if(anchor.hash == null)
+                return ClientSync.prototype.deferDispenserReconcile.call(this,
+                    'source block hash is unresolved at block ' + startHeight);
+            if(this.lastHashes && this.lastHashes.block_hash != null && this.lastHashes.block_hash !== anchor.hash)
+                return ClientSync.prototype.deferDispenserReconcile.call(this,
+                    'source and replica hashes differ at block ' + startHeight);
+        } else if(!this._warnedLegacyDispenserHeight){
+            this._warnedLegacyDispenserHeight = true;
+            getLogger().warn('Dispensers source has no block identity; applying legacy unpinned dump');
+        }
+        let skipReason = null;
+        await this.withApplyLock(async () => {
+            if(anchor.mode === 'pinned' && Number(this.lastAppliedBlock) !== Number(startHeight)){
+                skipReason = 'replica advanced from block ' + startHeight + ' during download';
+                return;
+            }
+            if(anchor.mode === 'pinned'){
+                let tip = await this.db.getBlockHashRow(startHeight, null, { rethrow: true });
+                if(!tip || tip.block_hash == null || tip.block_hash !== anchor.hash){
+                    skipReason = 'replica block hash changed at block ' + startHeight;
+                    return;
+                }
+            }
+            await this.applier.applyDispensersReplace(all);
+        });
+        return skipReason ? ClientSync.prototype.deferDispenserReconcile.call(this, skipReason) : true;
+    }
+
     // Returns true only once the replace has committed, false on every skip or failure.
     async reconcileDispensers(source){
-        if(this.dbType !== 'decoder') return false;
-        if(!source) return false;
-        // Stamp the attempt so a failing re-dump is retried once per interval, not per tick.
-        this._lastDispenserReconcileAttemptAt = Date.now();
-        // Clear the post-reorg trigger on attempt, not success: a later reorg re-arms it,
-        // and a failing source then falls back to the interval instead of every tick.
+        if(this.dbType !== 'decoder' || !source) return false;
+        let attemptAt = Date.now();
+        let startHeight = this.lastAppliedBlock;
         this._dispenserReconcileAfterReorg = false;
-        let expected = SCHEMA_VERSION[this.dbType];
         try {
-            let all = [];
-            let afterTx = null, afterAddr = null;
-            for(let guard = 0; guard < 1000000; guard++){
-                let url = source + '/snapshot-dispensers/' + this.dbType + '/' + this.chain + '/' + this.network +
-                    (afterTx !== null ? '?after_tx=' + afterTx + '&after_addr=' + afterAddr : '');
-                let response = await axios.get(url, {
-                    headers: this.upstreamHeaders(),
-                    responseType: 'arraybuffer',
-                    timeout: 300000,
-                    decompress: true,
-                    maxContentLength: this.config['SNAPSHOT_MAX_CONTENT']
-                });
-                let jsonStr = response.data;
-                if(Buffer.isBuffer(jsonStr)){
-                    try { jsonStr = zlib.gunzipSync(jsonStr); } catch(e){}
-                }
-                let page = JSON.parse(jsonStr.toString());
-                if(page.schema_version !== expected){
-                    throw new Error('Dispensers page schema mismatch: server=' +
-                        page.schema_version + ' client=' + expected);
-                }
-                let rows = Array.isArray(page.rows) ? page.rows : [];
-                for(let r of rows) all.push(r);
-                if(!page.has_more || rows.length === 0) break;
-                afterTx = page.max_tx; afterAddr = page.max_addr;
-            }
-            await this.withApplyLock(() => this.applier.applyDispensersReplace(all));
-            // Stamp on success (covers bootstrap + catch-up reconciles) so the resume
-            // and max-interval triggers in incrementalCatchUp can tell when dispensers
-            // were last converged.
+            let dump = await ClientSync.prototype.fetchDispensersDump.call(
+                this, source, SCHEMA_VERSION[this.dbType]);
+            if(!await ClientSync.prototype.applyDispensersDump.call(this, dump, startHeight)) return false;
+            this._lastDispenserReconcileAttemptAt = attemptAt;
             this._lastDispenserReconcileAt = Date.now();
-            getLogger().info('Dispensers reconcile: replaced ' + all.length + ' rows from ' + source +
+            this._dispenserReconcilePending = false;
+            getLogger().info('Dispensers reconcile: replaced ' + dump.all.length + ' rows from ' + source +
                 ' for ' + this.chain + '/' + this.network);
             return true;
         } catch(e){
-            // Best-effort: leave the existing local dispensers intact on any failure.
+            if(e && e.dispenserAnchorMismatch) this._dispenserReconcilePending = true;
+            else this._lastDispenserReconcileAttemptAt = attemptAt;
             getLogger().error(util.format('Dispensers reconcile failed against ' + source +
                 ' (local table left intact):', (e && e.message) ? e.message : e));
-            // A source column this replica lacks fails the replace with errno 1054 on every
-            // later reconcile, and no other live-follow path meets it, so heal the schema here.
             try { await this.healSchemaIfStale(e); } catch(healErr){ /* advisory only */ }
             return false;
         }
@@ -3215,12 +3358,18 @@ class ClientSync {
             });
         } catch(e){
             getLogger().error(util.format('WebSocket connection error:', e));
-            this._sourcesNeedingRecovery.add(sourceIndex);
+            this.markSourceNeedsRecovery(sourceIndex);
             this.scheduleReconnect(source, sourceIndex);
             return;
         }
 
         return ws;
+    }
+
+    // Permanent eviction means the source will never reconnect and never owes catch-up.
+    markSourceNeedsRecovery(sourceIndex){
+        if(this._evictedSources.has(sourceIndex)) return;
+        this._sourcesNeedingRecovery.add(sourceIndex);
     }
 
     registerWebSocketHandlers(ws, source, sourceIndex){
@@ -3238,11 +3387,10 @@ class ClientSync {
         this.armStreamWatchdog(source, sourceIndex, ws);
 
         if(this._sourcesNeedingRecovery.delete(sourceIndex) && this.running && this.lastAppliedBlock !== null){
-            const since = (typeof this._verifiedTip === 'number')
-                ? this._verifiedTip + 1 : this.lastAppliedBlock + 1;
-            getLogger().info('WebSocket restored from ' + source + '; resuming ' +
+            const since = this.lastAppliedBlock + 1;
+            getLogger().info('WebSocket restored from ' + source + '; re-verifying any unverified tail of ' +
                 this.chain + '/' + this.network + '/' + this.dbType +
-                ' from its last verified block');
+                ' and resuming from committed block ' + since);
             const recovery = Promise.resolve().then(() => this.incrementalCatchUp(since));
             this.trackInFlight(recovery).catch(e => this.handleWsChainError(e));
         }
@@ -3288,7 +3436,7 @@ class ClientSync {
         if(!ws || this.wsConns[sourceIndex] === ws) this.wsConns[sourceIndex] = null;
         this.clearStreamWatchdog(sourceIndex);
         this._sourceLastWsEventAt.delete(sourceIndex);
-        if(this.running) this._sourcesNeedingRecovery.add(sourceIndex);
+        if(this.running) this.markSourceNeedsRecovery(sourceIndex);
         // A disconnected source provides no evidence about upstream freshness, so its
         // last verdict cannot continue certifying that source.
         this._upstreamStatus.delete(sourceIndex);
@@ -3298,7 +3446,7 @@ class ClientSync {
     handleWebSocketError(err, source, sourceIndex, ws){
         getLogger().error(util.format('WebSocket error from ' + source + ':', err.message));
         if(!this.running || sourceIndex === undefined || (ws && this.wsConns[sourceIndex] !== ws)) return;
-        this._sourcesNeedingRecovery.add(sourceIndex);
+        this.markSourceNeedsRecovery(sourceIndex);
         this.scheduleReconnect(source, sourceIndex);
     }
 
@@ -3400,7 +3548,7 @@ class ClientSync {
         getLogger().warn('WebSocket stream from ' + source + ' has produced no sync event for ' +
             staleMs + 'ms while its source tip advanced from ' + reportedTip + ' to ' + sourceTip +
             '; reconnecting ' + this.chain + '/' + this.network + '/' + this.dbType);
-        this._sourcesNeedingRecovery.add(sourceIndex);
+        this.markSourceNeedsRecovery(sourceIndex);
         this._upstreamStatus.delete(sourceIndex);
         if(!ws || this.wsConns[sourceIndex] === ws) this.wsConns[sourceIndex] = null;
         try {
@@ -3524,8 +3672,7 @@ class ClientSync {
 
         // Match the indexer's head-fork protection through the decoder's block hash.
         if(blockIndex !== this.lastAppliedBlock ||
-           !this.lastHashes || !this.lastHashes.block_hash ||
-           !event.block_hash || event.block_hash === this.lastHashes.block_hash) return null;
+           !this.decoderBlockHashesMismatch(event, this.lastHashes)) return null;
 
         getLogger().error('Chain continuity error (decoder): fork at head block ' + blockIndex +
             '; stored block_hash ' + this.lastHashes.block_hash +
@@ -3538,19 +3685,12 @@ class ClientSync {
     handleIndexerHeadDuplicate(event, sourceIndex){
         let blockIndex = event.block_index;
 
-        // Restrict hash comparison to a re-delivery of the committed head.
-        // Leave older duplicate heights on the ordinary silent-skip path.
         if(blockIndex !== this.lastAppliedBlock || !this.lastHashes) return null;
 
         // Compare the three chain-of-state hashes because indexer events carry no
         // block_hash. A mismatch identifies a one-block reorg across a socket drop.
         // Keep null fields out of the comparison because they do not supply evidence.
-        let lh = this.lastHashes;
-        let mismatch =
-            (event.ledger_hash   != null && lh.ledger_hash   != null && event.ledger_hash   !== lh.ledger_hash) ||
-            (event.actions_hash  != null && lh.actions_hash  != null && event.actions_hash  !== lh.actions_hash) ||
-            (event.contract_hash != null && lh.contract_hash != null && event.contract_hash !== lh.contract_hash);
-        if(!mismatch) return null;
+        if(!this.indexerBlockHashesMismatch(event, this.lastHashes)) return null;
 
         // Rewind before catch-up so the orphaned predecessor cannot enter local hash
         // recomputation. Matching duplicates remain silent skips.
@@ -3564,15 +3704,58 @@ class ClientSync {
         return this.handleSourceReorg({ type: 'reorg', block_index: blockIndex }, sourceIndex, true);
     }
 
+    indexerBlockHashesMismatch(event, stored){
+        if(!stored) return false;
+        return ['ledger_hash', 'actions_hash', 'contract_hash'].some(field =>
+            event[field] != null && stored[field] != null && event[field] !== stored[field]);
+    }
+
+    decoderBlockHashesMismatch(event, stored){
+        return !!(stored && event.block_hash != null && stored.block_hash != null &&
+            event.block_hash !== stored.block_hash);
+    }
+
+    // A replacement block can carry the same three chained hashes yet differ in the
+    // block row itself, so a below-tip indexer comparison also checks the block time
+    // and the state hash. A null on either side is no evidence.
+    indexerBlockRowMismatch(event, stored){
+        if(this.indexerBlockHashesMismatch(event, stored)) return true;
+        if(event.state_hash != null && stored.state_hash != null &&
+           event.state_hash !== stored.state_hash) return true;
+        if(event.block_time == null || stored.block_time == null) return false;
+        return Number(event.block_time) !== Number(stored.block_time);
+    }
+
+    async handleBelowTipDuplicate(event, sourceIndex){
+        let blockIndex = event.block_index;
+        let stored = await this.db.getBlockHashRow(blockIndex, null, { rethrow: true });
+        if(!stored) return;
+        let mismatch = this.dbType === 'decoder'
+            ? this.decoderBlockHashesMismatch(event, stored)
+            : this.indexerBlockRowMismatch(event, stored);
+        if(!mismatch) return;
+        getLogger().error('Chain continuity error (' + this.dbType + '): replaced block ' +
+            blockIndex + ' below committed tip ' + this.lastAppliedBlock +
+            '; rewinding the orphaned range once the source quorum agrees');
+        if(sourceIndex === undefined || sourceIndex === null) return this.rewindForkedHead(blockIndex);
+        return this.handleSourceReorg({ type: 'reorg', block_index: blockIndex }, sourceIndex, true);
+    }
+
     handlePreviouslyAppliedBlock(event, sourceIndex){
         let blockIndex = event.block_index;
         if(this.lastAppliedBlock === null || blockIndex > this.lastAppliedBlock) return null;
 
-        // Check a duplicate at the current head for a fork before skipping it.
-        // Skip older heights without a fork check because they cannot replace the tip.
+        // Fork-check every re-delivered height at or below the tip. The head uses
+        // cached hashes; older heights read their stored row. Matching duplicates
+        // and rows with no comparable hash evidence remain silent skips.
         let completion = null;
-        if(this.dbType === 'decoder') completion = this.handleDecoderHeadDuplicate(event, sourceIndex);
-        else if(this.dbType === 'indexer') completion = this.handleIndexerHeadDuplicate(event, sourceIndex);
+        if(blockIndex < this.lastAppliedBlock){
+            completion = this.handleBelowTipDuplicate(event, sourceIndex);
+        } else if(this.dbType === 'decoder'){
+            completion = this.handleDecoderHeadDuplicate(event, sourceIndex);
+        } else if(this.dbType === 'indexer'){
+            completion = this.handleIndexerHeadDuplicate(event, sourceIndex);
+        }
         return { completion };
     }
 
@@ -3703,66 +3886,69 @@ class ClientSync {
         return null;
     }
 
+    dropStaleBlockQuorumTimeout(blockIndex, reorgGeneration){
+        if(!this.pendingHashes.has(blockIndex)) return false;
+        if(reorgGeneration === this._reorgGeneration && this.lastAppliedBlock !== null &&
+           blockIndex === this.lastAppliedBlock + 1) return false;
+        getLogger().warn('Dropping stale cross-source quorum timeout for block ' + blockIndex +
+            ' at applied tip ' + this.lastAppliedBlock);
+        this.pendingHashes.delete(blockIndex);
+        this._strictConfirmPending.delete(blockIndex);
+        return true;
+    }
+
+    async handleBlockQuorumTimeout(event, reorgGeneration){
+        let blockIndex = event.block_index;
+        if(this._stopping) return;
+        this._applyTimers.delete(blockIndex);
+        if(this.dropStaleBlockQuorumTimeout(blockIndex, reorgGeneration) ||
+           !this.pendingHashes.has(blockIndex)) return;
+        if(this.config['HASH_CONFIRM_STRICT']){
+            getLogger().error('STRICT: Cross-source quorum timeout for block ' + blockIndex +
+                ', rejecting and blocking single-source catch-up (HASH_CONFIRM_STRICT=true)');
+            this._strictConfirmPending.add(blockIndex);
+            return;
+        }
+        let pending = this.pendingHashes.get(blockIndex);
+        let { groups, baseStates } = this.tallyPendingBlockHashes(pending);
+        let heldKey = this.voteKey(event, baseStates);
+        if(groups.size > 1){
+            getLogger().error('Cross-source quorum timeout for block ' + blockIndex +
+                ' with conflicting source reports; rejecting instead of applying the first arrival');
+            try {
+                await this.rejectBlockWithoutQuorum(blockIndex, groups);
+            } catch(e){
+                getLogger().error(util.format('Error rejecting block ' + blockIndex +
+                    ' after cross-source timeout:', e));
+            }
+            return;
+        }
+        if(!groups.has(heldKey)){
+            getLogger().error('Cross-source quorum timeout for block ' + blockIndex +
+                ': the held report is no longer an active source\'s; not applying it');
+            this.pendingHashes.delete(blockIndex);
+            return;
+        }
+        getLogger().info('Cross-source quorum timeout for block ' + blockIndex +
+            ', applying the uncontested report');
+        try {
+            await this.applyBlockEvent(this.checkableGroupEvent(pending, groups.get(heldKey), event),
+                { reorgGeneration });
+        } catch(e){
+            getLogger().error(util.format('Error applying block ' + blockIndex +
+                ' after cross-source timeout:', e));
+        }
+        this.pendingHashes.delete(blockIndex);
+    }
+
     // Arm one liveness fallback while another source is silent or slow.
-    // A split is rejected when all active sources report. Apply the available
-    // payload only when strict confirmation is disabled.
     armBlockQuorumTimer(event){
         if(this._stopping) return;
         let blockIndex = event.block_index;
         if(this._applyTimers.has(blockIndex)) return;
-
-        let timer = setTimeout(async () => {
-            if(this._stopping) return;
-            // Remove the timer marker before examining confirmation state so a later
-            // arrival can create a fresh timer when the block remains unresolved.
-            this._applyTimers.delete(blockIndex);
-
-            // Skip fallback after another path applies the height or clears its tuple.
-            if(this.pendingHashes.has(blockIndex) && this.lastAppliedBlock < blockIndex){
-                if(this.config['HASH_CONFIRM_STRICT']){
-                    getLogger().error('STRICT: Cross-source quorum timeout for block ' + blockIndex +
-                        ', rejecting and blocking single-source catch-up (HASH_CONFIRM_STRICT=true)');
-
-                    // Retain pending hashes so a later delivery can complete quorum,
-                    // and block single-source catch-up in the meantime.
-                    // Mark the height strict-pending until another source confirms it.
-                    this._strictConfirmPending.add(blockIndex);
-                } else {
-                    // Re-tally the reports that arrived while waiting. The fallback covers a
-                    // SILENT source only: a height another active source already contests is
-                    // rejected like a split every source reported, never applied first-come.
-                    let pending = this.pendingHashes.get(blockIndex);
-                    let { groups, baseStates } = this.tallyPendingBlockHashes(pending);
-                    let heldKey = this.voteKey(event, baseStates);
-                    if(groups.size > 1){
-                        getLogger().error('Cross-source quorum timeout for block ' + blockIndex +
-                            ' with conflicting source reports; rejecting instead of applying the first arrival');
-                        try {
-                            await this.rejectBlockWithoutQuorum(blockIndex, groups);
-                        } catch(e){
-                            getLogger().error(util.format('Error rejecting block ' + blockIndex + ' after cross-source timeout:', e));
-                        }
-                        return;
-                    }
-                    // Never apply a payload whose source was evicted while it waited.
-                    if(!groups.has(heldKey)){
-                        getLogger().error('Cross-source quorum timeout for block ' + blockIndex +
-                            ': the held report is no longer an active source\'s; not applying it');
-                        this.pendingHashes.delete(blockIndex);
-                        return;
-                    }
-                    getLogger().info('Cross-source quorum timeout for block ' + blockIndex +
-                        ', applying the uncontested report');
-                    // Guards the timer callback: applyBlockEvent can still reject before its own catch.
-                    try {
-                        await this.applyBlockEvent(this.checkableGroupEvent(pending, groups.get(heldKey), event));
-                    } catch(e){
-                        getLogger().error(util.format('Error applying block ' + blockIndex + ' after cross-source timeout:', e));
-                    }
-                    this.pendingHashes.delete(blockIndex);
-                }
-            }
-        }, this.config['HASH_CONFIRM_TIMEOUT']);
+        const reorgGeneration = this._reorgGeneration;
+        let timer = setTimeout(() => this.handleBlockQuorumTimeout(event, reorgGeneration),
+            this.config['HASH_CONFIRM_TIMEOUT']);
         this._applyTimers.set(blockIndex, timer);
     }
 
@@ -4444,6 +4630,19 @@ class ClientSync {
         }
     }
 
+    pruneBlockWorkAboveTip(){
+        if(this.lastAppliedBlock === null) return;
+        for(let [key] of this.pendingHashes){
+            if(key > this.lastAppliedBlock) this.pendingHashes.delete(key);
+        }
+        for(let [key, timer] of this._applyTimers){
+            if(key > this.lastAppliedBlock){
+                clearTimeout(timer);
+                this._applyTimers.delete(key);
+            }
+        }
+    }
+
     // Whether the checkpoint-quorum anchor runs for this client's (chain, network): the
     // explicit VERIFY_CHECKPOINT_QUORUM when set, else that key's shipped default.
     checkpointQuorumOn(){
@@ -4454,6 +4653,24 @@ class ClientSync {
         // Check whether the verified tip reaches the next checkpoint interval.
         return this.dbType === 'indexer' && this.checkpointQuorumOn()
             && (this.lastAppliedBlock - (this._lastCheckpointVerifyBlock || 0)) >= this.config['CHECKPOINT_VERIFY_INTERVAL'];
+    }
+
+    // Run the pinned anchor once an interval of blocks has landed since the last run, so
+    // the cadence follows the tip however it advanced (a live block or a catch-up pass).
+    async verifyCheckpointQuorumIfDue(){
+        if(!this.checkpointQuorumIsDue()) return;
+        this._lastCheckpointVerifyBlock = this.lastAppliedBlock;
+        await this.verifyCheckpointQuorum();
+    }
+
+    // The anchor step of a catch-up pass that applied cleanly. A fault here is logged and
+    // kept out of the catch-up failure path, which would read it as a failed download or apply.
+    async anchorCheckpointAfterCatchUp(){
+        try {
+            await this.verifyCheckpointQuorumIfDue();
+        } catch(e){
+            getLogger().error(util.format('Checkpoint-quorum anchor after catch-up failed:', e));
+        }
     }
 
     // Recompute a live indexer block's state_hash when the event carries one, and halt
@@ -4487,8 +4704,8 @@ class ClientSync {
     }
 
     // Apply one live block and verify it; the shutdown drain waits for the whole of it.
-    applyBlockEvent(event){
-        return this.trackInFlight(this.applyAndVerifyBlock(event));
+    applyBlockEvent(event, opts){
+        return this.trackInFlight(this.applyAndVerifyBlock(event, opts));
     }
 
     // Refuse a live block while committed blocks below it are unverified, until the walk
@@ -4501,7 +4718,21 @@ class ClientSync {
         return true;
     }
 
-    async applyAndVerifyBlock(event){
+    applyLiveBlockUnderLock(event, opts){
+        return this.withApplyLock(async () => {
+            if(opts && opts.reorgGeneration !== undefined &&
+               opts.reorgGeneration !== this._reorgGeneration) return 'reorged';
+            if(this.lastAppliedBlock !== null && event.block_index !== this.lastAppliedBlock + 1)
+                return event.block_index <= this.lastAppliedBlock ? 'stale' : 'noncontiguous';
+            let committed = await this.applier.applyBlock(event);
+            if(committed !== false) return 'applied';
+            let dbTip = await this.db.getLastBlock(null, { rethrow: true });
+            return dbTip !== null && Number(dbTip) > Number(event.block_index)
+                ? 'stale' : 'applied';
+        });
+    }
+
+    async applyAndVerifyBlock(event, opts){
         // Refuse new blocks while the client is halted on a consensus divergence.
         if(this._halted){
             getLogger().error('Refusing to apply block ' + (event && event.block_index) +
@@ -4513,15 +4744,17 @@ class ClientSync {
         if(await this.liveBlockBlockedByUnverifiedTail(event)) return;
         let generation = this.rowGeneration();
         try {
-            let stale = await this.withApplyLock(async () => {
-                let committed = await this.applier.applyBlock(event);
-                if(committed !== false) return false;
-                let dbTip = await this.db.getLastBlock(null, { rethrow: true });
-                return dbTip !== null && Number(dbTip) > Number(event.block_index);
-            });
-            if(stale){
+            let applyResult = await this.applyLiveBlockUnderLock(event, opts);
+            if(applyResult === 'stale'){
                 getLogger().info('Skipping stale live block ' + event.block_index +
                     ': a concurrent apply committed a newer stored tip');
+                return;
+            }
+            if(applyResult === 'reorged' || applyResult === 'noncontiguous'){
+                getLogger().error('Refusing live block ' + event.block_index + ' at applied tip ' +
+                    this.lastAppliedBlock + ': ' + (applyResult === 'reorged'
+                        ? 'a reorg completed while the block was waiting'
+                        : 'the block is not contiguous'));
                 return;
             }
             let computedRoots = this.carryUnverifiedRoots(event);
@@ -4548,10 +4781,7 @@ class ClientSync {
             this.finishAppliedBlock(event);
             if(this.tracksVerifiedTip()) await this.advanceVerifiedTip(event.block_index, generation);
             this.clearAppliedBlockWork();
-            if(this.checkpointQuorumIsDue()){
-                this._lastCheckpointVerifyBlock = this.lastAppliedBlock;
-                await this.verifyCheckpointQuorum();
-            }
+            await this.verifyCheckpointQuorumIfDue();
         } catch(e){
             getLogger().error(util.format('Error applying block %s:', event.block_index, e));
             // A committed block whose verification threw is held, not advanced: the
@@ -4566,6 +4796,7 @@ class ClientSync {
     // set and assert its state_root equals the replica's own recomputed root at that height.
     // Inert without a pinned set or checkpoint. Halts on a real quorum or root failure, on a
     // checkpoint for another chain or network, and under strict freshness on a stale anchor.
+    // A cycle that throws anchors nothing and counts toward that same freshness bound.
     async verifyCheckpointQuorum(){
         if(this._halted) return;
         let validators = getPinnedValidators(this.chain, this.network);
@@ -4573,7 +4804,14 @@ class ClientSync {
         // The anchor comes from the out-of-band URL when set, so the audited source cannot withhold it.
         let source = this.config['CHECKPOINT_ANCHOR_URL'] || this.primarySource();
         if(!source) return;
-        let outcome = await this.anchorLatestCheckpoint(source, validators);
+        let outcome;
+        try {
+            outcome = await this.anchorLatestCheckpoint(source, validators);
+        } catch(e){
+            getLogger().error(util.format('Checkpoint-quorum anchor: failed for ' + this.chain + '/' +
+                this.network + '; anchor not refreshed this cycle and counts toward strict freshness:', e));
+            outcome = 'unanchored';
+        }
         if(outcome === 'unanchored') await this.enforceVerifiedAnchorFreshness();
     }
 
@@ -5039,6 +5277,16 @@ class ClientSync {
                 if(typeof this.refuseReorgWhileHalted === 'function') this.refuseReorgWhileHalted(event);
                 return false;
             }
+            // The caller's above-tip check ran before this lock was taken, so a rollback that
+            // queued ahead of this one may have lowered the tip below the target. Re-test
+            // under the lock: a rollback to an unapplied height deletes nothing and would
+            // otherwise move the cursor forward past blocks the replica does not hold.
+            if(this.lastAppliedBlock !== null && event.block_index > this.lastAppliedBlock){
+                getLogger().warn('Skipping reorg for ' + this.chain + '/' + this.network +
+                    ': target block ' + event.block_index + ' is above the replica tip (' +
+                    this.lastAppliedBlock + ') once the apply lock was taken; a no-op');
+                return false;
+            }
             // Lower the verified marker durably before any row goes: a marker left above
             // the rollback would vouch for the replacement blocks. A failed write throws
             // here, before the delete, and handleReorg halts on it.
@@ -5052,18 +5300,19 @@ class ClientSync {
             } finally {
                 this.endRowRemoval();
             }
+            this.lastAppliedBlock = event.block_index - 1;
+            this._reorgGeneration++;
+            // Reload the new tip's hashes, genesis block 0 included.
+            if(this.lastAppliedBlock >= 0)
+                this.lastHashes = await this.db.getBlockHashRow(this.lastAppliedBlock);
+            else
+                this.lastHashes = null;
             return true;
         });
         if(!applied) return false;
         // The source rewrote dispensers off-stream for the orphaned blocks, so arm a reconcile
         // for the next status tick or catch-up rather than waiting out the interval.
         if(this.dbType === 'decoder') this._dispenserReconcileAfterReorg = true;
-        this.lastAppliedBlock = event.block_index - 1;
-        // Reload the new tip's hashes, genesis block 0 included (the head-duplicate fork check reads them).
-        if(this.lastAppliedBlock >= 0)
-            this.lastHashes = await this.db.getBlockHashRow(this.lastAppliedBlock);
-        else
-            this.lastHashes = null;
         return true;
     }
 
@@ -5110,6 +5359,7 @@ class ClientSync {
             await this.haltForReorgRollbackFailure(event, e);
         }
         this.prunePendingReorgs();
+        this.pruneBlockWorkAboveTip();
     }
 
     // Require matching quorum evidence for deep retroactive reports rather than

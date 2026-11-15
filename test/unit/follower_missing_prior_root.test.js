@@ -12,7 +12,7 @@
  *
  * The FOLLOWER twin of the source's "no prior state_tree_roots row" guard.
  *
- * The indexer twin (xchain-indexer/src/stateCommitment.js) full-recomputes when
+ * The indexer twin (xchain-indexer/src/state_commitment/index.js) full-recomputes when
  * block-1 has no roots row, and its comment names the alternative as the thing
  * not to do: "Do NOT substitute the empty-tree root: that silently emits a
  * balances_root forked from a from-genesis node." The follower threaded from

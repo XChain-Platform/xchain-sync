@@ -114,6 +114,22 @@ describe('ClientRollback', function(){
             assert.strictEqual(db.commitTransaction.called, false);
         });
 
+        it('preserves a pre-floor escrow gate during a truncated rollback', async function(){
+            db.getSyncState = sinon.stub().resolves('50');
+            db.doQuery.withArgs(sinon.match(/SELECT DISTINCT tk\.tick FROM tokens/), [])
+                .resolves([{ tick: 'PRE' }]);
+            db.doQuery.withArgs(sinon.match(/SELECT t\.escrow_action_index/), ['PRE'])
+                .resolves([{ escrow_action_index: 400 }]);
+
+            await rollback.rollback(100);
+
+            assert.ok(db.getFirstActionIndex.secondCall.calledWith(50, null, { rethrow: true }));
+            let gateUpdates = db.doQuery.getCalls().filter(c =>
+                typeof c.args[0] === 'string' &&
+                c.args[0].includes('UPDATE tokens SET escrow_action_index'));
+            assert.strictEqual(gateUpdates.length, 0);
+        });
+
     });
 });
 

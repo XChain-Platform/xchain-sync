@@ -98,8 +98,9 @@ async function collectTokenEditRows(db, from, to, conn, acc){
     //    FORWARD ONLY here. A reorg that orphans an edit-ISSUE leaves no valid `issues`
     //    row in any later window, so nothing re-emits the row while the source re-folds
     //    back (rollback/commit.js -> updateTokens). The reverse leg is replica-side:
-    //    ClientRollback refolds every tick the orphaned range issued on from the surviving
-    //    issues (src/db/token_refold.js), inside the rollback transaction.
+    //    ClientRollback refolds every tick the orphaned range touched through the source
+    //    rollback's ticker-bearing tables (token_refold.collectRefoldTickIds) from the
+    //    surviving issues (src/db/token_refold.js), inside the rollback transaction.
     //
     //    UN-GATED, like classes 5 and 5b: shipping a row is not a hash preimage, and no
     //    state_hash class covers these columns (the token_supply twin hashes (tick, supply)

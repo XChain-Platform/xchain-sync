@@ -60,6 +60,11 @@
  *     (db/state_commitment/ledger_reads.js) selects both sums and returns
  *     bcstr(bcsub(cr, dr, 18)). The case pins both sums and both renders; the
  *     e2e state_commitment_conformance suite proves the renders agree.
+ *   - The balances_root full-build gate (activation block, arming block, missing prior
+ *     row) computes armingBlock inline in computeFollowerBalancesRoot where the indexer
+ *     hoists it out of its journal-writing step, and reads the prior root as one row or
+ *     null where the indexer reads a row list (`!prior.length` here is noPriorRoot),
+ *     which agree because balances_root is NOT NULL. The disjunct order is irrelevant.
  *
  * TWO DECLARED DIVERGENCES in the twinned SMT code, and they are the only ones
  * there. Each is root-neutral, each is pinned by its own case in
@@ -403,7 +408,7 @@ async function reportOrphanStats(query, chain, network, opts){
 //
 // `extraSubRoots` is the forward-compatible carrier for ownership_root /
 // tokens_root / contract_state_root and MUST be the output of
-// state_subtree_activation.gateSubRoots(), never a caller's raw candidates: the
+// state_subtree_gate.gateSubRoots(), never a caller's raw candidates: the
 // gate is what keeps an un-armed slot EMPTY. It is null today (every slot inert),
 // and merkle.stateRoot() maps a null/absent/empty-root slot to the identical
 // EMPTY_SMT_ROOT leaf, so this is byte-identical to the old two-argument
@@ -698,8 +703,9 @@ async function computeFollowerBalancesRoot(db, smt, chain, network, blockIndex, 
     // and application end to end, and the two twins' shadow columns are the §7
     // cross-twin comparison.
     const escShadow = SUB.isEscrowLockedLeafShadowActive(blockIndex, network, chain);
-    // The ARMING BLOCK full-builds too, byte-for-byte with the source twin's gate in
-    // xchain-indexer/src/state_commitment/index.js. The incremental branch below
+    // The ARMING BLOCK full-builds too, matching the source twin's gate in
+    // xchain-indexer/src/state_commitment/index.js (pinned by the balances_root
+    // full-build gate cases in 03_state_root_assembly_twin.test.js). The incremental branch below
     // applies escrow leaves from journal rows stamped at THIS height only, while the
     // arming replay deliberately writes no row for a key whose locked total is
     // unchanged. After a §7 shadow window every still-unchanged live lock therefore has

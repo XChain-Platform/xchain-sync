@@ -32,6 +32,7 @@ const ClientRollback  = require('./client/rollback');
 const HashVerifier    = require('./client/hash_verifier');
 const { assertTransactionsDataWidth } = require('./client/decoder_link');
 const stateCommitment = require('./state_commitment');
+const metricInterval  = require('./state_commitment/metric_interval.js');
 const { assertBootstrapDepthChains } = require('./config');
 const { assertPinnedEnvOverrides }   = require('./client/pinned_validators');
 const { coinTicker, activationDelayBlocks } = require('./consensus-constants');
@@ -359,11 +360,16 @@ class SyncService {
     // ClientSync starts.
     validateFirstDiscoveryPass(){
         if(this.config['SYNC_MODE'] !== 'server' && !this._bootstrapDepthChecked && this.databases.size > 0){
+            try {
+                assertBootstrapDepthChains(this.config, this.getChains());
+                // An invalid CHECKPOINT_VALIDATORS_*/CHECKPOINT_SEED_* value resolves like an
+                // absent one and would skip the quorum anchor, so refuse it on the same pass.
+                assertPinnedEnvOverrides();
+            } catch(e){
+                e.startupRefusal = true;
+                throw e;
+            }
             this._bootstrapDepthChecked = true;
-            assertBootstrapDepthChains(this.config, this.getChains());
-            // An invalid CHECKPOINT_VALIDATORS_*/CHECKPOINT_SEED_* value resolves like an
-            // absent one and would skip the quorum anchor, so refuse it on the same pass.
-            assertPinnedEnvOverrides();
         }
     }
 
@@ -470,6 +476,11 @@ class SyncService {
                 if(newChains.length > 0)
                     getLogger().info('Discovered ' + newChains.length + ' new chain(s) from hub');
             } catch(e){
+                if(e && e.startupRefusal){
+                    getLogger().error(util.format('Refusing to start on hub re-poll; exiting for restart:', e));
+                    process.exit(1);
+                    return;
+                }
                 getLogger().error(util.format('Hub re-poll error:', e));
             }
         }, this.config['HUB_REPOLL_INTERVAL']);
@@ -485,8 +496,12 @@ class SyncService {
     startStateTreeMetric(){
         if(this._stateTreeMetricTimer) return;
         const raw = envConfig.stateTreeMetricIntervalMsFromEnv();
-        const intervalMs = Number.isFinite(raw) ? raw : (4 * 60 * 60 * 1000);
-        if(intervalMs === 0) return;   // explicitly disabled
+        const resolved = metricInterval.resolveStateTreeMetricIntervalMs(raw);
+        if(resolved.disabled) return;
+        const intervalMs = resolved.intervalMs;
+        if(resolved.adjusted)
+            getLogger().warn('SyncService: invalid STATE_TREE_METRIC_INTERVAL_MS=' + String(raw) +
+                '; using ' + intervalMs + 'ms (0 disables, accepted range 60000..2147483647)');
         this._stateTreeMetricRunning = false;
         this._stateTreeMetricTimer = setInterval(async () => {
             if(this._stateTreeMetricRunning) return;

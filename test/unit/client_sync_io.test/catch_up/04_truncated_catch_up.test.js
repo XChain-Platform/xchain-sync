@@ -100,8 +100,12 @@ describe('ClientSync truncated catch-up', function(){
         // paging high-water T1, so blocks (T1..T2] reference index_* rows not pulled
         // in the first page. The second syncLookupTablesPaged must run after apply.
         ({ sync, db, applier } = makeSync({ SYNC_BOOTSTRAP_DEPTH: { 'BTC:MAINNET': 50000 } }));
-        let paged = sinon.stub(sync, 'syncLookupTablesPaged').resolves();
+        let tipsDuringPaging = [];
+        let paged = sinon.stub(sync, 'syncLookupTablesPaged').callsFake(async () => {
+            tipsDuringPaging.push(sync.lastAppliedBlock);
+        });
         db.getLastBlock.resolves(100);
+        sync.lastAppliedBlock = 100;
         sinon.stub(axios, 'get').resolves({ data: Buffer.from(JSON.stringify({ schema_version: SCHEMA_VERSION.indexer, block_height: 105, since_block: 101, tables: {} })) });
 
         await sync.runIncrementalCatchUp();
@@ -110,6 +114,11 @@ describe('ClientSync truncated catch-up', function(){
         assert.ok(applier.applyIncrementalSnapshot.calledOnce, 'block window applied once');
         assert.ok(paged.secondCall.calledAfter(applier.applyIncrementalSnapshot.firstCall),
             're-page runs AFTER the block window is applied');
+        assert.strictEqual(paged.firstCall.args[1], undefined, 'pre-window page uses the committed tip');
+        assert.deepStrictEqual(paged.secondCall.args[1], { tip: 105 },
+            'post-window page is capped at the committed window terminal');
+        assert.deepStrictEqual(tipsDuringPaging, [100, 100], 'the public cursor moves only after re-page');
+        assert.strictEqual(sync.lastAppliedBlock, 105);
     });
 });
 

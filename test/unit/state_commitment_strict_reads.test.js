@@ -7,7 +7,7 @@
 // General Public License v3.0 or later; see LICENSE.md.
 //
 // M-17 regression for the db.js helpers the state-commitment path DELEGATES to.
-// stateCommitment.js is strict everywhere, but the row sets it hashes are gathered
+// state_commitment/index.js is strict everywhere, but the row sets it hashes are gathered
 // by db.js: getBlockLeafRows for block_merkle_root, applyStakeWeightCap plus the
 // getStatusId behind it for stakes_root. Those went through fail-soft doQuery, which
 // swallows a NON-transactional query error and answers []. On this path [] is not an
@@ -68,7 +68,7 @@ describe('M-17: state-commitment input reads fail closed outside a transaction',
     });
 
     it('getStateRootsRow throws rather than reporting "no prior root" on a DB fault', async function () {
-        // computeFollowerRoots calls this with NO conn (stateCommitment.js, the
+        // computeFollowerRoots calls this with NO conn (state_commitment/index.js, the
         // prior-block read). Fail-soft [] becomes null, which the follower reads as
         // "no prior state_tree_roots row" and answers with a silent full rebuild
         // instead of the halt a real fault deserves.

@@ -45,7 +45,7 @@ describe('SyncService state-tree orphan metric passes the coin ticker @regressio
 
     beforeEach(function(){
         savedInterval = process.env.STATE_TREE_METRIC_INTERVAL_MS;
-        process.env.STATE_TREE_METRIC_INTERVAL_MS = '1000';
+        process.env.STATE_TREE_METRIC_INTERVAL_MS = '60000';
         clock = sinon.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     });
     afterEach(function(){
@@ -64,7 +64,7 @@ describe('SyncService state-tree orphan metric passes the coin ticker @regressio
         const spy = sinon.spy(stateCommitment, 'reportOrphanStats');
 
         svc.startStateTreeMetric();
-        await clock.tickAsync(1000);
+        await clock.tickAsync(60000);
         clearInterval(svc._stateTreeMetricTimer);
 
         assert.deepStrictEqual(rootArgs, ['BTC'], 'state_tree_roots must be read with the ticker');

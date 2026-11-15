@@ -44,11 +44,11 @@ const MAX_SCOPED_REBUILD_IDS = 1000;
 // ownership-escrow gate (a GIVE_OWNERSHIP offer opening or its status moving to a
 // closed state). When any appears, re-derive tokens.escrow_action_index from the
 // already-replicated offer/status tables (the forward-apply counterpart to the
-// reorg re-derive in ClientRollback). The gate ALSO rides the wire via the
-// updated_rows tokens class (full-row carry, all-column upsert), so this derive
-// is the corrective pass over a convergent carried value, not the gate's sole
-// writer. Checked against the payload's data/tables map only; updated_rows keys
-// do not trigger it. See maybeRederiveEscrow.
+// reorg re-derive in ClientRollback). The gate also rides the wire for tokens
+// that are ledger-touched or ISSUE-edited, but an ownership-offer transition
+// alone does not resend that token row. On a truncated replica the derive keeps
+// a pre-floor gate unless a local later status proves the offer closed. Checked
+// against the payload's data/tables map only; updated_rows keys do not trigger it.
 const ESCROW_TRIGGER_TABLES = new Set([
     'orders', 'order_statuses', 'swaps', 'swap_statuses',
     'dispensers', 'dispenser_statuses', 'tokens'
@@ -96,7 +96,14 @@ function initializeIgnoreTables(applier) {
         'sync_meta',
         // Merkle epochs are full-dumped and carry a unique epoch.
         'merkle_epochs',
-        // Reward windows can overlap the live and incremental snapshot channels.
+        // Reward windows can overlap the live and incremental snapshot channels. Rows keep
+        // their carried id, so a carried id that lands on a locally minted one is dropped on
+        // the PRIMARY KEY. The one place the replica mints an id is the RB-ANCHOR restore,
+        // which is safe only because the source runs the identical restore over the same
+        // replicated log rows (replica counter stays at or below the source's). The table is
+        // not in localSurrogateIdOnlyTables because round_reference is nullable and a UNIQUE
+        // key does not dedupe NULLs, and not in idKeyedIgnoreTables because that check treats
+        // PRIMARY duplicates as benign. validator_rewards_restore_id_invariant.test.js pins it.
         'validator_rewards',
         // Rollcall rows can overlap the bootstrap dump and close-block stream.
         'rollcalls',
@@ -1030,14 +1037,21 @@ class ClientApplier {
         }
     }
 
-    // Re-derive tokens.escrow_action_index from the already-replicated offer/status
-    // tables when this payload moved any escrow-relevant row. The gate is fully
-    // replica-derivable, and it ALSO arrives on the wire via the updated_rows
-    // tokens full-row carry (the source's own authoritative value, so the carry
-    // converges rather than forks); this forward-apply pass runs the SAME
-    // re-derive ClientRollback runs on reorg, keeping source and replica
-    // byte-identical. `tables` is the payload's table map (live block `data` or
-    // incremental `tables`); updated_rows does not trigger it.
+    async escrowFloorActionIndex(){
+        if(!this.db || typeof this.db.getSyncState !== 'function') return null;
+        let key = 'bootstrap_base:' + ((this.db && this.db.dbType) || 'indexer');
+        let base = await this.db.getSyncState(key, { rethrow: true });
+        if(base === null || base === undefined || parseInt(base, 10) <= 0) return null;
+        if(typeof this.db.getFirstActionIndex !== 'function') return Number.MAX_SAFE_INTEGER;
+        let floor = await this.db.getFirstActionIndex(parseInt(base, 10), null, { rethrow: true });
+        return floor === null || floor === undefined ? Number.MAX_SAFE_INTEGER : floor;
+    }
+
+    // Re-derive tokens.escrow_action_index from the replicated offer/status tables
+    // when this payload moved an escrow-relevant row. Full-history replicas derive
+    // every gate. Truncated replicas protect a carried pre-floor gate until a local
+    // later status proves that offer closed. `tables` is the live or incremental
+    // table map; updated_rows alone does not trigger this pass.
     async maybeRederiveEscrow(tables){
         if(!tables) return;
         let touched = false;
@@ -1045,8 +1059,12 @@ class ClientApplier {
             if(ESCROW_TRIGGER_TABLES.has(t)){ touched = true; break; }
         }
         if(!touched) return;
+        // The floor read sits outside the schema-gap catch: a failed sync-state or
+        // first-action read, whatever its errno, must abort the apply rather than
+        // read as "not truncated" or skip the derive.
+        let floorActionIndex = await this.escrowFloorActionIndex();
         try {
-            await rederiveEscrowGate(this.db);
+            await rederiveEscrowGate(this.db, { floorActionIndex });
         } catch(e){
             // Only a genuine schema gap (missing table/column on an older/thin replica)
             // is safe to skip. Any other error (deadlock, lock-wait timeout, connection

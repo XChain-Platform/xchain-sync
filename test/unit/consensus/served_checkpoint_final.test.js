@@ -57,7 +57,8 @@ describe('served checkpoint final (sync twin)', function () {
 
     it('reads an absent final as true, the answer of an explorer that predates the field', function () {
         let result = Checkpoint.verifyServedCheckpoint(signedBody({}), null);
-        assert.strictEqual(result.final, true);
+        assert.strictEqual(result.valid, true);
+        assert.strictEqual(result.final, false);
     });
 
     it('reads any present value other than true as not final', function () {
@@ -82,5 +83,9 @@ describe('served checkpoint final (sync twin)', function () {
         let replayed = await Checkpoint.fetchAndVerifyCheckpoint('https://explorer.xchain.io', 'BTC', 900123,
             stubFetch(signedBody({ final: true })));
         assert.strictEqual(replayed.final, true);
+        let absent = await Checkpoint.fetchAndVerifyCheckpoint('https://explorer.xchain.io', 'BTC', 900123,
+            stubFetch(signedBody({})));
+        assert.strictEqual(absent.valid, true);
+        assert.strictEqual(absent.final, false);
     });
 });

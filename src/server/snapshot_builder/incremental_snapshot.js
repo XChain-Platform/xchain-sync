@@ -263,10 +263,11 @@ module.exports = {
     // of these tables. Collected on the SAME REPEATABLE READ conn so it reads at
     // the snapshot's block height. Window starts at sinceBlock to match the
     // `block_index >= sinceBlock` data scoping above (over-inclusion is a
-    // harmless UPSERT). tokens.escrow_action_index rides along (full-row
-    // carry); the follower also re-derives it locally when escrow tables
-    // move (ClientApplier.maybeRederiveEscrow), so the carried value is
-    // convergent, not the gate's only writer.
+    // harmless UPSERT). tokens.escrow_action_index rides along for a token
+    // selected by a ledger touch or ISSUE edit. Offer transitions alone do not
+    // select that token, so the follower also derives the gate locally. On a
+    // truncated replica the derive preserves a pre-floor gate unless a local
+    // later status proves the offer closed.
     async writeIncrementalUpdatedRows(writer, db, dbType, sinceBlock, lastBlock, coin, conn){
         if(dbType !== 'indexer') return;
         let delay = requireIncrementalActivationDelay(coin);

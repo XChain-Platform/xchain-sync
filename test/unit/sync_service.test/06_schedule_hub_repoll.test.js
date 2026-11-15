@@ -104,6 +104,19 @@ describe("SyncService", function(){
             service.scheduleHubRepoll();
             await clock.tickAsync(config.HUB_REPOLL_INTERVAL);
             assert.ok(console.error.getCalls().some(c => /Hub re-poll error/.test(c.args[0])));
+            assert.strictEqual(process.exit.called, false);
+            clock.restore();
+        });
+
+        it('exits for restart when a re-poll reaches a startup refusal', async function(){
+            let clock = sinon.useFakeTimers();
+            const refusal = new Error('Refusing to start');
+            refusal.startupRefusal = true;
+            sinon.stub(service, 'discoverChains').rejects(refusal);
+            service.scheduleHubRepoll();
+            await clock.tickAsync(config.HUB_REPOLL_INTERVAL);
+            assert.strictEqual(process.exit.calledOnceWithExactly(1), true);
+            assert.ok(console.error.getCalls().some(c => /Refusing to start on hub re-poll/.test(c.args[0])));
             clock.restore();
         });
     });
