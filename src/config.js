@@ -509,8 +509,8 @@ function addReplicaVerificationConfig(config){
     // VERIFY_STATE_COMMITMENT: apply-time recompute of the per-block light-client
     // SMT roots (SPV spec sec.4-5) over the replica, HALTing on divergence. Default
     // ON; NULL roots (blocks before the flag-day) are skipped (additive + fail-soft).
-    // Phase 1 verifies balances_root + block_merkle_root only (stakes_root/state_root
-    // are deferred until the BTC stake-weight query is ported). Set
+    // Verifies balances_root + block_merkle_root + state_root; state_root folds the
+    // BTC-only stakes_root recomputed from the ported stake-weight query. Set
     // VERIFY_STATE_COMMITMENT=false on truncated / incremental-bootstrapped replicas
     // (their balances history is incomplete, so the SMT full-build would be wrong)
     // and on throwaway mirrors.

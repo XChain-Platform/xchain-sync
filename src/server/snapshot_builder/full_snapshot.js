@@ -23,18 +23,17 @@ const { SCHEMA_VERSION } = require('../../schema/version');
 const { encodeRow, bigIntReplacer } = require('../../util/wire_codec');
 const { getLogger } = require('../../observability');
 const { SnapshotStreamWriter } = require('./stream_writer');
+const { setHashHeaders } = require('./hash_headers');
 const logger = getLogger();
 
 module.exports = {
 
     // Stream a full snapshot to an HTTP response.
     //
-    // The block-height anchor, the hash headers, and every paginated table read
-    // run inside a single REPEATABLE READ snapshot (opened before getLastBlock).
-    // This keeps the advertised hashes and the streamed rows consistent to one
-    // block height even if the source commits new blocks mid-stream; without it
-    // a busy source produces mixed-block payloads that fail validator hash
-    // verification on bootstrap.
+    // The block-height anchor and every table read run inside one REPEATABLE READ
+    // snapshot opened before getLastBlock. This keeps the body at one height so
+    // it can pass the client's /status cross-check and independent hash recompute.
+    // The X-*-Hash response headers are informational; clients do not verify them.
     async streamFullSnapshot(db, res){
         // Concurrency gate: reject with 503 instead of pinning yet
         // another pool connection when the per-Database stream cap is reached.
@@ -46,16 +45,12 @@ module.exports = {
         }
     },
 
-    setFullSnapshotHeaders(res, lastBlock, schemaVersion, hashRow){
+    setFullSnapshotHeaders(res, dbType, lastBlock, schemaVersion, hashRow){
         res.setHeader('Content-Type', 'application/json');
         res.setHeader('Content-Encoding', 'gzip');
         res.setHeader('X-Block-Height', lastBlock);
         res.setHeader('X-Snapshot-Schema-Version', schemaVersion);
-        if(hashRow){
-            res.setHeader('X-Ledger-Hash', hashRow.ledger_hash || '');
-            res.setHeader('X-Actions-Hash', hashRow.actions_hash || '');
-            res.setHeader('X-Contract-Hash', hashRow.contract_hash || '');
-        }
+        setHashHeaders(res, dbType, hashRow);
     },
 
     createFullSnapshotWriter(res){
@@ -126,7 +121,7 @@ module.exports = {
             let schemaVersion = SCHEMA_VERSION[dbType];
             let hashRow = await db.getBlockHashRow(lastBlock, conn);
 
-            this.setFullSnapshotHeaders(res, lastBlock, schemaVersion, hashRow);
+            this.setFullSnapshotHeaders(res, dbType, lastBlock, schemaVersion, hashRow);
             writer = this.createFullSnapshotWriter(res);
 
             await writer.write('{"schema_version":' + schemaVersion + ',"block_height":' + lastBlock + ',"tables":{');

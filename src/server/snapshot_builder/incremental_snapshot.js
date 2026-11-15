@@ -28,6 +28,7 @@ const { collectUpdatedRows } = require('../updated_rows');
 const { activationDelayBlocks } = require('../../consensus-constants');
 const { getLogger } = require('../../observability');
 const { SnapshotStreamWriter } = require('./stream_writer');
+const { setHashHeaders } = require('./hash_headers');
 const { decoderIncrementalSets, indexerBlockScopedSet, indexerFullDumpSet, INDEXER_INBAND_PAGED } = require('./table_sets');
 const logger = getLogger();
 
@@ -140,15 +141,7 @@ module.exports = {
         res.setHeader('X-Block-Height', lastBlock);
         res.setHeader('X-Since-Block', sinceBlock);
         res.setHeader('X-Snapshot-Schema-Version', schemaVersion);
-        if(hashRow){
-            if(dbType === 'decoder'){
-                res.setHeader('X-Block-Hash', hashRow.block_hash || '');
-            } else {
-                res.setHeader('X-Ledger-Hash',   hashRow.ledger_hash   || '');
-                res.setHeader('X-Actions-Hash',  hashRow.actions_hash  || '');
-                res.setHeader('X-Contract-Hash', hashRow.contract_hash || '');
-            }
-        }
+        setHashHeaders(res, dbType, hashRow);
     },
 
     async buildIncrementalSelectCtx(db, dbType, sinceBlock, lastBlock, conn, skipLookups){

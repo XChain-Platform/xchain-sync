@@ -105,3 +105,106 @@ describe('decoder skip_lookups catch-up fork guard', function(){
         assert.strictEqual(rollback.rollback.called, false);
     });
 });
+
+function stubPaging(ctx, onPage){
+    sinon.stub(ctx.sync, 'syncLookupTablesPaged').callsFake(async () => { ctx.pages++; onPage(ctx.pages); });
+}
+
+function lagFixture(){
+    const state = { ctx: {} };
+    beforeEach(function(){
+        state.ctx = {};
+        makeFixture(state.ctx);
+    });
+    afterEach(function(){ sinon.restore(); });
+    return state;
+}
+
+describe('decoder catch-up fork guard with a lagging cursor @regression', function(){
+    const state = lagFixture();
+    let ctx, replicaLookups, applier, rollback, sync;
+
+    beforeEach(function(){
+        ctx = state.ctx;
+        ({ replicaLookups, applier, rollback, sync } = ctx);
+    });
+
+    it('resyncs a lagging cursor before rejecting a forked window', async function(){
+        sync.lastAppliedBlock = 97;
+        sync.lastHashes = { block_hash: 'hash97' };
+        stubPaging(ctx, n => { if(n === 2) replicaLookups.push({ id: 7, hash: 'FORKED100' }); });
+
+        await sync.runIncrementalCatchUp();
+
+        assert.strictEqual(applier.applyIncrementalSnapshot.called, false, 'the forked window must not land');
+        assert.strictEqual(rollback.rollback.calledOnceWith(100), true);
+        assert.strictEqual(sync.lastAppliedBlock, 99);
+        assert.strictEqual(sync._catchUpPending, true);
+    });
+
+    it('resyncs a lagging cursor and applies a linked window', async function(){
+        sync.lastAppliedBlock = 97;
+        sync.lastHashes = { block_hash: 'hash97' };
+        stubPaging(ctx, n => { if(n === 2) replicaLookups.push({ id: 7, hash: 'hash100' }); });
+
+        await sync.runIncrementalCatchUp();
+
+        assert.strictEqual(rollback.rollback.called, false);
+        assert.strictEqual(applier.applyIncrementalSnapshot.calledOnce, true);
+        assert.strictEqual(sync.lastAppliedBlock, 103);
+    });
+});
+
+describe('decoder catch-up fork guard when the tip moves during a lagging resync @regression', function(){
+    const state = lagFixture();
+    let ctx, replicaLookups, applier, rollback, sync;
+
+    beforeEach(function(){
+        ctx = state.ctx;
+        ({ replicaLookups, applier, rollback, sync } = ctx);
+    });
+
+    it('defers to the moved-tip path when the committed tip changes during resync', async function(){
+        sync.lastAppliedBlock = 97;
+        sync.lastHashes = { block_hash: 'hash97' };
+        sync.db.getLastBlock.onFirstCall().resolves(100);
+        sync.db.getLastBlock.onSecondCall().resolves(101);
+        sync.db.getLastBlock.onThirdCall().resolves(101);
+        stubPaging(ctx, n => { if(n === 2) replicaLookups.push({ id: 7, hash: 'FORKED100' }); });
+
+        await sync.runIncrementalCatchUp();
+
+        assert.strictEqual(rollback.rollback.called, false);
+        assert.strictEqual(applier.applyIncrementalSnapshot.called, false);
+        assert.strictEqual(sync.lastAppliedBlock, 97);
+    });
+
+    it('defers when the committed tip moves during the link lookup', async function(){
+        sync.lastAppliedBlock = 97;
+        sync.lastHashes = { block_hash: 'hash97' };
+        stubPaging(ctx, n => { if(n === 2) replicaLookups.push({ id: 7, hash: 'FORKED100' }); });
+        const findRows = sync.db.findIndexTransactionsByIds;
+        sync.db.findIndexTransactionsByIds = sinon.stub().callsFake(async ids => {
+            const rows = await findRows(ids);
+            sync.lastAppliedBlock = 101;
+            sync.db.getLastBlock.resolves(101);
+            return rows;
+        });
+
+        await sync.runIncrementalCatchUp();
+
+        assert.strictEqual(rollback.rollback.called, false);
+        assert.strictEqual(applier.applyIncrementalSnapshot.called, false);
+        assert.strictEqual(sync.lastAppliedBlock, 101);
+    });
+
+    it('refuses a fork rewind whose expected tip moved before the rollback lock', async function(){
+        sync.lastAppliedBlock = 101;
+
+        const applied = await sync.applyReorgRollback({ block_index: 100 }, 100);
+
+        assert.strictEqual(applied, false);
+        assert.strictEqual(rollback.rollback.called, false);
+        assert.strictEqual(sync.lastAppliedBlock, 101);
+    });
+});

@@ -65,6 +65,48 @@ describe('MerkleTree @consensus @regression', function () {
     });
 });
 
+describe('MerkleTree published root vectors @consensus @regression', function () {
+    const roots = {
+        1: '4d5a9584d985e8fb44015a8affa9b76f1ff16f65e61df7156d8e8159e1448978',
+        2: '038708619304e7a3a5ba4d7de5b41c3c300b90138611fce14c9c33ac66629f43',
+        3: '2486eb950a0dac62332dc453316fd6aceb8ee50ca0515f3536bb297ceb401fc2',
+        5: '25c7fb8afe4aee93add8e1761152ba52b2017d85218c340ac7198c3629caae39',
+        8: '96b59903bb3eb1a3b597e493a39725c93a82efaa0298f773ebaee6ffa8552a96'
+    };
+
+    it('matches independently computed roots for fixed leaf counts', function () {
+        for (const n of [1, 2, 3, 5, 8]) {
+            assert.strictEqual(MerkleTree.buildTree(leaves(n)).root, roots[n], `${n} leaves`);
+        }
+    });
+
+    it('matches the independently computed proof for leaf 4 of 5', function () {
+        const l = leaves(5);
+        const { layers } = MerkleTree.buildTree(l);
+        const proof = [
+            { hash: '565fb0e0cefe32cf4000e4a67ddec8820111a733aa8ba010d242a5fe477e04c4', position: 'right' },
+            { hash: 'ff376073e2083f6caa4d1b51eb44d346745cda5a2db1f2fa91ec3bcf3482f791', position: 'right' },
+            { hash: '2587098af43ebfff5e7e8345d5fdfdafb87d4a4eff4712eb1fd03c21fb231b2f', position: 'left' }
+        ];
+        assert.deepStrictEqual(MerkleTree.generateProof(layers, 4), proof);
+        assert.strictEqual(MerkleTree.verifyProof(l[4], proof, roots[5]), true);
+    });
+
+    it('documents the legacy odd-leaf duplication collision', function () {
+        const three = leaves(3);
+        const four = [...three, three[2]];
+        const tree3 = MerkleTree.buildTree(three);
+        const tree4 = MerkleTree.buildTree(four);
+        assert.strictEqual(tree3.root, tree4.root);
+        assert.strictEqual(MerkleTree.verifyProof(
+            three[2], MerkleTree.generateProof(tree3.layers, 2), tree4.root
+        ), true);
+        assert.strictEqual(MerkleTree.verifyProof(
+            four[3], MerkleTree.generateProof(tree4.layers, 3), tree3.root
+        ), true);
+    });
+});
+
 describe('MerkleTree @consensus @regression', function () {
 
     describe('generateProof() / verifyProof() round-trip', function () {

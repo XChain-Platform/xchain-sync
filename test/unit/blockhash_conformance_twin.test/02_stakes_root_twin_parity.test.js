@@ -87,6 +87,31 @@ function countPatchPath(smt){
     return counts;
 }
 
+async function assertRepeatedKeyReorder(IDX_STAKES, IDX_SMT){
+    SYNC.resetStakesMemo();
+    IDX_STAKES.resetStakesMemo();
+    const syncSmt = new SYNC.PersistentSMT(new SYNC.MemoryNodeStore());
+    const idxSmt  = new IDX_SMT.PersistentSMT(new IDX_SMT.MemoryNodeStore());
+    const key = M.toHex(M.stakeKey('shared-pubkey', 'BTC_VALIDATOR'));
+    const leafA = M.toHex(M.stakeMemberLeaf('source-A', '10'));
+    const leafB = M.toHex(M.stakeMemberLeaf('source-B', '20'));
+    const other = [M.toHex(M.stakeKey('other-pubkey', 'BTC_VALIDATOR')),
+        M.toHex(M.stakeMemberLeaf('source-C', '30'))];
+    const at100 = [other, [key, leafA], [key, leafB]];
+    const at101 = [other, [key, leafB], [key, leafA]];
+    const sync100 = await SYNC.buildStakesRoot(syncSmt, 'BTC', 'regtest', 100, at100);
+    const idx100 = await IDX_STAKES.buildStakesRoot(idxSmt, 'BTC', 'regtest', 100, at100);
+    assert.strictEqual(sync100, idx100, 'twins disagree before the repeated-key reorder');
+    const sync101 = await SYNC.buildStakesRoot(syncSmt, 'BTC', 'regtest', 101, at101);
+    const idx101 = await IDX_STAKES.buildStakesRoot(idxSmt, 'BTC', 'regtest', 101, at101);
+    const fresh = new SYNC.PersistentSMT(new SYNC.MemoryNodeStore());
+    assert.strictEqual(sync101, idx101, 'twins disagree after the repeated-key reorder');
+    assert.notStrictEqual(sync101, sync100,
+        'the negative control did not change the surviving repeated-key leaf');
+    assert.strictEqual(sync101, await fresh.buildFull(at101),
+        'the memoized follower root differs from a fresh last-wins full build');
+}
+
 describe('buildStakesRoot twin root parity: xchain-sync == xchain-indexer @regression', function(){
     let IDX_STAKES, IDX_SMT;
 
@@ -132,5 +157,6 @@ describe('buildStakesRoot twin root parity: xchain-sync == xchain-indexer @regre
             'the walk never reached the indexer incremental patch (deletes=' + counts.deletes +
             ', fullBuilds=' + counts.fullBuilds + ', changedBlocks=' + changedBlocks +
             '), so this parity run proved nothing');
+        await assertRepeatedKeyReorder(IDX_STAKES, IDX_SMT);
     });
 });

@@ -143,6 +143,39 @@ describe('state-root assembly twins: leaf encoders @regression', function(){
     });
 });
 
+const BATCH_FROM = 'xchain-indexer/src/db/state_commitment/ledger_reads.js';
+
+// The indexer block path reads leaves through getNetBalances; pin it against the single-key read.
+function assertBatchReadTwin(ctx, pair, m, rerun){
+    const from = BATCH_FROM;
+    const batchFn = extractFunction(pair.indexer,
+        /async function getNetBalances\(db, keys\)\{/, from);
+    const batchSql = sqlLiterals(batchFn);
+    assert.strictEqual(batchSql.length, 1,
+        'the indexer getNetBalances is no longer one SQL literal per chunk' + rerun);
+    const batchMatch = batchSql[0].match(/^SELECT k\.i AS i, \((SELECT .+ FROM credits c .+)\) AS cr, \((SELECT .+ FROM debits d .+)\) AS dr FROM \(\$\{inputs\}\) k$/);
+    assert.ok(batchMatch, 'the indexer getNetBalances SQL shape changed' + rerun);
+    for(let i = 1; i <= 2; i++){
+        const singleKey = batchMatch[i].replaceAll('a.address=k.address AND t.tick=k.tick',
+            'a.address=? AND t.tick=?');
+        assert.strictEqual(singleKey, m[i],
+            'getNetBalances sum #' + i + ' differs from getNetBalance beyond its derived-key lookup' + rerun);
+    }
+    const batchNorm = normalize(batchFn);
+    assert.ok(batchNorm.includes("const cr = r ? String(r.cr) : '0'; const dr = r ? String(r.dr) : '0';"),
+        'getNetBalances no longer defaults a missing key to zero' + rerun);
+    assert.ok(batchNorm.includes('db.util.bcstr(db.util.bcsub(cr, dr, 18))'),
+        'getNetBalances no longer uses the pinned balance-leaf render' + rerun);
+
+    const route = loadPair(ctx, 'src/state_commitment/index.js', 'src/state_commitment/index.js');
+    if(!route) return;
+    const thread = extractFunction(route.indexer,
+        /async function threadBalancesRoot\(/, 'xchain-indexer/src/state_commitment/index.js');
+    assert.ok(thread.includes('await getNetBalances(') && !thread.includes('await getNetBalance('),
+        'the follower guards must bind whichever net-balance read threadBalancesRoot calls; ' +
+        'retarget this case and the e2e suite if the indexer block path changes');
+}
+
 // The balances_root leaf value. The indexer selects the two sums and subtracts in mathjs;
 // this repo subtracts in SQL and renders through minimalDecimal. The e2e conformance suite
 // proves the renders agree on a database, so this tier pins the code that suite exercises.
@@ -177,6 +210,8 @@ describe('state-root assembly twins: getNetBalance @regression', function(){
             'the indexer getNetBalance params or bcstr(bcsub(cr, dr, 18)) tail changed' + rerun);
         assert.ok(normalize(syncFn).endsWith(params + " return rows.length ? String(rows[0].net) : '0'; }"),
             'the ' + HEADER + ' getNetBalance params or net tail changed' + rerun);
+
+        assertBatchReadTwin(this, pair, m, rerun);
     });
 
     it('pins the two renders the leaf value goes through', function(){

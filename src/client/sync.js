@@ -1502,7 +1502,8 @@ class ClientSync {
         let maxMs  = this.config['BOOTSTRAP_RETRY_MAX_MS'];
 
         for(let round = 0; ; round++){
-            if(await this.bootstrapRotateSources()){
+            const result = await this.bootstrapRotateSources();
+            if(result === true){
                 // Design choice: a full snapshot is not walked block by block (it can hold
                 // the whole chain). The marker starts at its tip, which carries only the
                 // bootstrap's own check (the source quorum when several are configured).
@@ -1518,6 +1519,7 @@ class ClientSync {
                 throw new Error('Bootstrap aborted by ' + this._halted.reason + ' halt for ' +
                     this.chain + '/' + this.network + '/' + this.dbType + '; operator must clear the halt');
             }
+            if(result === 'blocked') return result;
             if(round >= maxRetries){
                 // Exhausted all sources across every retry round. Do not return:
                 // signal failure so start() never enters live-follow empty-handed.
@@ -1560,17 +1562,21 @@ class ClientSync {
 
     async bootstrapApplySnapshot(snapshotData){
         if(await this.checkTrainActivation(snapshotData.block_height)) return false;
-        await this.withApplyLock(async () => {
+        const result = await this.withApplyLock(async () => {
+            if(this.incrementalCatchUpBlocked(snapshotData.block_height)) return 'blocked';
             // The full snapshot deletes every row before reinserting: a walk in flight
             // discards whatever it read, and the marker is set at the tip afterwards.
             await this.beginRowRemoval();
             try {
+                if(this.incrementalCatchUpBlocked(snapshotData.block_height)) return 'blocked';
                 await this.applier.applyFullSnapshot(snapshotData);
                 await this.resetRollbackGuardState();
+                return true;
             } finally {
                 this.endRowRemoval();
             }
         });
+        if(result === 'blocked') return result;
         this.lastAppliedBlock = snapshotData.block_height;
         await this.refreshTipHashes();
         await this.clearBootstrapBase();
@@ -1653,8 +1659,10 @@ class ClientSync {
 
         getLogger().info('Downloading full snapshot from ' + source + '...');
         try {
-            let snapshotData = await this.bootstrapDownloadSnapshot(source);
-            if(!await this.bootstrapApplySnapshot(snapshotData)) return false;
+            const snapshotData = await this.bootstrapDownloadSnapshot(source);
+            const applyResult = await this.bootstrapApplySnapshot(snapshotData);
+            if(applyResult === 'blocked') return applyResult;
+            if(!applyResult) return false;
             if(!await this.bootstrapVerifySnapshot(sourceIndex)) return false;
             this._preferredSourceIndex = sourceIndex;
             getLogger().info('Bootstrap complete at block ' + this.lastAppliedBlock);
@@ -1682,9 +1690,12 @@ class ClientSync {
         let maxMs  = this.config['BOOTSTRAP_RETRY_MAX_MS'];
 
         for(let round = 0; ; round++){
+            let result;
             try {
-                if(await this.bootstrapFromHeight(depth)) return; // success: tip committed
+                result = await this.bootstrapFromHeight(depth);
+                if(result === true) return; // success: tip committed
             } catch(e){
+                if(e instanceof BootstrapExhaustedError) throw e;
                 if(this.isContentLengthOverflow(e))
                     await this.haltOnSnapshotTooLarge(this.primarySource(), e, depth);
                 getLogger().error(util.format('Bootstrap-from-height round ' + (round + 1) + ' failed for ' +
@@ -1698,6 +1709,7 @@ class ClientSync {
                 throw new Error('Bootstrap-from-height aborted by ' + this._halted.reason + ' halt for ' +
                     this.chain + '/' + this.network + '/' + this.dbType + '; operator must clear the halt');
             }
+            if(result === 'blocked') return result;
             if(round >= maxRetries){
                 throw new BootstrapExhaustedError('Bootstrap-from-height failed: exhausted after ' + (round + 1) +
                     ' round(s) for ' + this.chain + '/' + this.network + '/' + this.dbType);
@@ -1753,16 +1765,82 @@ class ClientSync {
         if(await this.checkTrainActivation(activationHeight)) return false;
 
         // since_block is the exact bound served; base is the requested fallback.
-        this._bootstrapBase = (typeof snapshotData.since_block === 'number') ? snapshotData.since_block : base;
-        await this.persistBootstrapBase(this._bootstrapBase);
-        // The join block's hashes arrive verbatim (it has no predecessor here), so the
-        // marker sits on it before the window lands; every block above it is walked.
-        await this.adoptVerifiedTip(this._bootstrapBase, { strict: true });
-        await this.withApplyLock(() => this.applier.applyIncrementalSnapshot(snapshotData));
+        const servedBase = (typeof snapshotData.since_block === 'number') ? snapshotData.since_block : base;
+        const previousPosture = {
+            base: this._bootstrapBase,
+            verifiedTip: this._verifiedTip,
+            persistedVerifiedTip: this._persistedVerifiedTip
+        };
+        const result = await this.withApplyLock(async () => {
+            if(this.incrementalCatchUpBlocked(servedBase)) return 'blocked';
+            if(this.tracksVerifiedTip() && this._verifiedTip === undefined){
+                await this.loadVerifiedTip();
+                previousPosture.verifiedTip = this._verifiedTip;
+                previousPosture.persistedVerifiedTip = this._persistedVerifiedTip;
+            }
+            if(this.incrementalCatchUpBlocked(servedBase)) return 'blocked';
+            this._bootstrapBase = servedBase;
+            await this.persistBootstrapBase(this._bootstrapBase);
+            if(this.incrementalCatchUpBlocked(servedBase)){
+                await this.restoreBootstrapWindowPosture(previousPosture);
+                return 'blocked';
+            }
+            // The join block's hashes arrive verbatim (it has no predecessor here), so the
+            // marker sits on it before the window lands; every block above it is walked.
+            await this.adoptVerifiedTip(this._bootstrapBase, { strict: true });
+            if(this.incrementalCatchUpBlocked(servedBase)){
+                await this.restoreBootstrapWindowPosture(previousPosture);
+                return 'blocked';
+            }
+            await this.applier.applyIncrementalSnapshot(snapshotData);
+            return true;
+        });
+        if(result === 'blocked') return result;
         if(typeof snapshotData.block_height === 'number'){
             this.lastAppliedBlock = snapshotData.block_height;
         }
         return true;
+    }
+
+    // Undo the base and marker a refused window already wrote. Every durable write must
+    // land: a base or marker left at the refused window would set the verification floor
+    // after a restart. A restore that cannot land escalates to a supervised restart,
+    // whose empty-replica bootstrap rewrites both before any row applies.
+    async restoreBootstrapWindowPosture(previous){
+        try {
+            await this.restoreBootstrapWindowBase(previous.base);
+            if(this.tracksVerifiedTip()) await this.restoreBootstrapWindowMarker(previous);
+        } catch(e){
+            throw new BootstrapExhaustedError('Bootstrap-from-height refused for ' + this.chain + '/' +
+                this.network + '/' + this.dbType + ' but its base or marker could not be restored: ' +
+                (e && e.message ? e.message : e));
+        }
+    }
+
+    async restoreBootstrapWindowBase(base){
+        if(base === null || base === undefined){
+            if(this.db && typeof this.db.deleteSyncState === 'function' &&
+               await this.db.deleteSyncState(this.bootstrapBaseKey()) === false)
+                throw new Error('bootstrap base delete failed');
+        } else {
+            await this.persistBootstrapBase(base, { rethrow: true });
+        }
+        this._bootstrapBase = base;
+    }
+
+    restoreBootstrapWindowMarker(previous){
+        return this.queueMarkerWrite(async () => {
+            if(this.db && typeof previous.persistedVerifiedTip === 'number' &&
+               typeof this.db.setSyncState === 'function'){
+                await this.db.setSyncState(this.verifiedTipKey(),
+                    String(previous.persistedVerifiedTip), { rethrow: true });
+            } else if(this.db && typeof this.db.deleteSyncState === 'function' &&
+                      await this.db.deleteSyncState(this.verifiedTipKey()) === false){
+                throw new Error('verified tip delete failed');
+            }
+            this._verifiedTip = previous.verifiedTip;
+            this._persistedVerifiedTip = previous.persistedVerifiedTip;
+        });
     }
 
     async verifyBootstrapTerminalBlock(){
@@ -1802,7 +1880,8 @@ class ClientSync {
         await this.syncLookupTablesPaged(source);
 
         const snapshotData = await this.fetchBootstrapWindow(source, base);
-        if(!await this.applyBootstrapWindow(snapshotData, base, tip)) return false;
+        const applyResult = await this.applyBootstrapWindow(snapshotData, base, tip);
+        if(applyResult !== true) return applyResult;
 
         // Re-page lookups so rows added during the window request exist locally.
         await this.syncLookupTablesPaged(source);
@@ -2185,7 +2264,7 @@ class ClientSync {
     // Verify a catch-up range after it applies. The range lands in one transaction with
     // no per-block recompute, so every block of it recomputes here, from the join to the
     // terminal. Returns true when the pass must stop (halted, or held unverified).
-    async verifyIncrementalCatchUpRange(snapshotData, sinceBlock){
+    async verifyIncrementalCatchUpRange(snapshotData, sinceBlock, source){
         // Derive the join from this replica's committed tip rather than trusting the
         // source echo. Recomputing the join is what detects a range joined onto a
         // locally orphaned predecessor after a disconnected reorg.
@@ -2197,7 +2276,7 @@ class ClientSync {
         if(typeof snapshotData.since_block === 'number' && snapshotData.since_block !== sinceBlock){
             await this.haltOnDivergence(joinBlock,
                 [{ field: 'since_block', a: sinceBlock, b: snapshotData.since_block }],
-                this.sources.slice(0, 1), 'catchup-since-block-mismatch');
+                [source], 'catchup-since-block-mismatch');
             return true;
         }
 
@@ -2244,6 +2323,7 @@ class ClientSync {
                     await this.haltOnCatchUpTooLarge(source, sinceBlock, dbTip, error);
                     return;
                 }
+                if(this.incrementalCatchUpBlocked(sinceBlock)) return;
                 getLogger().warn('Incremental catch-up payload too large at sinceBlock ' + sinceBlock +
                     '; falling back to bounded height bootstrap (SYNC_BOOTSTRAP_DEPTH=' +
                     this._truncatedDepth + ', truncated replica).');
@@ -2254,6 +2334,7 @@ class ClientSync {
             // Use the full bootstrap when a full-history catch-up window exceeds the cap.
             // A full snapshot can still fit when the incremental response covering a
             // very wide range is the object that crosses the limit.
+            if(this.incrementalCatchUpBlocked(sinceBlock)) return;
             getLogger().warn('Incremental catch-up payload too large at sinceBlock ' + sinceBlock +
                 '; falling back to full bootstrap.');
             await this.bootstrapFromSnapshot();
@@ -2330,7 +2411,7 @@ class ClientSync {
             // Range verification can durably halt the replica or hold it unverified, so
             // its true result prevents all remaining work in this pass.
             if(this.dbType === 'indexer' && this.config['VERIFY_RECOMPUTE']){
-                if(await this.verifyIncrementalCatchUpRange(snapshotData, sinceBlock)) return;
+                if(await this.verifyIncrementalCatchUpRange(snapshotData, sinceBlock, source)) return;
             }
             await this.anchorCheckpointAfterCatchUp();
 
@@ -3626,26 +3707,47 @@ class ClientSync {
     // land. It runs inside incrementalCatchUp's in-flight runner, so it flags a re-run
     // rather than awaiting a catch-up (which would wait on itself).
     //
-    // Fail-closed: a skip_lookups window is snapshotted after the lookups were paged, so
+    // Fail-closed: a lagging in-memory cursor is resynced from the committed tip, and a
+    // skip_lookups window is snapshotted after the lookups were paged, so
     // its join parent id can name a row the replica lacks. `lookupSource` (set for that
     // case) re-pages the lookups first, and a parent or tip hash that still does not
     // resolve throws, aborting this pass for the next trigger to retry, never "linked".
     async rewindIfCatchUpForked(snapshotData, sinceBlock, dbTip, lookupSource){
-        if(this.dbType !== 'decoder' || dbTip === null || dbTip !== this.lastAppliedBlock) return false;
+        if(this.dbType !== 'decoder' || dbTip === null) return false;
         let tables = (snapshotData && snapshotData.tables) || {};
         let joinRow = (tables.blocks || []).find(b => b && Number(b.block_index) === sinceBlock);
         if(!joinRow) return false;
         if(lookupSource) await this.syncLookupTablesPaged(lookupSource);
-        let tip = await this.db.getBlockHashRow(dbTip, null, { rethrow: true });
+        let tip;
+        if(this.lastAppliedBlock !== dbTip){
+            const oldCursor = this.lastAppliedBlock;
+            const resynced = await this.withApplyLock(async () => {
+                const currentTip = await this.db.getLastBlock(null, { rethrow: true });
+                if(currentTip !== dbTip) return 'moved';
+                const row = await this.db.getBlockHashRow(dbTip, null, { rethrow: true });
+                if(row === null) throw new Error('Decoder committed tip ' + dbTip +
+                    ' hash is unresolved while resyncing the catch-up cursor');
+                this.lastAppliedBlock = dbTip;
+                this.lastHashes = row;
+                return row;
+            });
+            if(resynced === 'moved') return false;
+            tip = resynced;
+            getLogger().warn('Resynced decoder catch-up cursor from ' + oldCursor +
+                ' to committed tip ' + dbTip + ' before checking range continuity');
+        } else {
+            tip = await this.db.getBlockHashRow(dbTip, null, { rethrow: true });
+        }
         let state = await decoderLinkState(joinRow, tables.index_transactions, tip && tip.block_hash, this.db);
         if(state === 'unresolved'){
             throw new Error('Decoder catch-up join block ' + sinceBlock + ' parent or committed tip ' + dbTip +
                 ' hash is unresolved; aborting this pass to retry');
         }
+        if(this.lastAppliedBlock !== dbTip) return false;
         if(state !== 'broken') return false;
         getLogger().error('Chain continuity error (decoder): catch-up block ' + sinceBlock +
             ' does not build on the committed tip ' + dbTip + '; rewinding the orphaned tip before applying');
-        await this.handleReorg({ block_index: dbTip });
+        await this.handleReorg({ block_index: dbTip }, undefined, dbTip);
         this._catchUpPending = true;
         return true;
     }
@@ -4379,11 +4481,15 @@ class ClientSync {
     // Persist the truncation join floor durably so it survives a restart. Guarded:
     // the durable store is optional (older db instances / test mocks may not expose
     // it), so a missing setSyncState degrades to in-memory-only behaviour rather
-    // than throwing. Fail-soft (the db helper itself swallows persistence errors).
-    async persistBootstrapBase(base){
+    // than throwing. Fail-soft (the db helper itself swallows persistence errors)
+    // unless opts.rethrow asks for a failed write to throw.
+    async persistBootstrapBase(base, opts){
         if(base === null || base === undefined) return;
         if(!this.db || typeof this.db.setSyncState !== 'function') return;
-        await this.db.setSyncState(this.bootstrapBaseKey(), String(base));
+        const strict = !!(opts && opts.rethrow);
+        const written = await this.db.setSyncState(this.bootstrapBaseKey(), String(base),
+            strict ? { rethrow: true } : undefined);
+        if(strict && written === false) throw new Error('bootstrap base write failed');
     }
 
     // Clear the truncation join floor, in-memory and durable. Called after a
@@ -5279,10 +5385,16 @@ class ClientSync {
             this.sources.slice(0, 1), 'max-rollback-depth-exceeded');
     }
 
-    async applyReorgRollback(event){
+    async applyReorgRollback(event, expectedTip){
         let applied = await this.withApplyLock(async () => {
             if(this._halted){
                 if(typeof this.refuseReorgWhileHalted === 'function') this.refuseReorgWhileHalted(event);
+                return false;
+            }
+            if(typeof expectedTip === 'number' && this.lastAppliedBlock !== expectedTip){
+                getLogger().warn('Skipping reorg for ' + this.chain + '/' + this.network +
+                    ': expected replica tip ' + expectedTip + ' moved to ' + this.lastAppliedBlock +
+                    ' before the apply lock was taken');
                 return false;
             }
             // The caller's above-tip check ran before this lock was taken, so a rollback that
@@ -5341,7 +5453,7 @@ class ClientSync {
         return true;
     }
 
-    async handleReorg(event, retroactiveReports){
+    async handleReorg(event, retroactiveReports, expectedTip){
         getLogger().info('Reorg event received for ' + this.chain + '/' + this.network + ' at block ' + event.block_index);
         if(this.refuseReorgWhileHalted(event)) return;
 
@@ -5362,7 +5474,7 @@ class ClientSync {
         }
 
         try {
-            if(!await this.applyReorgRollback(event)) return;
+            if(!await this.applyReorgRollback(event, expectedTip)) return;
         } catch(e){
             await this.haltForReorgRollbackFailure(event, e);
         }

@@ -815,8 +815,8 @@ class ServerPoller {
     // state_tree_nodes/roots), NOT in sync_meta, NOT in any Merkle leaf. NULL
 
     // before the flag-day (the follower then skips the check). The follower
-    // verifies balances_root + block_merkle_root in Phase 1; state_root is carried
-    // for the later full-state_root verification (no wire change needed then).
+    // verifies balances_root + block_merkle_root + state_root; a NULL state_root
+    // during the catch-up burst described below is skipped.
 
     // state_root folds the BTC-only stakes_root, which the follower recomputes
     // every block from the live stakes/unstakes tables (stateCommitment
