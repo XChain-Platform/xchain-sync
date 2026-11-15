@@ -245,28 +245,6 @@
       "API numeric parameters are parsed strictly passes exact integer values and keeps absent query defaults",
       "API numeric parameters are parsed strictly refuses malformed unsigned integers before downstream work"
     ],
-    "0c488b6b47a588af": [
-      "MerkleTree @consensus @regression buildTree() a single leaf is its own root",
-      "MerkleTree @consensus @regression buildTree() does not mutate the caller's leaves array",
-      "MerkleTree @consensus @regression buildTree() odd count duplicates the last node",
-      "MerkleTree @consensus @regression buildTree() returns {root:null, layers:[]} for empty input",
-      "MerkleTree @consensus @regression buildTree() two leaves: root = hashPair(l0,l1)",
-      "MerkleTree @consensus @regression computeLeaf() / hashPair() computeLeaf is the sha256 of the three concatenated hashes",
-      "MerkleTree @consensus @regression computeLeaf() / hashPair() computeLeaf treats null/undefined components as empty string",
-      "MerkleTree @consensus @regression computeLeaf() / hashPair() hashPair is the sha256 of left||right and is order-sensitive",
-      "MerkleTree @consensus @regression generateProof() / verifyProof() round-trip every one of 1 leaves proves inclusion against the root",
-      "MerkleTree @consensus @regression generateProof() / verifyProof() round-trip every one of 13 leaves proves inclusion against the root",
-      "MerkleTree @consensus @regression generateProof() / verifyProof() round-trip every one of 2 leaves proves inclusion against the root",
-      "MerkleTree @consensus @regression generateProof() / verifyProof() round-trip every one of 3 leaves proves inclusion against the root",
-      "MerkleTree @consensus @regression generateProof() / verifyProof() round-trip every one of 4 leaves proves inclusion against the root",
-      "MerkleTree @consensus @regression generateProof() / verifyProof() round-trip every one of 5 leaves proves inclusion against the root",
-      "MerkleTree @consensus @regression generateProof() / verifyProof() round-trip every one of 8 leaves proves inclusion against the root",
-      "MerkleTree @consensus @regression generateProof() / verifyProof() round-trip generateProof returns null for out-of-range / empty",
-      "MerkleTree @consensus @regression generateProof() / verifyProof() round-trip rejects a proof against the wrong root",
-      "MerkleTree @consensus @regression generateProof() / verifyProof() round-trip rejects a proof for the wrong leaf",
-      "MerkleTree @consensus @regression generateProof() / verifyProof() round-trip rejects a proof with a tampered sibling hash",
-      "MerkleTree @consensus @regression generateProof() / verifyProof() round-trip verifyProof returns false on missing arguments"
-    ],
     "0d29ac0800550c53": [
       "E2E: Decoder DB Lifecycle Reorg / rollback rolls back blocks + tx-scoped rows and keeps index tables intact"
     ],
@@ -330,12 +308,6 @@
       "ServerPoller buildBlockPayload block-scoped index rows derives the block-scoped lookup list instead of hand-listing it",
       "ServerPoller buildBlockPayload block-scoped index rows includes address and ticker rows interned by a DEPLOY with no same-block references",
       "ServerPoller buildBlockPayload block-scoped index rows reads the block-scoped lookups the lifecycle registry declares, and only those"
-    ],
-    "1474f342de739548": [
-      "decoder skip_lookups catch-up fork guard aborts and retries, applying nothing, when the parent lookup never resolves",
-      "decoder skip_lookups catch-up fork guard aborts when the committed tip hash cannot be read",
-      "decoder skip_lookups catch-up fork guard applies the window when the re-paged parent matches the committed tip",
-      "decoder skip_lookups catch-up fork guard re-pages before the link check and rewinds when the replacement parent differs"
     ],
     "14cea56fa69537cd": [
       "ServerPoller stop sets running to false"
@@ -409,6 +381,13 @@
       "Replica units refuse a commit that found no open transaction a decoder reorg rollback throws instead of reporting the rollback completed",
       "Replica units refuse a commit that found no open transaction a dispensers swap throws instead of reporting the table replaced",
       "Replica units refuse a commit that found no open transaction a live block apply throws instead of reporting the block applied"
+    ],
+    "1bd15edda6b2bf7e": [
+      "decoder catch-up fork guard when the tip moves during a lagging resync @regression defers to the moved-tip path when the committed tip changes during resync",
+      "decoder catch-up fork guard when the tip moves during a lagging resync @regression defers when the committed tip moves during the link lookup",
+      "decoder catch-up fork guard when the tip moves during a lagging resync @regression refuses a fork rewind whose expected tip moved before the rollback lock",
+      "decoder catch-up fork guard with a lagging cursor @regression resyncs a lagging cursor and applies a linked window",
+      "decoder catch-up fork guard with a lagging cursor @regression resyncs a lagging cursor before rejecting a forked window"
     ],
     "1be1afa659a63bc2": [
       "replica escrow re-derive live-status sets per offer kind keeps expiring in the order arms of both statements",
@@ -910,12 +889,31 @@
       "state hash archive-invalid selection on every network queries the widened archive-head class for every coin, network and sampled block",
       "state hash archive-invalid selection on every network reads errno 1146 as an empty archive-invalid class"
     ],
+    "324b824c09ed45df": [
+      "SnapshotBuilder streamFullSnapshot emits every row of a keyless table exactly once in a single ordered pass (no offset re-paging)",
+      "SnapshotBuilder streamFullSnapshot returns 404 when no blocks in database",
+      "SnapshotBuilder streamFullSnapshot sets correct response headers",
+      "SnapshotBuilder streamFullSnapshot sets only X-Block-Hash for a decoder full snapshot",
+      "SnapshotBuilder streamFullSnapshot skips tables with 0 rows",
+      "SnapshotBuilder streamFullSnapshot streams valid gzip JSON for tables with data"
+    ],
     "324f0246f861a9ae": [
       "Database schema self-heal: one startup completes columns then key rebuilds adds each column BEFORE the rebuild that names it",
       "Database schema self-heal: one startup completes columns then key rebuilds converges a follower sitting in the deferred state on its next start",
       "Database schema self-heal: one startup completes columns then key rebuilds is idle on the second and third startup",
       "Database schema self-heal: one startup completes columns then key rebuilds keeps the stale keys when the column ADD is refused, and says so",
       "Database schema self-heal: one startup completes columns then key rebuilds never defers the work to a next startup"
+    ],
+    "32a61f25536f4df5": [
+      "decoder catch-up fork guard when the tip moves during a lagging resync @regression defers to the moved-tip path when the committed tip changes during resync",
+      "decoder catch-up fork guard when the tip moves during a lagging resync @regression defers when the committed tip moves during the link lookup",
+      "decoder catch-up fork guard when the tip moves during a lagging resync @regression refuses a fork rewind whose expected tip moved before the rollback lock",
+      "decoder catch-up fork guard with a lagging cursor @regression resyncs a lagging cursor and applies a linked window",
+      "decoder catch-up fork guard with a lagging cursor @regression resyncs a lagging cursor before rejecting a forked window",
+      "decoder skip_lookups catch-up fork guard aborts and retries, applying nothing, when the parent lookup never resolves",
+      "decoder skip_lookups catch-up fork guard aborts when the committed tip hash cannot be read",
+      "decoder skip_lookups catch-up fork guard applies the window when the re-paged parent matches the committed tip",
+      "decoder skip_lookups catch-up fork guard re-pages before the link check and rewinds when the replacement parent differs"
     ],
     "333d1217b23f0f0e": [
       "ServerPoller retroactive rewind broadcast @regression broadcasts a marked height drop beyond the walk-back window at the marker target",
@@ -2156,13 +2154,6 @@
       "Rollback coverage guard @regression every registry row with a non-default blockKey is deleted by that column on a replica reorg",
       "Rollback coverage guard @regression every special and recomputed table is touched by ClientRollback, not covered by its label alone",
       "Rollback coverage guard @regression flags a made-up special table and a made-up close_block row the source never handles"
-    ],
-    "72c2cac4e73d4e53": [
-      "SnapshotBuilder streamFullSnapshot emits every row of a keyless table exactly once in a single ordered pass (no offset re-paging)",
-      "SnapshotBuilder streamFullSnapshot returns 404 when no blocks in database",
-      "SnapshotBuilder streamFullSnapshot sets correct response headers",
-      "SnapshotBuilder streamFullSnapshot skips tables with 0 rows",
-      "SnapshotBuilder streamFullSnapshot streams valid gzip JSON for tables with data"
     ],
     "7325ee1c1fad486f": [
       "deactivation_block sync-mirror ROLLCALL eviction repair runs on every rollback, ahead of the absences delete rethrows a non-schema fault and swallows only a schema gap",
@@ -3859,6 +3850,21 @@
       "ClientSync: checkpoint-quorum anchor @regression skips a genuinely pre-commitment checkpoint SILENTLY (snapshot below the flag-day)",
       "ClientSync: checkpoint-quorum anchor @regression warns (no halt) when the anchor is staler than CHECKPOINT_FRESHNESS_BLOCKS behind the tip"
     ],
+    "b586cfbc148f21f9": [
+      "ClientSync bootstrap window lifecycle guard @regression does not enter either size fallback while strict confirmation is pending",
+      "ClientSync bootstrap window lifecycle guard @regression leaves bootstrap markers unchanged when a height window is held",
+      "ClientSync bootstrap window lifecycle guard @regression restores bootstrap posture when confirmation becomes pending during base persistence",
+      "ClientSync bootstrap window lifecycle guard @regression restores bootstrap posture when confirmation becomes pending during marker adoption",
+      "ClientSync bootstrap window posture restore failure @regression carries a failed restore out of the height retry loop instead of returning blocked",
+      "ClientSync bootstrap window posture restore failure @regression escalates when a hold lands during the marker write and the marker restore throws",
+      "ClientSync bootstrap window posture restore failure @regression escalates when the restore deletes a base that did not exist and the delete fails",
+      "ClientSync bootstrap window posture restore failure @regression escalates when the restore of the bootstrap base reports a failed write",
+      "ClientSync bootstrap window posture restore failure @regression escalates when the restore of the bootstrap base throws",
+      "ClientSync bootstrap window posture restore failure @regression escalates when the restore of the verified marker fails",
+      "ClientSync full snapshot lifecycle guard @regression preserves rows when a durable halt appears during full snapshot download",
+      "ClientSync full snapshot lifecycle guard @regression refuses a full snapshot when confirmation becomes pending during download",
+      "ClientSync full snapshot lifecycle guard @regression refuses a full snapshot when reorg confirmation becomes pending during download"
+    ],
     "b642edb3ab6a5231": [
       "HubClient parsePort defaults to 3306 for a non-numeric or negative value",
       "HubClient parsePort defaults to 3306 when both are absent",
@@ -4854,6 +4860,9 @@
       "consensus-constants (boundary) activationDelayBlocks maps null/undefined to the no-op null path",
       "consensus-constants (boundary) activationDelayBlocks resolves a known coin to a non-negative integer"
     ],
+    "e3725c987a1956ef": [
+      "Rollback coverage guard @regression ATTEST v5 batch-head forward carry and reverse reset have the same predicates"
+    ],
     "e3fcef2cb94f7253": [
       "CORS_ORIGIN allowlist parsing getConfig() resolves CORS_ORIGIN, not the raw env string keeps the documented unset default of false (CORS disabled)",
       "CORS_ORIGIN allowlist parsing getConfig() resolves CORS_ORIGIN, not the raw env string turns a comma-separated value into an array before it can reach cors",
@@ -4956,6 +4965,9 @@
       "BlockBroadcaster forged heartbeat heights WebSocket heartbeat rejects appliedBlock 1e+21 and keeps the prior value",
       "BlockBroadcaster forged heartbeat heights WebSocket heartbeat rejects appliedBlock 9007199254740992 and keeps the prior value",
       "BlockBroadcaster forged heartbeat heights WebSocket heartbeat reports lag unknown, never negative, when a stored height is above a tip that later fell"
+    ],
+    "ea4b18f6d2eb1d2b": [
+      "ClientSync catch-up boundary source attribution @regression records the source that served a mismatched since_block echo"
     ],
     "eadfdc0dec6a56cd": [
       "SyncService startPollerForChain does not create duplicate pollers",
@@ -5291,6 +5303,31 @@
       "ClientRollback rollback still skips the market sweep on a schema gap (errno 1146)",
       "ClientRollback rollback wraps everything in a transaction"
     ],
+    "fdd6ddf7e836b25f": [
+      "MerkleTree @consensus @regression buildTree() a single leaf is its own root",
+      "MerkleTree @consensus @regression buildTree() does not mutate the caller's leaves array",
+      "MerkleTree @consensus @regression buildTree() odd count duplicates the last node",
+      "MerkleTree @consensus @regression buildTree() returns {root:null, layers:[]} for empty input",
+      "MerkleTree @consensus @regression buildTree() two leaves: root = hashPair(l0,l1)",
+      "MerkleTree @consensus @regression computeLeaf() / hashPair() computeLeaf is the sha256 of the three concatenated hashes",
+      "MerkleTree @consensus @regression computeLeaf() / hashPair() computeLeaf treats null/undefined components as empty string",
+      "MerkleTree @consensus @regression computeLeaf() / hashPair() hashPair is the sha256 of left||right and is order-sensitive",
+      "MerkleTree @consensus @regression generateProof() / verifyProof() round-trip every one of 1 leaves proves inclusion against the root",
+      "MerkleTree @consensus @regression generateProof() / verifyProof() round-trip every one of 13 leaves proves inclusion against the root",
+      "MerkleTree @consensus @regression generateProof() / verifyProof() round-trip every one of 2 leaves proves inclusion against the root",
+      "MerkleTree @consensus @regression generateProof() / verifyProof() round-trip every one of 3 leaves proves inclusion against the root",
+      "MerkleTree @consensus @regression generateProof() / verifyProof() round-trip every one of 4 leaves proves inclusion against the root",
+      "MerkleTree @consensus @regression generateProof() / verifyProof() round-trip every one of 5 leaves proves inclusion against the root",
+      "MerkleTree @consensus @regression generateProof() / verifyProof() round-trip every one of 8 leaves proves inclusion against the root",
+      "MerkleTree @consensus @regression generateProof() / verifyProof() round-trip generateProof returns null for out-of-range / empty",
+      "MerkleTree @consensus @regression generateProof() / verifyProof() round-trip rejects a proof against the wrong root",
+      "MerkleTree @consensus @regression generateProof() / verifyProof() round-trip rejects a proof for the wrong leaf",
+      "MerkleTree @consensus @regression generateProof() / verifyProof() round-trip rejects a proof with a tampered sibling hash",
+      "MerkleTree @consensus @regression generateProof() / verifyProof() round-trip verifyProof returns false on missing arguments",
+      "MerkleTree published root vectors @consensus @regression documents the legacy odd-leaf duplication collision",
+      "MerkleTree published root vectors @consensus @regression matches independently computed roots for fixed leaf counts",
+      "MerkleTree published root vectors @consensus @regression matches the independently computed proof for leaf 4 of 5"
+    ],
     "fe32d7c237f2fed6": [
       "node store row chunks inserts a one-node chunk and returns the query result",
       "node store row chunks inserts a three-node chunk with one tuple per node and flattened arguments",
@@ -5323,8 +5360,8 @@
   },
   "scripts": {
     "test": {
-      "fileCount": 455,
-      "titleCount": 3514,
+      "fileCount": 458,
+      "titleCount": 3538,
       "files": {
         "test/unit/anchor_fold_state_hash_twin.test.js": "4fbe28f32fa63c5b",
         "test/unit/anchor_recovery_field_twin.test.js": "6c93dad4cd12104b",
@@ -5402,7 +5439,7 @@
         "test/unit/client/checkpoint_fold_canonical.test.js": "0ab15db8cd973d95",
         "test/unit/client/checkpoint_supersede.test.js": "b3c57998e00ec8ae",
         "test/unit/client/commit_without_open_transaction.test.js": "1ad311d10965d7a2",
-        "test/unit/client/decoder_catchup_skip_lookups_fork.test.js": "1474f342de739548",
+        "test/unit/client/decoder_catchup_skip_lookups_fork.test.js": "32a61f25536f4df5",
         "test/unit/client/decoder_link.test.js": "fb1e3a01b1150f54",
         "test/unit/client/escrow_rederive_status_sets.test.js": "1be1afa659a63bc2",
         "test/unit/client/lifecycle/startup_lifecycle_integrity.test.js": "bb13304278b5f97b",
@@ -5506,12 +5543,14 @@
         "test/unit/client_sync_io.test/bootstrap/03_bootstrap_from_height_size_wall.test.js": "f9c44d0765bfcce7",
         "test/unit/client_sync_io.test/bootstrap/03_sync_lookup_tables_paged.test.js": "19b6bdb857cf7156",
         "test/unit/client_sync_io.test/bootstrap/04_sync_lookup_tables_paged_window_tip.test.js": "cd3b6bb8e522c2cc",
+        "test/unit/client_sync_io.test/bootstrap/05_bootstrap_apply_lifecycle_guard.test.js": "b586cfbc148f21f9",
         "test/unit/client_sync_io.test/catch_up/04_truncated_catch_up.test.js": "db43ccc2db666f97",
         "test/unit/client_sync_io.test/catch_up/05_oversized_catch_up_fallback_routes_by_truncation.test.js": "6925983b3b5895de",
         "test/unit/client_sync_io.test/catch_up/06_decoder_completeness_check_on_a_truncated_replica.test.js": "5cb20fdb5738741b",
         "test/unit/client_sync_io.test/catch_up/09_run_incremental_catch_up.test.js": "0351fed12642c8a1",
         "test/unit/client_sync_io.test/catch_up/10_incremental_catch_up_coalescing.test.js": "e4ff82e224f29005",
         "test/unit/client_sync_io.test/catch_up/11_active_source_selection.test.js": "41fd111ff86e66ee",
+        "test/unit/client_sync_io.test/catch_up/12_since_block_mismatch_source.test.js": "ea4b18f6d2eb1d2b",
         "test/unit/client_sync_io.test/regressions/01_decoder_lookup_hole_repair_regression.test.js": "f8d4abc3b990d5dd",
         "test/unit/client_sync_io.test/regressions/02_reorg_rollback_apply_lock_recheck.test.js": "eca27514531e77f8",
         "test/unit/client_sync_io.test/regressions/03_below_tip_replacement_rewind.test.js": "d043538d8eeef942",
@@ -5638,7 +5677,7 @@
         "test/unit/hub_consensus_hash_mismatch_health.test.js": "3c4cdf0461e9d830",
         "test/unit/list_share_lifecycle_twin.test.js": "788443e1a0a8e472",
         "test/unit/merkle.test.js": "780d1a01b4ffea14",
-        "test/unit/merkle_tree.test.js": "0c488b6b47a588af",
+        "test/unit/merkle_tree.test.js": "fdd6ddf7e836b25f",
         "test/unit/missing_tables.test.js": "092adf2c2aa96019",
         "test/unit/observability.test.js": "ca8fa416b5e8a763",
         "test/unit/pinned_validators.test.js": "01a651edbca6251e",
@@ -5656,6 +5695,7 @@
         "test/unit/repo_guards/source_reorg_ceiling_parity.test.js": "3486b3960351508b",
         "test/unit/rollback_coverage.test.js": "ac55087cdf139bdb",
         "test/unit/rollback_coverage.test/01_special_tables_handled.test.js": "72484f08c0af2014",
+        "test/unit/rollback_coverage.test/02_attest_forward_reverse_parity.test.js": "e3725c987a1956ef",
         "test/unit/schema/utf8mb4_columns_parity.test.js": "20917c7b497e1677",
         "test/unit/schema_datetime_columns.test.js": "28e4ceac4ff3fdac",
         "test/unit/schema_gap.test.js": "43893e9d550945c2",
@@ -5698,7 +5738,7 @@
         "test/unit/shutdown.test.js": "6d1984714832f0a3",
         "test/unit/sibling_coverage.test.js": "d8d1e52267ea606f",
         "test/unit/snapshot_builder.test.js": "b3e2a0142aa3664a",
-        "test/unit/snapshot_builder.test/01_stream_full_snapshot.test.js": "72c2cac4e73d4e53",
+        "test/unit/snapshot_builder.test/01_stream_full_snapshot.test.js": "324b824c09ed45df",
         "test/unit/snapshot_builder.test/02_stream_incremental_snapshot.test.js": "a7fb44f8f169d93e",
         "test/unit/snapshot_builder.test/03_stream_table_rows_by_id.test.js": "2f20c354797e7735",
         "test/unit/snapshot_builder.test/04_stream_dispensers.test.js": "f2f7e767a0317d4c",
@@ -6071,8 +6111,8 @@
       }
     },
     "test:regression": {
-      "fileCount": 149,
-      "titleCount": 1102,
+      "fileCount": 153,
+      "titleCount": 1125,
       "files": {
         "test/unit/balance_helpers.test.js": "b146f330faa567f9",
         "test/unit/block_hasher.test.js": "207951e050b87331",
@@ -6087,6 +6127,7 @@
         "test/unit/client/attest_rotation_burial.test.js": "fa858c545e51d96c",
         "test/unit/client/checkpoint_fold_canonical.test.js": "0ab15db8cd973d95",
         "test/unit/client/checkpoint_supersede.test.js": "b3c57998e00ec8ae",
+        "test/unit/client/decoder_catchup_skip_lookups_fork.test.js": "1bd15edda6b2bf7e",
         "test/unit/client/lifecycle/startup_lifecycle_integrity.test.js": "bb13304278b5f97b",
         "test/unit/client/lifecycle/websocket_lifecycle_integrity.test.js": "7dcdfcdf6e4774e5",
         "test/unit/client/reorg_guard/catch_up_lookup_reorg_guard.test.js": "c6f69ed76ef46da0",
@@ -6128,10 +6169,12 @@
         "test/unit/client_sync_io.test/20_lookup_hole_repair_and_count_check_scoping_regression.test.js": "20341c70321425c4",
         "test/unit/client_sync_io.test/bootstrap/02_bootstrap_from_height.test.js": "e99eb2096660623b",
         "test/unit/client_sync_io.test/bootstrap/03_bootstrap_from_height_size_wall.test.js": "f9c44d0765bfcce7",
+        "test/unit/client_sync_io.test/bootstrap/05_bootstrap_apply_lifecycle_guard.test.js": "b586cfbc148f21f9",
         "test/unit/client_sync_io.test/catch_up/05_oversized_catch_up_fallback_routes_by_truncation.test.js": "6925983b3b5895de",
         "test/unit/client_sync_io.test/catch_up/06_decoder_completeness_check_on_a_truncated_replica.test.js": "5cb20fdb5738741b",
         "test/unit/client_sync_io.test/catch_up/10_incremental_catch_up_coalescing.test.js": "3babbe89e87c1b4d",
         "test/unit/client_sync_io.test/catch_up/11_active_source_selection.test.js": "41fd111ff86e66ee",
+        "test/unit/client_sync_io.test/catch_up/12_since_block_mismatch_source.test.js": "ea4b18f6d2eb1d2b",
         "test/unit/client_sync_io.test/regressions/01_decoder_lookup_hole_repair_regression.test.js": "f8d4abc3b990d5dd",
         "test/unit/client_sync_io.test/regressions/02_reorg_rollback_apply_lock_recheck.test.js": "eca27514531e77f8",
         "test/unit/client_sync_io.test/regressions/03_below_tip_replacement_rewind.test.js": "cea0a80ccd669442",
@@ -6176,12 +6219,13 @@
         "test/unit/generated_columns.test.js": "774b6ea9b6b7fe1e",
         "test/unit/hub_client.test/13_getallconfigs_error_envelope.test.js": "601661f36324523b",
         "test/unit/merkle.test.js": "780d1a01b4ffea14",
-        "test/unit/merkle_tree.test.js": "0c488b6b47a588af",
+        "test/unit/merkle_tree.test.js": "fdd6ddf7e836b25f",
         "test/unit/pinned_validators.test.js": "01a651edbca6251e",
         "test/unit/protocol_address_roles_twin.test.js": "5d511d8452dc7256",
         "test/unit/replicated_datetime_columns.test.js": "007aec547cbd73a8",
         "test/unit/rollback_coverage.test.js": "ada93729584ae201",
         "test/unit/rollback_coverage.test/01_special_tables_handled.test.js": "72484f08c0af2014",
+        "test/unit/rollback_coverage.test/02_attest_forward_reverse_parity.test.js": "e3725c987a1956ef",
         "test/unit/schema_generated_columns_prototype_keys.test.js": "947b7c5236ff9abd",
         "test/unit/schema_version.test.js": "6324961ce2aed7c0",
         "test/unit/schema_version_gate.test.js": "884c398f329d8e1e",
