@@ -28,12 +28,12 @@
  *   - getNetBalance renders the DECIMAL sum to a minimal-decimal string in SQL
  *     (balance-helpers.minimalDecimal), instead of mathjs bcsub; canonicalAmount
  *     normalises both to the identical leaf value. This module needs no mathjs.
- *   - stakes_root IS recomputed here (BTC-only) from the ported _stakeWeightsSql +
+ *   - stakes_root IS recomputed here (BTC-only) from the ported stakeWeightsSql +
  *     the frozen BTC capability config (consensus-constants.js), mirroring the
  *     indexer's gatherStakeEntries. Non-BTC chains commit the EMPTY_SMT_ROOT.
  *     ClientSync now verifies balances_root + block_merkle_root + state_root (the
  *     last folds stakes_root). The stake-weight query is a consensus surface, so
- *     db._stakeWeightsSql is locked byte-identical to the indexer by the cross-repo
+ *     db.stakeWeightsSql is locked byte-identical to the indexer by the cross-repo
  *     drift guard in test/unit/rollback_coverage.test.js.
  *
  * DbNodeStore, MemoryNodeStore and PersistentSMT.update / buildFull / prove are
@@ -584,7 +584,7 @@ async function buildFullBalancesRoot(db, chain, network, blockIndex, opts){
 // ---- Stakes sub-tree (BTC-only, sec.4.1) ------------------------------------
 // Mirror of the indexer's gatherStakeEntries: one leaf per (pubkey, capability)
 // over the frozen BTC capability set, source-deduped weight via db
-// getStakeWeightsByCapability (the ported _stakeWeightsSql), keyed by canonical
+// getStakeWeightsByCapability (the ported stakeWeightsSql), keyed by canonical
 // pubkey+capability strings. Non-BTC chains commit the empty-SMT root (capability
 // staking is BTC-only). The capability set + per-capability MIN_STAKE floors and
 // the VALIDATOR_QUERY_LIMIT cap come from consensus-constants.js, mirrored from

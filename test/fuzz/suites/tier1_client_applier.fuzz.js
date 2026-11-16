@@ -27,6 +27,7 @@ const {
     fullSnapshotPayload, partialSnapshotPayload,
 } = require('../helpers/generators/payloads');
 const { genericDataRow, rowArray, mixedRows } = require('../helpers/generators/rows');
+const { tolerateMalformed } = require('../helpers/tolerate_malformed');
 const { SCHEMA_VERSION } = require('../../../src/schema/version');
 
 let crashLog = [];
@@ -144,7 +145,7 @@ describe('Tier 1 - ClientApplier @tier1', function () {
                     db.beginTransaction.resolves();
                     db.commitTransaction.resolves();
                     db.rollbackTransaction.resolves();
-                    await applier.applyBlock(payload);
+                    await tolerateMalformed(() => applier.applyBlock(payload));
                 }
             ), { numRuns: NUM_RUNS });
         });
@@ -216,7 +217,7 @@ describe('Tier 1 - ClientApplier @tier1', function () {
             return fc.assert(fc.asyncProperty(
                 partialSnapshotPayload(),
                 async (snapshot) => {
-                    await applier.applyFullSnapshot(withBlockNaturalKeys(snapshot));
+                    await tolerateMalformed(() => applier.applyFullSnapshot(withBlockNaturalKeys(snapshot)));
                 }
             ), { numRuns: NUM_RUNS });
         });
@@ -244,7 +245,7 @@ describe('Tier 1 - ClientApplier @tier1', function () {
             return fc.assert(fc.asyncProperty(
                 partialSnapshotPayload(),
                 async (snapshot) => {
-                    await applier.applyIncrementalSnapshot(withBlockNaturalKeys(snapshot));
+                    await tolerateMalformed(() => applier.applyIncrementalSnapshot(withBlockNaturalKeys(snapshot)));
                 }
             ), { numRuns: NUM_RUNS });
         });

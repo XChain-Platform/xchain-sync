@@ -194,20 +194,21 @@ class ClientApplier {
     /**
      * Apply a single block payload from a WebSocket event.
      *
-     * Runs the whole block inside one transaction: a duplicate or malformed payload
-     * returns before anything is written, and any failure rolls the block back so
-     * ClientSync retries it rather than committing part of it.
+     * Runs the whole block inside one transaction: a duplicate returns before
+     * anything is written, a malformed payload throws before anything is written,
+     * and any failure rolls the block back so ClientSync retries it rather than
+     * committing part of it.
      *
      * @param {object} payload the server's block event: block_index, data (a
      *                         { table: [rows] } map) and any updated_rows
-     * @returns {boolean|undefined} true when committed, false when already present
+     * @returns {boolean} true when committed, false when already present
+     * @throws {Error} when the payload has no block_index or no data map
      */
     async applyBlock(payload){
         // Clear computed roots before every attempt so early returns cannot expose
         // roots from an earlier block to ClientSync.
         this._lastComputedRoots = null;
-        // A null check keeps the genesis block_index 0 valid.
-        if(!payload || !payload.data || payload.block_index == null) return;
+        this.assertBlockPayloadShape(payload);
 
         this.assertBlockSchemaVersion(payload);
         let existing = await this.db.getBlockHashRow(payload.block_index, null, { rethrow: true });
@@ -218,6 +219,20 @@ class ClientApplier {
 
         await this.applyBlockTransaction(payload);
         return true;
+    }
+
+    // A payload with nothing to write must never read as an applied block: the caller
+    // advances its cursor past anything that does not throw. The null check keeps the
+    // genesis block_index 0 valid; an array is not a { table: [rows] } map.
+    assertBlockPayloadShape(payload){
+        if(!payload || typeof payload !== 'object')
+            throw new Error('Malformed live block payload: not an object');
+        if(payload.block_index == null)
+            throw new Error('Malformed live block payload: block_index missing');
+        let data = payload.data;
+        if(!data || typeof data !== 'object' || Array.isArray(data))
+            throw new Error('Malformed live block payload at block ' + payload.block_index +
+                ': data is not a table map');
     }
 
     // Fail closed like the snapshot and page gates: every current server stamps the
@@ -419,9 +434,17 @@ class ClientApplier {
         }
     }
 
+    // The caller moves its cursor to the snapshot height once the apply returns, so a
+    // payload with no table map must throw instead of returning as if it were applied.
+    assertSnapshotTables(snapshotData, kind){
+        let tables = snapshotData && snapshotData.tables;
+        if(!tables || typeof tables !== 'object' || Array.isArray(tables))
+            throw new Error('Malformed ' + kind + ' snapshot: tables is not a table map');
+    }
+
     // Apply a full snapshot after confirming that its schema matches this replica.
     async applyFullSnapshot(snapshotData){
-        if(!snapshotData || !snapshotData.tables) return;
+        this.assertSnapshotTables(snapshotData, 'full');
 
         let dbType = (this.db && this.db.dbType) || 'indexer';
         this.assertSnapshotSchemaVersion(snapshotData, dbType);
@@ -489,7 +512,7 @@ class ClientApplier {
      * @param {object} [opts]
      */
     async applyIncrementalSnapshot(snapshotData, opts){
-        if(!snapshotData || !snapshotData.tables) return;
+        this.assertSnapshotTables(snapshotData, 'incremental');
 
         let dbType = (this.db && this.db.dbType) || 'indexer';
         let expectedVersion = SCHEMA_VERSION[dbType];

@@ -11,6 +11,7 @@
 const {
     assert, sinon, axios, ClientSync, createMockDb, registerClientSyncHooks
 } = require('../support');
+const ClientApplier = require('../../../../src/client/applier');
 
 let sync, db, applier, rollback, hashVerifier, config, util;
 
@@ -75,6 +76,23 @@ function registerApplyBlockEventTests(){
             applier.applyBlock.rejects(new Error('apply fail'));
             await sync.applyBlockEvent({ block_index: 10, ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c' });
             // Should not throw; error is caught and logged
+            assert.strictEqual(console.error.called, true);
+        });
+
+        it('keeps the cursor and the tip hashes when the real applier refuses a block with no data', async function(){
+            sync.applier = new ClientApplier(db, util);
+            sync.lastAppliedBlock = 9;
+            sync.lastHashes = { ledger_hash: 'old-9' };
+            db.beginTransaction = sinon.stub().resolves();
+            for(let event of [
+                { block_index: 10, ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c' },
+                { block_index: 10, data: [], ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c' }
+            ]){
+                await sync.applyBlockEvent(event);
+                assert.strictEqual(sync.lastAppliedBlock, 9);
+                assert.strictEqual(sync.lastHashes.ledger_hash, 'old-9');
+            }
+            assert.strictEqual(db.beginTransaction.called, false);
             assert.strictEqual(console.error.called, true);
         });
 

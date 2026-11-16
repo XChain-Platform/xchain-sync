@@ -58,11 +58,12 @@ function registerIncrementalSnapshotCases1(){
     });
     registerRecommittedEpochCase();
     it('skips null snapshot', async function(){
-        await applier.applyIncrementalSnapshot(null);
+        await assert.rejects(() => applier.applyIncrementalSnapshot(null), /Malformed incremental snapshot/);
         assert.strictEqual(db.beginTransaction.called, false);
     });
     it('skips a snapshot without tables', async function(){
-        await applier.applyIncrementalSnapshot({ since_block: 1 });
+        await assert.rejects(() => applier.applyIncrementalSnapshot({ since_block: 1 }),
+            /Malformed incremental snapshot/);
         assert.strictEqual(db.beginTransaction.called, false);
     });
     it('throws on a schema-version mismatch', async function(){
@@ -142,6 +143,15 @@ function registerIncrementalSnapshotRepairCases(){
     });
 }
 
+function registerMalformedSnapshotCases(){
+    it('refuses a snapshot whose tables is an array', async function(){
+        await assert.rejects(
+            () => applier.applyIncrementalSnapshot({ schema_version: SCHEMA_VERSION.indexer, since_block: 1, tables: [] }),
+            /Malformed incremental snapshot/);
+        assert.strictEqual(db.beginTransaction.called, false);
+    });
+}
+
 function registerIncrementalSnapshotCases2(){
     it('rolls back on error', async function(){
         db.doQuery.rejects(new Error('inc fail'));
@@ -159,6 +169,7 @@ describe('ClientApplier', function(){
 
     describe('applyIncrementalSnapshot', function(){
         registerIncrementalSnapshotCases1();
+        registerMalformedSnapshotCases();
         registerIncrementalSnapshotRepairCases();
         registerIncrementalSnapshotCases2();
     });

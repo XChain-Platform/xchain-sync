@@ -24,7 +24,7 @@ function makeKeypair() {
 
 // One validator signs a pre-commitment mainnet checkpoint, so the count regime
 // decides and a single signature is quorate.
-function signedBody(extra) {
+function signedBody(extra, checkpointOverrides) {
     let key = makeKeypair();
     let cp = {
         chain: 'BTC', network: 'mainnet', block_index: 900123,
@@ -32,6 +32,7 @@ function signedBody(extra) {
         actions_hash: 'ef'.repeat(32), contract_hash: '01'.repeat(32),
         checkpoint_seq: 417, snapshot_block: 900120
     };
+    Object.assign(cp, checkpointOverrides || {});
     let sig = crypto.sign(null, Buffer.from(Checkpoint.canonicalCheckpoint(cp), 'utf8'), key.privateKey).toString('hex');
     cp.validator_signatures = JSON.stringify([{ pubkey: key.pubkeyHex, sig: sig }]);
     return Object.assign({ checkpoint: cp, validators: [key.pubkeyHex], snapshot_available: true }, extra);
@@ -87,5 +88,26 @@ describe('served checkpoint final (sync twin)', function () {
             stubFetch(signedBody({})));
         assert.strictEqual(absent.valid, true);
         assert.strictEqual(absent.final, false);
+
+        const wrongHeight = await Checkpoint.fetchAndVerifyCheckpoint('', 'BTC', 900124,
+            stubFetch(signedBody({ final: true })));
+        assert.strictEqual(wrongHeight.validSigs, 1);
+        assert.strictEqual(wrongHeight.valid, false);
+        assert.deepStrictEqual(wrongHeight.bindingMismatches,
+            [{ field: 'block_index', requested: 900124, served: 900123 }]);
+        const wrongChain = await Checkpoint.fetchAndVerifyCheckpoint('', 'BTC', 900123,
+            stubFetch(signedBody({ final: true }, { chain: 'LTC' })));
+        assert.strictEqual(wrongChain.validSigs, 1);
+        assert.strictEqual(wrongChain.valid, false);
+        assert.deepStrictEqual(wrongChain.bindingMismatches.map(m => m.field), ['chain']);
+        assert.strictEqual(Checkpoint.requestBindingMismatches(
+            { chain: 'BTC', network: 'testnet', block_index: 900123 },
+            { coin: 'TBTC', blockIndex: '900123' }), null);
+        assert.deepStrictEqual(Checkpoint.requestBindingMismatches(
+            { chain: 'LTC', network: 'regtest', block_index: 900123 },
+            { coin: 'BTC', blockIndex: 900123 }).map(m => m.field), ['chain', 'network']);
+        assert.deepStrictEqual(Checkpoint.requestBindingMismatches(
+            { chain: 'BTC', network: 'mainnet', block_index: 900123 },
+            { coin: 'UNKNOWN', blockIndex: 900123 }).map(m => m.field), ['coin']);
     });
 });

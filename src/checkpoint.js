@@ -26,6 +26,7 @@
  ********************************************************************/
 
 const crypto = require('crypto');
+const coins  = require('./coins');
 const eq     = require('./consensus/equivocation_header.js');
 const swq    = require('./consensus/stake_weighted_quorum.js');
 const supersede = require('./protocol/light_client/supersede_suffix.js');
@@ -235,17 +236,49 @@ function suppliedValidators(opts){
     return opts.validators;
 }
 
+const CHECKPOINT_COIN_PREFIX = Object.freeze({ mainnet: '', testnet: 'T', regtest: 'R' });
+
+function checkpointCoinPlane(code){
+    const upper = String(code || '').toUpperCase();
+    for (const chain of coins.ALLOWED_COINS)
+        for (const network of coins.NETWORKS)
+            if (CHECKPOINT_COIN_PREFIX[network] + chain === upper) return { chain, network };
+    return null;
+}
+
+function requestBindingMismatches(checkpoint, expected){
+    const mismatches = [];
+    const cp = checkpoint || {};
+    if (String(cp.block_index) !== String(expected.blockIndex))
+        mismatches.push({ field: 'block_index', requested: expected.blockIndex, served: cp.block_index });
+    const plane = checkpointCoinPlane(expected.coin);
+    if (!plane) {
+        mismatches.push({ field: 'coin', requested: expected.coin, served: null });
+        return mismatches;
+    }
+    if (String(cp.chain).toUpperCase() !== plane.chain)
+        mismatches.push({ field: 'chain', requested: plane.chain, served: cp.chain });
+    if (String(cp.network).toLowerCase() !== plane.network)
+        mismatches.push({ field: 'network', requested: plane.network, served: cp.network });
+    return mismatches.length ? mismatches : null;
+}
+
 // Judge a verify-endpoint body against the supplied set, else the served one.
 // Only a supplied set anchors the verdict: the served set comes from the same
 // response as the checkpoint, so it proves only that the served signers signed.
-function verifyServedCheckpoint(body, supplied){
+// When expected is present, the verdict is also bound to the requested coin and height.
+function verifyServedCheckpoint(body, supplied, expected){
     let set = supplied !== null ? supplied : (body.validators || []);
     let result = verifyCheckpoint(body.checkpoint, set);
-    return Object.assign({ checkpoint: body.checkpoint, snapshotAvailable: !!body.snapshot_available,
+    const bindingMismatches = expected ? requestBindingMismatches(body.checkpoint, expected) : null;
+    if (bindingMismatches) result.valid = false;
+    const served = { checkpoint: body.checkpoint, snapshotAvailable: !!body.snapshot_available,
         // final and snapshotAvailable are explorer assertions, not locally verified.
         // A missing or non-true final value proves no finality and reads as false.
         final: body.final === true,
-        validatorSource: supplied !== null ? 'supplied' : 'explorer' }, result);
+        validatorSource: supplied !== null ? 'supplied' : 'explorer' };
+    if (expected) served.bindingMismatches = bindingMismatches;
+    return Object.assign(served, result);
 }
 
 // Convenience: fetch a checkpoint from an explorer's verify endpoint and
@@ -271,7 +304,7 @@ async function fetchAndVerifyCheckpoint(explorerUrl, coin, blockIndex, fetchImpl
     if (!res.ok) throw new Error('CheckpointVerifier: explorer returned HTTP ' + res.status);
     let body = await res.json();
     if (!body || !body.checkpoint) throw new Error('CheckpointVerifier: no checkpoint in response');
-    return verifyServedCheckpoint(body, supplied);
+    return verifyServedCheckpoint(body, supplied, { coin, blockIndex });
 }
 
 module.exports = {
@@ -287,6 +320,7 @@ module.exports = {
     commitmentActive,
     verifyCheckpoint,
     suppliedValidators,
+    requestBindingMismatches,
     verifyServedCheckpoint,
     fetchAndVerifyCheckpoint
 };

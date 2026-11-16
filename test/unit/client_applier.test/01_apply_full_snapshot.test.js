@@ -45,11 +45,17 @@ function registerHooks(){
 
 function registerFullSnapshotCases1(){
     it('skips null snapshot', async function(){
-        await applier.applyFullSnapshot(null);
+        await assert.rejects(() => applier.applyFullSnapshot(null), /Malformed full snapshot/);
         assert.strictEqual(db.beginTransaction.called, false);
     });
     it('skips snapshot without tables', async function(){
-        await applier.applyFullSnapshot({ block_height: 10 });
+        await assert.rejects(() => applier.applyFullSnapshot({ block_height: 10 }), /Malformed full snapshot/);
+        assert.strictEqual(db.beginTransaction.called, false);
+    });
+    it('refuses a snapshot whose tables is an array', async function(){
+        await assert.rejects(
+            () => applier.applyFullSnapshot({ schema_version: SCHEMA_VERSION.indexer, block_height: 10, tables: [] }),
+            /Malformed full snapshot/);
         assert.strictEqual(db.beginTransaction.called, false);
     });
     it('clears tables in reverse order and inserts in forward order', async function(){
