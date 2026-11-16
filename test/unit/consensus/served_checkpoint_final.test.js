@@ -42,8 +42,7 @@ function stubFetch(body) {
     return async () => ({ ok: true, json: async () => body });
 }
 
-describe('served checkpoint final (sync twin)', function () {
-
+function registerFinalityCases() {
     it('passes final false through for a height inside an open replay window', function () {
         let result = Checkpoint.verifyServedCheckpoint(signedBody({ final: false }), null);
         assert.strictEqual(result.valid, true);
@@ -75,7 +74,9 @@ describe('served checkpoint final (sync twin)', function () {
         assert.strictEqual(result.validatorSource, 'supplied');
         assert.strictEqual(result.final, false);
     });
+}
 
+function registerFetchAndBindingCase() {
     it('fetchAndVerifyCheckpoint reports final false inside the window and true once replayed', async function () {
         let open = await Checkpoint.fetchAndVerifyCheckpoint('https://explorer.xchain.io', 'BTC', 900123,
             stubFetch(signedBody({ final: false })));
@@ -110,4 +111,9 @@ describe('served checkpoint final (sync twin)', function () {
             { chain: 'BTC', network: 'mainnet', block_index: 900123 },
             { coin: 'UNKNOWN', blockIndex: 900123 }).map(m => m.field), ['coin']);
     });
+}
+
+describe('served checkpoint final (sync twin)', function () {
+    registerFinalityCases();
+    registerFetchAndBindingCase();
 });
