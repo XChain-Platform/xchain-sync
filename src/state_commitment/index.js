@@ -56,7 +56,9 @@
  *   - The leaf encoders _nz / _leafOrNull are the indexer's canonicalAmountOf /
  *     leafOrNull (leaf_values.js) under other names.
  *   - The indexer block path reads leaves through ledger_reads getNetBalances,
- *     one statement per 500-key chunk against a derived key table. Its single-key
+ *     one statement per 500-key chunk against a derived key table, run with
+ *     MariaDB's subquery cache off so keys that fold together under the connection
+ *     collation never share a cached sum. Its single-key
  *     getNetBalance carries the same two DECIMAL(60,18) sums. The twin case pins
  *     both reads and the block-path call; the e2e conformance suite proves both
  *     indexer renders agree with this file's SQL minimalDecimal render.

@@ -153,8 +153,10 @@ function assertBatchReadTwin(ctx, pair, m, rerun){
     const batchSql = sqlLiterals(batchFn);
     assert.strictEqual(batchSql.length, 1,
         'the indexer getNetBalances is no longer one SQL literal per chunk' + rerun);
-    const batchMatch = batchSql[0].match(/^SELECT k\.i AS i, \((SELECT .+ FROM credits c .+)\) AS cr, \((SELECT .+ FROM debits d .+)\) AS dr FROM \(\$\{inputs\}\) k$/);
-    assert.ok(batchMatch, 'the indexer getNetBalances SQL shape changed' + rerun);
+    // The subquery cache must stay off: it keys the correlated sums on k.address/k.tick
+    // under the connection collation, so keys that fold together share one sum.
+    const batchMatch = batchSql[0].match(/^SET STATEMENT optimizer_switch='subquery_cache=off' FOR SELECT k\.i AS i, \((SELECT .+ FROM credits c .+)\) AS cr, \((SELECT .+ FROM debits d .+)\) AS dr FROM \(\$\{inputs\}\) k$/);
+    assert.ok(batchMatch, 'the indexer getNetBalances SQL shape changed (or lost its subquery_cache=off prefix)' + rerun);
     for(let i = 1; i <= 2; i++){
         const singleKey = batchMatch[i].replaceAll('a.address=k.address AND t.tick=k.tick',
             'a.address=? AND t.tick=?');

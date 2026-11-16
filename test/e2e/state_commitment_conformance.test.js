@@ -246,17 +246,24 @@ async function assertCollationVariants() {
             [nextAction++, ...row]);
     const keys = [[addresses[0][0], ticks[0][0]], [addresses[1][0], ticks[0][0]],
         [addresses[0][0].toUpperCase(), ticks[0][0]], [addresses[0][0] + ' ', ticks[1][0]]];
+    // The block path passes only the stored strings. These distinct rows fold together
+    // under a _ci connection collation, so a cached correlated sum would be shared in
+    // whichever order they arrive; both orders must still give each key its own net.
+    const stored = [[addresses[0][0], ticks[0][0]], [addresses[0][0], ticks[1][0]], [addresses[1][0], ticks[0][0]]];
+    const keySets = [keys, stored, stored.slice().reverse()];
     const conn = await db.pool.getConnection();
     try {
         for (const collation of ['utf8mb4_general_ci', 'utf8mb4_unicode_ci']) {
             await conn.query('SET NAMES utf8mb4 COLLATE ' + collation);
             const followerDb = { doQueryStrict: (q, a) => conn.query(q, a) };
             const indexerDb = { doQueryStrict: (q, a) => conn.query(q, a), util: indexerRender.util };
-            const batch = await indexerRender.getNetBalances(indexerDb, keys);
-            for (const [address, tick] of keys)
-                assert.strictEqual(batch.get(address + '\t' + tick),
-                    await getNetBalance(followerDb, address, tick),
-                    'batched balance collation drift for ' + address + '/' + tick + ' under ' + collation);
+            for (const set of keySets) {
+                const batch = await indexerRender.getNetBalances(indexerDb, set);
+                for (const [address, tick] of set)
+                    assert.strictEqual(batch.get(address + '\t' + tick),
+                        await getNetBalance(followerDb, address, tick),
+                        'batched balance collation drift for ' + address + '/' + tick + ' under ' + collation);
+            }
         }
     } finally {
         conn.release();
