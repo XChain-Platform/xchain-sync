@@ -309,6 +309,11 @@
  *       the UNIQUE memo key when those rows stream. Memo text enters no block-hash
  *       preimage. The migration is mode=manual, as the 2026-08-19 memo widening was
  *       when v10 folded it. Decoder is unaffected and stays at 5.
+ *  23 - (indexer only) multipart FILE persistence: three new replicated tables,
+ *       `file_manifests`, `file_parts` and `file_completions`, shipped by the
+ *       2026-11-15-file-multipart-tables migration. A v22 follower lacks the tables
+ *       and cannot apply streamed multipart metadata, parts or assembly results.
+ *       Decoder is unaffected and stays at 5.
  *
  * MIGRATION_FRONTIER is the machine-readable half of that accounting: `through`
  * is the newest migration DATE whose replicated DDL is folded into the version
@@ -331,11 +336,11 @@
  *
  ********************************************************************/
 
-const SCHEMA_VERSION = { indexer: 22, decoder: 5 };
+const SCHEMA_VERSION = { indexer: 23, decoder: 5 };
 
 const MIGRATION_FRONTIER = {
     indexer: {
-        through: '2026-11-01',
+        through: '2026-11-15',
         before: [
             '2026-05-30-balances-composite-index.sql',
             '2026-06-03-unique-full-column-index-addresses.sql',
@@ -406,14 +411,15 @@ const MIGRATION_FRONTIER = {
             '2026-10-18-anchor-actions-pre-archive-status.sql',
             '2026-10-19-bridge-escrow-anchor-axis-checkpoint-idx.sql',
             '2026-10-21-rollcall-actions.sql',
-            '2026-10-23-index-tickers-full-tick-prefix.sql'
-        ],
-        accounted: [
+            '2026-10-23-index-tickers-full-tick-prefix.sql',
             '2026-11-01-index-memos-binary-collation.sql'
         ],
+        accounted: [
+            '2026-11-15-file-multipart-tables.sql'
+        ],
         hashes: {
-            '2026-11-01-index-memos-binary-collation.sql':
-                'eaed44bbbf96e096fb63773d00d59cd6e45782fbad117feba20187c28445d783'
+            '2026-11-15-file-multipart-tables.sql':
+                '2022b41c5d9c58ce2ff377de162b2b6d882eb97ad92a1dfad0e93d2aef361e61'
         }
     },
     decoder: {
