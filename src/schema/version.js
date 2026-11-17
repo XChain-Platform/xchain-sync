@@ -314,6 +314,14 @@
  *       2026-11-15-file-multipart-tables migration. A v22 follower lacks the tables
  *       and cannot apply streamed multipart metadata, parts or assembly results.
  *       Decoder is unaffected and stays at 5.
+ * Index-only frontier record (no version bump): two 2026-11-16 migrations add
+ *       non-unique secondary indexes only. 2026-11-16-mappings-actions-address-history-idx
+ *       adds (type_id, id, action_index) to the stream:action `mappings_actions`
+ *       table, and 2026-11-16-price-snapshots-pair-status-ts-index adds
+ *       (coin_pair, status, block_timestamp, price) to the hub-mirrored
+ *       `price_snapshots`, which never rides the wire. Neither changes replicated
+ *       columns nor payload shape, so an older follower can still store every
+ *       streamed row. Both are mode=auto. Indexer stays at 23 and decoder stays at 5.
  *
  * MIGRATION_FRONTIER is the machine-readable half of that accounting: `through`
  * is the newest migration DATE whose replicated DDL is folded into the version
@@ -340,7 +348,7 @@ const SCHEMA_VERSION = { indexer: 23, decoder: 5 };
 
 const MIGRATION_FRONTIER = {
     indexer: {
-        through: '2026-11-15',
+        through: '2026-11-16',
         before: [
             '2026-05-30-balances-composite-index.sql',
             '2026-06-03-unique-full-column-index-addresses.sql',
@@ -412,14 +420,22 @@ const MIGRATION_FRONTIER = {
             '2026-10-19-bridge-escrow-anchor-axis-checkpoint-idx.sql',
             '2026-10-21-rollcall-actions.sql',
             '2026-10-23-index-tickers-full-tick-prefix.sql',
-            '2026-11-01-index-memos-binary-collation.sql'
-        ],
-        accounted: [
+            '2026-11-01-index-memos-binary-collation.sql',
             '2026-11-15-file-multipart-tables.sql'
         ],
+        accounted: [
+            '2026-11-16-mappings-actions-address-history-idx.sql',
+            '2026-11-16-price-snapshots-pair-status-ts-index.sql'
+        ],
+        indexOnly: [
+            '2026-11-16-mappings-actions-address-history-idx.sql',
+            '2026-11-16-price-snapshots-pair-status-ts-index.sql'
+        ],
         hashes: {
-            '2026-11-15-file-multipart-tables.sql':
-                '2022b41c5d9c58ce2ff377de162b2b6d882eb97ad92a1dfad0e93d2aef361e61'
+            '2026-11-16-mappings-actions-address-history-idx.sql':
+                'a5a454e6bc11fb707356328020f075575de2b20dc1ead52872b7e52353b501cd',
+            '2026-11-16-price-snapshots-pair-status-ts-index.sql':
+                '93cf661631ce347c713d2dbadd4d9c6da14dc7fd69c3fcdd4a72cf9bd8b695b4'
         }
     },
     decoder: {
