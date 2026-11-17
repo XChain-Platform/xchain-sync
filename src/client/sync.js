@@ -40,6 +40,7 @@ const { decoderLinkBroken, decoderLinkState } = require('./decoder_link');
 const { classDigests } = require('./state_hash_classes');
 const verifiedTip = require('./verified_tip');
 const haltPersistence = require('./halt_persistence');
+const sourceRetry = require('./source_retry');
 const { rollbackPreservingError } = require('./rollback_preserving_error');
 const { retroactiveCapBlocks, admitRetroactiveRewind } = require('./retroactive_admission');
 const replicatedTables = require('../schema/replicated_tables');
@@ -885,6 +886,7 @@ class ClientSync {
         }
         this._evictedSources.add(sourceIndex);
         this.cancelReconnect(sourceIndex);
+        this.forgetSourceRetry(sourceIndex);
         this._sourcesNeedingRecovery.delete(sourceIndex);
         this._sourceStrikes.delete(sourceIndex);
         let ws = this.wsConns[sourceIndex];
@@ -1075,6 +1077,7 @@ class ClientSync {
         for(const timer of this._streamWatchdogs.values()) clearTimeout(timer);
         this._reconnectTimers.clear();
         this._streamWatchdogs.clear();
+        this.forgetSourceRetry();
         this._sourceLastWsEventAt.clear();
         this._sourceLastReportedTip.clear();
         this._sourcesNeedingRecovery.clear();
@@ -3429,7 +3432,8 @@ class ClientSync {
         let syncMode = this._syncMode || 'full';
         let modeQs   = (syncMode === 'infra-only') ? '?sync_mode=infra-only' : '';
         let wsUrl    = source.replace(/^http/, 'ws') + '/subscribe/' + this.dbType + '/' + this.chain + '/' + this.network + modeQs;
-        getLogger().info('Connecting WebSocket to ' + wsUrl + ' (sync_mode=' + syncMode + ')');
+        if(!this.isSourceReconnecting(sourceIndex))
+            getLogger().info('Connecting WebSocket to ' + wsUrl + ' (sync_mode=' + syncMode + ')');
 
         let ws;
         try {
@@ -3441,7 +3445,9 @@ class ClientSync {
                 headers:    this.upstreamHeaders()
             });
         } catch(e){
-            getLogger().error(util.format('WebSocket connection error:', e));
+            this.noteSourceError(sourceIndex, e);
+            if(!this.isSourceReconnecting(sourceIndex))
+                getLogger().error(util.format('WebSocket connection error:', e));
             this.markSourceNeedsRecovery(sourceIndex);
             this.scheduleReconnect(source, sourceIndex);
             return;
@@ -3467,6 +3473,8 @@ class ClientSync {
         if(ws && this.wsConns[sourceIndex] !== ws) return;
         getLogger().info('WebSocket connected to ' + source + ' for ' + this.chain + '/' + this.network);
         this.cancelReconnect(sourceIndex);
+        this.sourceReconnected(sourceIndex);
+        this.resetStaleChecks(sourceIndex);
         this._sourceLastWsEventAt.set(sourceIndex, Date.now());
         this.armStreamWatchdog(source, sourceIndex, ws);
 
@@ -3508,6 +3516,7 @@ class ClientSync {
         }
         if(typeof reportedTip === 'number' && Number.isFinite(reportedTip))
             this._sourceLastReportedTip.set(sourceIndex, reportedTip);
+        this.resetStaleChecks(sourceIndex);
         this.armStreamWatchdog(source, sourceIndex, ws);
         this._wsEventChain = (this._wsEventChain || Promise.resolve())
             .then(() => this.handleEvent(event, sourceIndex))
@@ -3516,7 +3525,7 @@ class ClientSync {
 
     handleWebSocketClose(source, sourceIndex, ws){
         if(ws && this.wsConns[sourceIndex] !== ws) return;
-        getLogger().info('WebSocket disconnected from ' + source);
+        if(!this.isSourceReconnecting(sourceIndex)) getLogger().info('WebSocket disconnected from ' + source);
         if(!ws || this.wsConns[sourceIndex] === ws) this.wsConns[sourceIndex] = null;
         this.clearStreamWatchdog(sourceIndex);
         this._sourceLastWsEventAt.delete(sourceIndex);
@@ -3528,7 +3537,9 @@ class ClientSync {
     }
 
     handleWebSocketError(err, source, sourceIndex, ws){
-        getLogger().error(util.format('WebSocket error from ' + source + ':', err.message));
+        if(!this.isSourceReconnecting(sourceIndex))
+            getLogger().error(util.format('WebSocket error from ' + source + ':', err && err.message));
+        if(sourceIndex !== undefined) this.noteSourceError(sourceIndex, err);
         if(!this.running || sourceIndex === undefined || (ws && this.wsConns[sourceIndex] !== ws)) return;
         this.markSourceNeedsRecovery(sourceIndex);
         this.scheduleReconnect(source, sourceIndex);
@@ -3561,8 +3572,9 @@ class ClientSync {
             return;
         }
         if(this._reconnectTimers.has(sourceIndex)) return;
-        let delay = Number(this.config['CLIENT_RECONNECT_DELAY']);
-        if(!Number.isFinite(delay) || delay < 0) delay = 5000;
+        // Each armed timer is one failed attempt, so an error and the close that
+        // follows it advance the backoff once.
+        const delay = this.nextReconnectDelay(sourceIndex);
         const timer = setTimeout(() => {
             this._reconnectTimers.delete(sourceIndex);
             if(this.running && !this._evictedSources.has(sourceIndex))
@@ -3583,14 +3595,16 @@ class ClientSync {
         this._streamWatchdogs.delete(sourceIndex);
     }
 
-    armStreamWatchdog(source, sourceIndex, ws){
+    // retryDelayMs paces a repeat check of a stream already found stale; without
+    // it the check runs when the stream has been silent for CLIENT_SOURCE_STALE_MS.
+    armStreamWatchdog(source, sourceIndex, ws, retryDelayMs){
         this.clearStreamWatchdog(sourceIndex);
         if(!this.running) return;
         const staleMs = Number(this.config['CLIENT_SOURCE_STALE_MS']);
         if(!Number.isFinite(staleMs) || staleMs <= 0) return;
         let lastEventAt = this._sourceLastWsEventAt.get(sourceIndex);
         if(typeof lastEventAt !== 'number') lastEventAt = Date.now();
-        const remaining = Math.max(1, staleMs - (Date.now() - lastEventAt) + 1);
+        const remaining = Math.max(retryDelayMs || 1, staleMs - (Date.now() - lastEventAt) + 1);
         const timer = setTimeout(() => {
             this._streamWatchdogs.delete(sourceIndex);
             if(!this.running || (ws && this.wsConns[sourceIndex] !== ws)) return;
@@ -3601,9 +3615,8 @@ class ClientSync {
             }
             this.reconnectStaleStreamIfSourceAdvanced(source, sourceIndex, ws, staleMs, seenAt)
                 .catch(e => {
-                    getLogger().error(util.format('WebSocket stale check failed for ' + source + ':', e));
                     if(this.running && (!ws || this.wsConns[sourceIndex] === ws))
-                        this.armStreamWatchdog(source, sourceIndex, ws);
+                        this.armStreamWatchdog(source, sourceIndex, ws, this.nextStaleCheckDelay(sourceIndex, e));
                 });
         }, remaining);
         this._streamWatchdogs.set(sourceIndex, timer);
@@ -3612,6 +3625,7 @@ class ClientSync {
     async reconnectStaleStreamIfSourceAdvanced(source, sourceIndex, ws, staleMs, staleSeenAt){
         const url = source + '/status/' + this.dbType + '/' + this.chain + '/' + this.network;
         const response = await axios.get(url, { headers: this.upstreamHeaders(), timeout: 10000 });
+        this.statusCheckAnswered(sourceIndex);
         const status = response.data || {};
         const sourceTip = (typeof status.source_height === 'number')
             ? status.source_height : status.block_height;
@@ -3625,7 +3639,7 @@ class ClientSync {
         if(typeof sourceTip !== 'number' || !Number.isFinite(sourceTip) ||
            typeof reportedTip !== 'number' || !Number.isFinite(reportedTip) ||
            sourceTip <= reportedTip){
-            this.armStreamWatchdog(source, sourceIndex, ws);
+            this.armStreamWatchdog(source, sourceIndex, ws, this.nextStaleCheckDelay(sourceIndex, null));
             return;
         }
 
@@ -5649,6 +5663,6 @@ class ClientSync {
 ClientSync.BootstrapExhaustedError = BootstrapExhaustedError;
 
 // The durable last-verified block and the durable halt write live in their own modules.
-Object.assign(ClientSync.prototype, verifiedTip, haltPersistence);
+Object.assign(ClientSync.prototype, verifiedTip, haltPersistence, sourceRetry);
 
 module.exports = ClientSync;
