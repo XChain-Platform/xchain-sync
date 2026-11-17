@@ -314,6 +314,22 @@
  *       2026-11-15-file-multipart-tables migration. A v22 follower lacks the tables
  *       and cannot apply streamed multipart metadata, parts or assembly results.
  *       Decoder is unaffected and stays at 5.
+ * Index-only frontier record (no version bump): two 2026-11-16 migrations add
+ *       non-unique secondary indexes only. 2026-11-16-mappings-actions-address-history-idx
+ *       adds (type_id, id, action_index) to the stream:action `mappings_actions`
+ *       table, and 2026-11-16-price-snapshots-pair-status-ts-index adds
+ *       (coin_pair, status, block_timestamp, price) to the hub-mirrored
+ *       `price_snapshots`, which never rides the wire. Neither changes replicated
+ *       columns nor payload shape, so an older follower can still store every
+ *       streamed row. Both are mode=auto. Indexer stays at 23 and decoder stays at 5.
+ *  24 - (indexer only) multipart FILE uploads are uncapped by the replicated
+ *       schema: `file_manifests.total_bytes` widens to BIGINT UNSIGNED, the
+ *       `filled_at_manifest` and `fill_ordinal` counter columns are added, and
+ *       three secondary indexes support source-hash lookup, fill ordering and
+ *       manifest completion lookup. A v23 follower would refuse a TOTAL_BYTES
+ *       value above 4,294,967,295 and lacks both counters. The
+ *       2026-11-17-file-multipart-uncapped migration is mode=auto. Decoder is
+ *       unaffected and stays at 5.
  *
  * MIGRATION_FRONTIER is the machine-readable half of that accounting: `through`
  * is the newest migration DATE whose replicated DDL is folded into the version
@@ -336,11 +352,11 @@
  *
  ********************************************************************/
 
-const SCHEMA_VERSION = { indexer: 23, decoder: 5 };
+const SCHEMA_VERSION = { indexer: 24, decoder: 5 };
 
 const MIGRATION_FRONTIER = {
     indexer: {
-        through: '2026-11-15',
+        through: '2026-11-17',
         before: [
             '2026-05-30-balances-composite-index.sql',
             '2026-06-03-unique-full-column-index-addresses.sql',
@@ -412,14 +428,17 @@ const MIGRATION_FRONTIER = {
             '2026-10-19-bridge-escrow-anchor-axis-checkpoint-idx.sql',
             '2026-10-21-rollcall-actions.sql',
             '2026-10-23-index-tickers-full-tick-prefix.sql',
-            '2026-11-01-index-memos-binary-collation.sql'
+            '2026-11-01-index-memos-binary-collation.sql',
+            '2026-11-15-file-multipart-tables.sql',
+            '2026-11-16-mappings-actions-address-history-idx.sql',
+            '2026-11-16-price-snapshots-pair-status-ts-index.sql'
         ],
         accounted: [
-            '2026-11-15-file-multipart-tables.sql'
+            '2026-11-17-file-multipart-uncapped.sql'
         ],
         hashes: {
-            '2026-11-15-file-multipart-tables.sql':
-                '2022b41c5d9c58ce2ff377de162b2b6d882eb97ad92a1dfad0e93d2aef361e61'
+            '2026-11-17-file-multipart-uncapped.sql':
+                'f4e671e3893001de14c5b27700872816a340837675a1ca16edc16e6a8b9a09ba'
         }
     },
     decoder: {
