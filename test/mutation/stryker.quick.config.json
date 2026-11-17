@@ -21,7 +21,22 @@
       "test/unit/**/*.test.js"
     ],
     "ignore": [
-      "test/unit/rollback_coverage.test.js"
+      "test/unit/rollback_coverage.test.js",
+      "test/unit/anchor_fold_state_hash_twin.test.js",
+      "test/unit/consensus/stake_weight_collation_twin.test.js",
+      "test/unit/client_rollback.test/13_schema_gap_predicate.test.js",
+      "test/unit/client/validator_rewards_restore_id_invariant.test.js",
+      "test/unit/consensus/anchor_fold_reader_census.test.js",
+      "test/unit/consensus/anchor_fold_rollback_predicate.test.js",
+      "test/unit/consensus/armed_map/completeness.test.js",
+      "test/unit/consensus/armed_map/falsification.test.js",
+      "test/unit/rollback_coverage.test/01_special_tables_handled.test.js",
+      "test/unit/rollback_coverage.test/02_attest_forward_reverse_parity.test.js",
+      "test/unit/server/reward_identity.test.js",
+      "test/unit/server_poller.test/09_ci_lifecycle_specs_not_side_loaded.test.js",
+      "test/unit/server_poller.test/11_build_block_payload_block_scoped_index_rows.test.js",
+      "test/unit/snapshot_builder.test/15_operator_local_snapshot_wording.test.js",
+      "test/unit/snapshot_source_classification.test.js"
     ]
   },
   "reporters": [

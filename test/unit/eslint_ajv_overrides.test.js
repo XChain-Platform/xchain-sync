@@ -15,22 +15,19 @@ const pkg = require(path.join('..', '..', 'package.json'));
 const lock = require(path.join('..', '..', 'package-lock.json'));
 
 describe('eslint ajv override wiring', () => {
-    it('pins eslint and @eslint/eslintrc to ajv 6 in package.json overrides', () => {
+    it('pins eslint to ajv 6 in package.json overrides', () => {
         expect(pkg.overrides.eslint).to.deep.equal({ ajv: '^6.14.0' });
-        expect(pkg.overrides['@eslint/eslintrc']).to.deep.equal({ ajv: '^6.14.0' });
+        expect(pkg.overrides).not.to.have.property('@eslint/eslintrc');
     });
 
     it('keeps the top-level ajv override on the 8.x line', () => {
         expect(pkg.overrides.ajv).to.match(/^\^8\./);
     });
 
-    it('resolves eslint and @eslint/eslintrc to an ajv 6 in the lockfile', () => {
+    it('resolves eslint to an ajv 6 in the lockfile', () => {
         const eslintAjv = lock.packages['node_modules/eslint/node_modules/ajv'];
-        const eslintrcAjv = lock.packages['node_modules/@eslint/eslintrc/node_modules/ajv'];
         expect(eslintAjv, 'node_modules/eslint/node_modules/ajv missing from lockfile').to.exist;
-        expect(eslintrcAjv, 'node_modules/@eslint/eslintrc/node_modules/ajv missing from lockfile').to.exist;
         expect(eslintAjv.version).to.match(/^6\./);
-        expect(eslintrcAjv.version).to.match(/^6\./);
     });
 
     it('resolves the top-level ajv to the 8.x line in the lockfile', () => {
