@@ -48,6 +48,7 @@ const { activationDelayBlocks, coinTicker } = require('../consensus-constants');
 const { isStateCommitmentActive } = require('../consensus/gates/state_commitment_gate');
 const { SCHEMA_VERSION } = require('../schema/version');
 const util = require('node:util');
+const { SUMMARY_EVERY_MS } = require('../util/retry_backoff');
 const { getLogger } = require('../observability');
 const envConfig = require('../config');
 const logger = getLogger();
@@ -170,6 +171,7 @@ function initializePollerHealthState(poller){
     // Count consecutive poll failures for stale /health status.
     // Reset the count after a successful poll cycle.
     poller.pollErrorCount = 0;
+    poller.pollErrorLoggedAt = 0;
 
     // Throttle the action-scoped query-count metric.
     // Use zero so the first block publishes a baseline.
@@ -207,15 +209,18 @@ class ServerPoller {
         }
 
         await this.updateStatus();
+        await this.pollLoop();
+    }
 
+    async pollLoop(){
         while(this.running){
             let blocksProcessed = 0;
             try {
                 blocksProcessed = await this.poll() || 0;
-                this.pollErrorCount = 0;
+                this.notePollRecovered();
             } catch(e){
                 this.pollErrorCount++;
-                logger.error(util.format('ServerPoller error for ' + this.chain + '/' + this.network + '/' + this.dbType + ' (consecutive errors: ' + this.pollErrorCount + '):', e));
+                this.logPollError(e);
                 // Update status so the poll_error_count field is current even while
                 // lastPolledBlock is frozen at the last-good value.
                 await this.updateStatus().catch(() => {});
@@ -224,6 +229,26 @@ class ServerPoller {
             if(blocksProcessed < 100)
                 await this.util.sleep(this.config['BLOCK_POLL_INTERVAL']);
         }
+    }
+
+    // A run of poll failures is logged in full when it starts and then once per
+    // summary window, so a source database that stays down cannot flood the log.
+    logPollError(e){
+        const now = Date.now();
+        if(this.pollErrorCount > 1 && now - this.pollErrorLoggedAt < SUMMARY_EVERY_MS) return;
+        this.pollErrorLoggedAt = now;
+        logger.error(util.format('ServerPoller error for ' + this.chain + '/' + this.network + '/' + this.dbType +
+            ' (consecutive errors: ' + this.pollErrorCount + '; repeats are logged once per ' +
+            (SUMMARY_EVERY_MS / 60000) + ' min):', e));
+    }
+
+    // End a failure run with one line; the /health count resets either way.
+    notePollRecovered(){
+        if(this.pollErrorCount > 0){
+            logger.info('ServerPoller for ' + this.chain + '/' + this.network + '/' + this.dbType +
+                ' recovered after ' + this.pollErrorCount + ' consecutive error(s)');
+        }
+        this.pollErrorCount = 0;
     }
 
     // Seed the broadcast cursor for a (re)start. For the indexer, resume from the
