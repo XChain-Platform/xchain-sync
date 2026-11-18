@@ -54,12 +54,7 @@ function makeSync(getSyncState){
     return { sync, db };
 }
 
-describe('ClientSync durable startup guards', function(){
-    beforeEach(function(){
-        sinon.stub(console, 'log'); sinon.stub(console, 'error'); sinon.stub(console, 'warn');
-    });
-    afterEach(function(){ sinon.restore(); });
-
+function registerHoldRestoreTests(){
     for(const [name, key, value] of [
         ['truncation floor', BASE_KEY, '900'],
         ['verified checkpoint block', BLOCK_KEY, '450'],
@@ -91,7 +86,9 @@ describe('ClientSync durable startup guards', function(){
             if(key === SEQ_KEY) assert.strictEqual(sync._lastVerifiedCheckpointSeq, 7);
         });
     }
+}
 
+function registerHoldFaultTests(){
     it('retries a persistent fault with doubling delays capped at a minute and never syncs', async function(){
         const read = productionShapedRead(new Map([[BASE_KEY, '900']]), k => k === BASE_KEY);
         const { sync } = makeSync(read);
@@ -131,7 +128,9 @@ describe('ClientSync durable startup guards', function(){
         assert.deepStrictEqual(reasons, ['rollback-guard-state-unreadable']);
         assert.deepStrictEqual(sync.rollbackGuardState(), { peak: 100, low: 98 });
     });
+}
 
+function registerOperatorClearTests(){
     for(const [hold, hang] of [[HOLD, 'startup'], ['rollback-guard-state-unreadable', 'guard']]){
         it('an operator clear during the ' + hold + ' hold leaves the database alone and the read still gates startup', async function(){
             const state = new Map([[BASE_KEY, '900'], [GUARD_KEY, JSON.stringify({ peak: 9, low: 8 })]]);
@@ -154,4 +153,15 @@ describe('ClientSync durable startup guards', function(){
             assert.strictEqual(sync._halted, null);
         });
     }
+}
+
+describe('ClientSync durable startup guards', function(){
+    beforeEach(function(){
+        sinon.stub(console, 'log'); sinon.stub(console, 'error'); sinon.stub(console, 'warn');
+    });
+    afterEach(function(){ sinon.restore(); });
+
+    registerHoldRestoreTests();
+    registerHoldFaultTests();
+    registerOperatorClearTests();
 });

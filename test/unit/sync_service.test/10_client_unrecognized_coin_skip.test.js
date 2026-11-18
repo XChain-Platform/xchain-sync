@@ -48,22 +48,9 @@ function stubReplicaLifecycle(service){
     sinon.stub(service.hubClient, 'getDecoderConfigs').resolves([]);
 }
 
-describe('SyncService client mode unrecognized coin skip', function(){
-    let service;
+let service;
 
-    beforeEach(function(){
-        service = new SyncService({
-            SYNC_MODE: 'client', HUB_API_HOST: 'localhost', HUB_PORT: 10000,
-            HUB_REPOLL_INTERVAL: 300000, REPLICA_DB_HOST: 'localhost', REPLICA_DB_PORT: 3306,
-            REPLICA_DB_USER: 'user', REPLICA_DB_PASS: 'pass'
-        });
-        stubReplicaLifecycle(service);
-    });
-
-    afterEach(function(){
-        sinon.restore();
-    });
-
+function registerIndexerSkipTests(){
     it('removes an indexer chain when ClientRollback rejects its unrecognized coin', async function(){
         const logError = sinon.stub(require('../../../src/observability').getLogger(), 'error');
         const startDiscovered = sinon.spy(service, 'startDiscoveredChains');
@@ -90,7 +77,9 @@ describe('SyncService client mode unrecognized coin skip', function(){
 
         assert.strictEqual(service.unrecognizedCoinKeys.has('notacoin:mainnet:indexer'), false);
     });
+}
 
+function registerDecoderSkipTests(){
     it('skips an unrecognized decoder and still starts a later healthy decoder', async function(){
         const unknown = indexerCfg({ coin: 'notacoin', dbType: 'decoder', db_name: 'nac_dec' });
         const healthy = indexerCfg({ coin: 'bitcoin', dbType: 'decoder', db_name: 'btc_dec' });
@@ -130,7 +119,9 @@ describe('SyncService client mode unrecognized coin skip', function(){
 
         assert.strictEqual(service.unrecognizedCoinKeys.has('notacoin:mainnet:decoder'), false);
     });
+}
 
+function registerAcceptedChainTest(){
     it('retains the registration when client startup accepts the chain', async function(){
         const startSync = sinon.stub(service, 'startClientSyncForChain');
 
@@ -141,4 +132,23 @@ describe('SyncService client mode unrecognized coin skip', function(){
         assert.deepStrictEqual(discovered.map(chain => chain.key), ['notacoin:mainnet:indexer']);
         assert.strictEqual(startSync.callCount, 1);
     });
+}
+
+describe('SyncService client mode unrecognized coin skip', function(){
+    beforeEach(function(){
+        service = new SyncService({
+            SYNC_MODE: 'client', HUB_API_HOST: 'localhost', HUB_PORT: 10000,
+            HUB_REPOLL_INTERVAL: 300000, REPLICA_DB_HOST: 'localhost', REPLICA_DB_PORT: 3306,
+            REPLICA_DB_USER: 'user', REPLICA_DB_PASS: 'pass'
+        });
+        stubReplicaLifecycle(service);
+    });
+
+    afterEach(function(){
+        sinon.restore();
+    });
+
+    registerIndexerSkipTests();
+    registerDecoderSkipTests();
+    registerAcceptedChainTest();
 });

@@ -142,16 +142,17 @@ describe('ClientSync catch-up after a reorg rollback', function(){
     });
 });
 
+// A decoder context with the post-reorg trigger armed and no prior reconcile.
+function decoderCtx(){
+    return { dbType: 'decoder', chain: 'bitcoin', network: 'mainnet', config: {},
+             _lastDispenserReconcileAt: null, _dispenserReconcileAfterReorg: true,
+             upstreamHeaders: () => ({}), withApplyLock: (fn) => fn(),
+             applier: { applyDispensersReplace: sinon.stub().resolves() } };
+}
+
 describe('ClientSync.reconcileDispensers clears the post-reorg trigger on attempt', function(){
     beforeEach(function(){ sinon.stub(console, 'log'); sinon.stub(console, 'error'); });
     afterEach(function(){ sinon.restore(); });
-
-    function decoderCtx(){
-        return { dbType: 'decoder', chain: 'bitcoin', network: 'mainnet', config: {},
-                 _lastDispenserReconcileAt: null, _dispenserReconcileAfterReorg: true,
-                 upstreamHeaders: () => ({}), withApplyLock: (fn) => fn(),
-                 applier: { applyDispensersReplace: sinon.stub().resolves() } };
-    }
 
     it('clears it when the reconcile succeeds', async function(){
         let ctx = decoderCtx();

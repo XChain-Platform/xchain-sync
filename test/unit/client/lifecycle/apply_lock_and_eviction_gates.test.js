@@ -46,20 +46,15 @@ function socket(){
 
 const FOUR = 'http://a:3006,http://b:3006,http://c:3006,http://d:3006';
 
-describe('ClientSync events from an evicted source @regression', function(){
-    beforeEach(function(){
-        sinon.stub(console, 'log'); sinon.stub(console, 'error'); sinon.stub(console, 'warn');
-    });
-    afterEach(function(){ sinon.restore(); });
+function stubStatusWork(sync){
+    sinon.stub(sync, 'incrementalCatchUp').resolves();
+    sinon.stub(sync, 'maybeVerifyCompleteness').resolves();
+    sinon.stub(sync, 'reconcileDispensers').resolves(true);
+    sinon.stub(sync, 'handleBlock').resolves();
+    sinon.stub(sync, 'shouldReconcileDispensers').returns(true);
+}
 
-    function stubStatusWork(sync){
-        sinon.stub(sync, 'incrementalCatchUp').resolves();
-        sinon.stub(sync, 'maybeVerifyCompleteness').resolves();
-        sinon.stub(sync, 'reconcileDispensers').resolves(true);
-        sinon.stub(sync, 'handleBlock').resolves();
-        sinon.stub(sync, 'shouldReconcileDispensers').returns(true);
-    }
-
+function registerEvictedEventTests(){
     it('a status event from an evicted source drives no catch-up, repair or height record', async function(){
         const sync = makeSync(FOUR);
         stubStatusWork(sync);
@@ -97,7 +92,9 @@ describe('ClientSync events from an evicted source @regression', function(){
         assert.strictEqual(sync.maybeVerifyCompleteness.calledOnceWith('http://c:3006', 50), true);
         assert.strictEqual(sync.lastKnownServerBlock, 50);
     });
+}
 
+function registerEvictedSocketTests(){
     it('a frame on a closing evicted socket refreshes no liveness and queues no event', function(){
         const sync = makeSync(FOUR);
         const ws = socket();
@@ -129,31 +126,36 @@ describe('ClientSync events from an evicted source @regression', function(){
         assert.strictEqual(sync._streamWatchdogs.has(3), false);
         clock.restore();
     });
-});
+}
 
-describe('ClientSync live apply under a halt @regression', function(){
+describe('ClientSync events from an evicted source @regression', function(){
     beforeEach(function(){
         sinon.stub(console, 'log'); sinon.stub(console, 'error'); sinon.stub(console, 'warn');
     });
     afterEach(function(){ sinon.restore(); });
 
-    function liveSync(){
-        const sync = makeSync();
-        sync.lastAppliedBlock = 10;
-        sinon.stub(sync, 'checkTrainActivation').resolves(false);
-        sinon.stub(sync, 'liveBlockBlockedByUnverifiedTail').resolves(false);
-        sinon.stub(sync, 'haltOnLiveStateHashDivergence').resolves(false);
-        sinon.stub(sync, 'finishAppliedBlock');
-        sinon.stub(sync, 'verifyCheckpointQuorumIfDue').resolves();
-        return sync;
-    }
+    registerEvictedEventTests();
+    registerEvictedSocketTests();
+});
 
-    function holdLock(sync){
-        let release;
-        sync._applyLock = new Promise(r => { release = r; });
-        return release;
-    }
+function liveSync(){
+    const sync = makeSync();
+    sync.lastAppliedBlock = 10;
+    sinon.stub(sync, 'checkTrainActivation').resolves(false);
+    sinon.stub(sync, 'liveBlockBlockedByUnverifiedTail').resolves(false);
+    sinon.stub(sync, 'haltOnLiveStateHashDivergence').resolves(false);
+    sinon.stub(sync, 'finishAppliedBlock');
+    sinon.stub(sync, 'verifyCheckpointQuorumIfDue').resolves();
+    return sync;
+}
 
+function holdLock(sync){
+    let release;
+    sync._applyLock = new Promise(r => { release = r; });
+    return release;
+}
+
+function registerLiveApplyTests(){
     it('does not commit a block queued on the apply lock when a halt lands first', async function(){
         const sync = liveSync();
         const release = holdLock(sync);
@@ -182,15 +184,18 @@ describe('ClientSync live apply under a halt @regression', function(){
         assert.strictEqual(sync.finishAppliedBlock.calledOnce, true);
     });
 
-    function trackHaltAtRelease(sync){
-        const seen = { halted: undefined };
-        const original = sync.withApplyLock.bind(sync);
-        sync.withApplyLock = fn => original(async () => {
-            try { return await fn(); } finally { if(seen.halted === undefined) seen.halted = sync._halted; }
-        });
-        return seen;
-    }
+}
 
+function trackHaltAtRelease(sync){
+    const seen = { halted: undefined };
+    const original = sync.withApplyLock.bind(sync);
+    sync.withApplyLock = fn => original(async () => {
+        try { return await fn(); } finally { if(seen.halted === undefined) seen.halted = sync._halted; }
+    });
+    return seen;
+}
+
+function registerFailedRollbackTests(){
     it('a failed rollback is halted before the apply lock releases', async function(){
         const sync = makeSync();
         sync.lastAppliedBlock = 10;
@@ -231,6 +236,16 @@ describe('ClientSync live apply under a halt @regression', function(){
         assert.strictEqual(sync.applier.applyBlock.called, false);
         assert.strictEqual(sync.getHaltInfo().reason, 'reorg-rollback-failed');
     });
+}
+
+describe('ClientSync live apply under a halt @regression', function(){
+    beforeEach(function(){
+        sinon.stub(console, 'log'); sinon.stub(console, 'error'); sinon.stub(console, 'warn');
+    });
+    afterEach(function(){ sinon.restore(); });
+
+    registerLiveApplyTests();
+    registerFailedRollbackTests();
 });
 
 describe('ClientSync catch-up 404 from a source that is behind @regression', function(){
