@@ -21,11 +21,12 @@ describe('streamTableRowsById max_block is strict', function(){
     for(const bad of ['-1', '', '12abc', '1e3', ' 5', '0x10', ['1', '2'], {}]){
         it('rejects max_block ' + JSON.stringify(bad) + ' with 400 and runs no SQL', async function(){
             let db = createMockDb();
-            db.doQuery.resolves(rowsAbove);
+            db.doQueryStrict.resolves(rowsAbove);
             let res = createMockRes();
             res.req = { query: { max_block: bad } };
             await builder.streamTableRowsById(db, 'index_addresses', 0, 3, res);
             assert.ok(res.status.calledWith(400));
+            assert.strictEqual(db.doQueryStrict.callCount, 0);
             assert.strictEqual(db.doQuery.callCount, 0);
             assert.strictEqual(res._chunks.length, 0);
         });
@@ -33,7 +34,7 @@ describe('streamTableRowsById max_block is strict', function(){
 
     async function page(maxBlock){
         let db = createMockDb();
-        db.doQuery.resolves(rowsAbove);
+        db.doQueryStrict.resolves(rowsAbove);
         let res = new PassThrough();
         let chunks = [];
         res.on('data', c => chunks.push(c));
