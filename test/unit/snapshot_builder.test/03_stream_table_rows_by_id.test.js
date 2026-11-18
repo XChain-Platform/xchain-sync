@@ -45,7 +45,7 @@ function streamTableRowsByIdPagingTests(){
 
     it('streams an id-ordered page with max_id and has_more=false when short', async function(){
         let db = createMockDb();
-        db.doQuery.resolves([{ id: 11, x: 'a' }, { id: 12, x: 'b' }]);
+        db.doQueryStrict.resolves([{ id: 11, x: 'a' }, { id: 12, x: 'b' }]);
         let res = new PassThrough();
         let chunks = [];
         res.on('data', c => chunks.push(c));
@@ -63,7 +63,7 @@ function streamTableRowsByIdPagingTests(){
 
     it('queries id > after_id ORDER BY id LIMIT, and sets has_more when a full page returns', async function(){
         let db = createMockDb();
-        db.doQuery.resolves([{ id: 1 }, { id: 2 }, { id: 3 }]);
+        db.doQueryStrict.resolves([{ id: 1 }, { id: 2 }, { id: 3 }]);
         let res = new PassThrough();
         let chunks = [];
         res.on('data', c => chunks.push(c));
@@ -74,9 +74,17 @@ function streamTableRowsByIdPagingTests(){
         });
         let parsed = JSON.parse(zlib.gunzipSync(Buffer.concat(chunks)).toString());
         assert.strictEqual(parsed.has_more, true, 'rows.length === limit -> more pages remain');
-        let q = db.doQuery.firstCall.args[0];
+        let q = db.doQueryStrict.firstCall.args[0];
         assert.ok(/WHERE `id` > \? ORDER BY `id` ASC LIMIT \?/.test(q), 'paged id-cursor query');
-        assert.deepStrictEqual(db.doQuery.firstCall.args[1], [0, 3], 'after_id and limit bound as params');
+        assert.deepStrictEqual(db.doQueryStrict.firstCall.args[1], [0, 3], 'after_id and limit bound as params');
+        db.doQueryStrict.reset();
+        db.doQueryStrict.rejects(new Error('lookup read failed'));
+        const faultRes = createMockRes();
+        await assert.rejects(
+            () => builder.streamTableRowsById(db, 'index_transactions', 0, 3, faultRes),
+            /lookup read failed/
+        );
+        assert.strictEqual(faultRes.setHeader.called, false, 'no successful page headers were written');
     });
 }
 
@@ -84,7 +92,7 @@ function streamTableRowsByIdLimitTests(){
 
     it('clamps an oversized limit to the ceiling', async function(){
         let db = createMockDb();
-        db.doQuery.resolves([]);
+        db.doQueryStrict.resolves([]);
         let res = new PassThrough();
         res.on('data', () => {});
         res.setHeader = sinon.stub();
@@ -92,7 +100,7 @@ function streamTableRowsByIdLimitTests(){
             res.on('finish', resolve);
             builder.streamTableRowsById(db, 'index_transactions', 0, 9999999, res);
         });
-        assert.strictEqual(db.doQuery.firstCall.args[1][1], SnapshotBuilder.ROWS_PAGE_MAX, 'limit clamped to ceiling');
+        assert.strictEqual(db.doQueryStrict.firstCall.args[1][1], SnapshotBuilder.ROWS_PAGE_MAX, 'limit clamped to ceiling');
     });
 
     // The decoder pubkeys table's PK (address_id) is NOT monotonic w.r.t. insert
@@ -102,7 +110,7 @@ function streamTableRowsByIdLimitTests(){
     it('decoder: pages the pubkeys table by its surrogate monotonic id cursor', async function(){
         let db = createMockDb('decoder_db');
         db.dbType = 'decoder';
-        db.doQuery.resolves([
+        db.doQueryStrict.resolves([
             { id: 5, address_id: 90, pubkey: 'p1' },
             { id: 9, address_id: 12, pubkey: 'p2' }
         ]);
@@ -117,7 +125,7 @@ function streamTableRowsByIdLimitTests(){
         let parsed = JSON.parse(zlib.gunzipSync(Buffer.concat(chunks)).toString());
         assert.strictEqual(parsed.table, 'pubkeys');
         assert.strictEqual(parsed.max_id, 9, 'cursor high-water is the max surrogate id, not address_id');
-        let q = db.doQuery.firstCall.args[0];
+        let q = db.doQueryStrict.firstCall.args[0];
         assert.ok(/WHERE `id` > \? ORDER BY `id` ASC LIMIT \?/.test(q), 'pages by surrogate id, not address_id');
     });
 }

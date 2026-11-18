@@ -532,6 +532,9 @@ function addReplicaVerificationConfig(config){
     // sampled on catch-ups and on the live status tick. 0 disables the bound.
     config['DISPENSERS_RECONCILE_MAX_INTERVAL_MS'] = parseIntAtLeast(process.env.DISPENSERS_RECONCILE_MAX_INTERVAL_MS, 0, 1800000);
 
+    // Post-reorg failures retry on this backoff even when the periodic bound is 0.
+    config['DISPENSERS_RECONCILE_REORG_RETRY_MS'] = parseIntAtLeast(process.env.DISPENSERS_RECONCILE_REORG_RETRY_MS, 0, 300000);
+
     // LOOKUP_PAGE_SIZE: rows per page when a client pages the append-only lookup
     // tables by id cursor (>= 1); the client clamps it to 100000.
     config['LOOKUP_PAGE_SIZE'] = parseIntAtLeast(process.env.LOOKUP_PAGE_SIZE, 1, 50000);

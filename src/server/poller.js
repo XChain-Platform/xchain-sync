@@ -150,21 +150,7 @@ function initializeTableTopology(poller){
 }
 
 function initializeInfrastructureTables(poller){
-    if(poller.dbType === 'decoder'){
-        // Leave decoder without cross-chain infrastructure tables.
-        poller.infraTables = new Set();
-        return;
-    }
-
-    // Sync infrastructure tables regardless of subscriber mode.
-    // Provide cross-chain validator, reward, and price-query state.
-
-    // Send only these tables to infra-only subscribers for this chain.
-    // Keep the set identical for every indexer poller instance.
-    poller.infraTables = new Set([
-        'stakes', 'delegations', 'validator_rewards', 'prices', 'reward_claims',
-        'index_pubkeys', 'index_addresses', 'index_actions', 'index_statuses', 'index_fiats'
-    ]);
+    poller.infraTables = replicatedTables.getInfraTables(poller.dbType);
 }
 
 function initializePollerHealthState(poller){

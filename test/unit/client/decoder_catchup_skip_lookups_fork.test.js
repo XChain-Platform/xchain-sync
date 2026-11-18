@@ -208,3 +208,51 @@ describe('decoder catch-up fork guard when the tip moves during a lagging resync
         assert.strictEqual(sync.lastAppliedBlock, 101);
     });
 });
+
+describe('decoder catch-up fork rewind re-run flag @regression', function(){
+    const state = lagFixture();
+    let ctx, sync;
+
+    beforeEach(function(){
+        ctx = state.ctx;
+        sync = ctx.sync;
+        stubPaging(ctx, n => { if(n === 2) ctx.replicaLookups.push({ id: 7, hash: 'FORKED100' }); });
+    });
+
+    it('flags the follow-up pass when the cursor lagged the committed tip by one block', async function(){
+        sync.lastAppliedBlock = 99;
+        sync.lastHashes = { block_hash: 'hash99' };
+
+        await sync.runIncrementalCatchUp();
+
+        assert.strictEqual(sync.lastAppliedBlock, 99, 'the rewound cursor equals the one the runner captured');
+        assert.strictEqual(sync._reorgGeneration, 1);
+        assert.strictEqual(sync._catchUpPending, true);
+        assert.strictEqual(sync._catchUpTipMoved, true);
+    });
+
+    it('runs the follow-up pass inside the same catch-up after a one-block-lag rewind', async function(){
+        sync.lastAppliedBlock = 99;
+        sync.lastHashes = { block_hash: 'hash99' };
+        sync.running = true;
+        sync.db.getLastBlock.resolves(99);
+        sync.db.getLastBlock.onCall(0).resolves(100);
+        sync.db.getLastBlock.onCall(1).resolves(100);
+        const run = sinon.spy(sync, 'runIncrementalCatchUp');
+
+        await sync.incrementalCatchUp(101);
+
+        assert.strictEqual(run.callCount, 2);
+    });
+
+    it('leaves the flag clear when the rewind rolled nothing back', async function(){
+        sync.lastAppliedBlock = 100;
+        sinon.stub(sync, 'applyReorgRollback').resolves(false);
+
+        await sync.runIncrementalCatchUp();
+
+        assert.strictEqual(sync._reorgGeneration, 0);
+        assert.strictEqual(sync._catchUpPending, true);
+        assert.strictEqual(sync._catchUpTipMoved, false);
+    });
+});

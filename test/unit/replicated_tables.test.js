@@ -9,7 +9,7 @@
 // contact legal@dankest.llc.
 
 const assert = require('assert');
-const { getTopology, getReplicatedTables } = require('../../src/schema/replicated_tables');
+const { getTopology, getReplicatedTables, getInfraTables } = require('../../src/schema/replicated_tables');
 
 describe('replicatedTables', function(){
 
@@ -25,6 +25,12 @@ describe('replicatedTables', function(){
                           'contract_stakes', 'attests']){
                 assert.ok(tables.includes(t), 'expected replicated set to include ' + t);
             }
+            const infra = getInfraTables('indexer');
+            for(const t of ['stakes', 'delegations', 'validator_rewards', 'prices', 'reward_claims'])
+                assert.ok(infra.has(t), 'missing infra root ' + t);
+            for(const t of getTopology('indexer').index) assert.ok(infra.has(t), 'missing infra lookup ' + t);
+            assert.ok(infra.has('actions'), 'missing actions foreign-key target');
+            for(const t of infra) assert.ok(tables.includes(t), 'non-replicated infra table ' + t);
         });
 
         it('includes the transparency log (sync_meta) in the completeness check', function(){
@@ -96,6 +102,7 @@ describe('replicatedTables', function(){
 
         it('has no action-scoped tables', function(){
             assert.strictEqual(getTopology('decoder').actionScoped.length, 0);
+            assert.deepStrictEqual([...getInfraTables('decoder')], []);
         });
     });
 });

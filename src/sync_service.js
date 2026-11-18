@@ -381,12 +381,14 @@ class SyncService {
                 try {
                     this.startClientSyncForChain(key, db, cfg);
                 } catch(e){
-                    if(cfg.dbType !== 'indexer' || activationDelayBlocks(cfg.coin) !== undefined ||
+                    // Decoder deep-reorg admission also needs a known coin, so unknown
+                    // decoder chains are refused with the same per-chain cleanup.
+                    if(activationDelayBlocks(cfg.coin) !== undefined ||
                         !e || !String(e.message).startsWith('ClientRollback: unrecognized coin "')) throw e;
                     this.databases.delete(key);
                     this.clientSyncs.delete(key);
                     this.unrecognizedCoinKeys.add(key);
-                    getLogger().error('Skipping indexer chain ' + key + ': coin "' + cfg.coin +
+                    getLogger().error('Skipping ' + cfg.dbType + ' chain ' + key + ': coin "' + cfg.coin +
                         '" is not in this client\'s coin bundle (no frozen ACTIVATION_DELAY_BLOCKS); upgrade to sync it');
                     try {
                         const closing = db.close();

@@ -71,6 +71,11 @@ const REISSUING_LOOKUPS = new Set(['index_addresses', 'index_tickers']);
 const REPLICA_GAP_REPLACE_TABLES = new Set(tableLifecycle.tablesWhere(t =>
     t.replication === 'stream:action' && t.replicaRepair === 'replace'));
 const REPLICA_STREAM_REPAIR_ATTEMPTS = 3;
+// Synthetic holds that mean durable state could not be read, so an operator clear
+// drops the in-memory flag and touches nothing in the database.
+const UNREAD_STATE_HALTS = new Set([
+    'halt-state-check-failed', 'rollback-guard-state-unreadable', 'startup-guard-state-unreadable'
+]);
 // Lock-wait timeouts on schema apply retry with exponential backoff before the
 // table counts as a persistent failure.
 const SCHEMA_TRANSIENT_ERRNO = 1205;  // ER_LOCK_WAIT_TIMEOUT
@@ -107,6 +112,10 @@ function latestTime(a, b){
     if(a == null) return (b == null) ? null : b;
     if(b == null) return a;
     return Math.max(a, b);
+}
+
+function dispenserReorgRetryDue(client, nowMs){
+    return client._dispenserReorgRetryAt != null && client._dispenserReorgRetryAt <= nowMs;
 }
 
 function blockHashFields(row){
@@ -340,11 +349,13 @@ function statusGapStart(client, blockHeight){
 }
 
 // Decoder-only status-tick reconcile gate; needs an applied block and no reconcile in flight.
-// A rollback that left dispensers stale makes it due at once, even with the interval at 0.
+// A rollback makes it due at once; a failed attempt becomes due after its own backoff,
+// even when the periodic interval is disabled.
 function shouldReconcileDispensersOnStatus(client){
     return client.dbType === 'decoder' && !client._halted && client.lastAppliedBlock !== null &&
         !client._dispenserReconcileInFlight &&
         (client._dispenserReconcileAfterReorg === true || client._dispenserReconcilePending === true ||
+         dispenserReorgRetryDue(client, Date.now()) ||
          client.dispenserReconcileIntervalDue(Date.now()));
 }
 
@@ -621,7 +632,7 @@ class ClientSync {
         this._haltPersistTimer = null;
 
         // Throttle stamp for the periodic replica-completeness sweep against the
-        // primary source (see maybeVerifyCompleteness). 0 = never swept, so the
+        // active source that sent the status tick (see maybeVerifyCompleteness). 0 = never swept, so the
         // first equal-height status tick of a process runs one baseline sweep.
         this._lastCompletenessSweepAt = 0;
 
@@ -889,6 +900,7 @@ class ClientSync {
         this.forgetSourceRetry(sourceIndex);
         this._sourcesNeedingRecovery.delete(sourceIndex);
         this._sourceStrikes.delete(sourceIndex);
+        this.clearStreamWatchdog(sourceIndex);
         let ws = this.wsConns[sourceIndex];
         if(ws){
             try { ws.close(); } catch(e){ /* best-effort */ }
@@ -1034,9 +1046,7 @@ class ClientSync {
         if(haltAction === 'stop') return;
 
         // Durable client guards load before the resume branch can apply more blocks.
-        await this.loadBootstrapBase();
-        await this.loadVerifiedCheckpointBlock();
-        await this.loadVerifiedCheckpointSeq();
+        if(await this.holdForDurableStartupState() === 'stop') return;
         if(await this.holdForRollbackGuardState() === 'stop') return;
         const replicaAction = await this.synchronizeStoredReplica();
         // An operator can clear the synthetic copy-read halt while its retry sleeps.
@@ -2344,12 +2354,11 @@ class ClientSync {
             return;
         }
 
-        // A 404 means the source holds no rows at or past this height yet (the resume
-        // tip is already current). That is expected and self-clearing, so it logs one
-        // warn line instead of an error and skips duplicate-key and schema recovery.
+        // A 404 means the queried source holds no rows at or past this height: the replica
+        // is current or that source is behind. It logs one warn line instead of an error
+        // and skips duplicate-key and schema recovery.
         if(error && error.response && error.response.status === 404){
-            getLogger().warn('Incremental catch-up from block ' + sinceBlock +
-                ' found nothing newer on ' + source + ' (404); replica is current or source is behind.');
+            this.logCatchUpNotFound(source, sinceBlock, dbTip);
             return;
         }
 
@@ -2366,6 +2375,27 @@ class ClientSync {
             if(this.incrementalCatchUpBlocked(sinceBlock)) return;
             return this.runIncrementalCatchUp();
         }
+    }
+
+    // Names the highest tip another active source has reported above the committed tip,
+    // since the line must not call the replica current when a peer reports otherwise.
+    // Reported tips are self-asserted and catch-up asks only the queried source, so the
+    // line states what was observed and sets no failover or state.
+    logCatchUpNotFound(source, sinceBlock, dbTip){
+        let ahead = null;
+        for(const i of this.activeSourceIndices()){
+            const tip = this._sourceLastReportedTip.get(i);
+            if(this.sources[i] === source || typeof tip !== 'number' || dbTip === null || tip <= dbTip) continue;
+            if(ahead === null || tip > ahead.tip) ahead = { source: this.sources[i], tip };
+        }
+        if(ahead === null){
+            getLogger().warn('Incremental catch-up from block ' + sinceBlock +
+                ' found nothing newer on ' + source + ' (404); replica is current or source is behind.');
+            return;
+        }
+        getLogger().warn('Incremental catch-up from block ' + sinceBlock + ' found nothing newer on ' +
+            source + ' (404) while ' + ahead.source + ' reports tip ' + ahead.tip + ' above the committed tip ' +
+            dbTip + '; catch-up asked only ' + source + ' and does not fail over to another source.');
     }
 
     async runIncrementalCatchUp(){
@@ -2963,7 +2993,8 @@ class ClientSync {
         return countsHeight !== null && countsHeight === Number(height);
     }
 
-    // Periodic replica-completeness sweep against the PRIMARY source: the row-count
+    // Periodic replica-completeness sweep against the active source that sent the
+    // status tick (handleEvent drops evicted sources first): the row-count
     // comparison is the only check that sees a follower short rows the consensus hashes
     // structurally cannot cover, since those hashes describe the source's computation
     // rather than what landed downstream. The bootstrap caller iterates sources[1..], so
@@ -3253,7 +3284,8 @@ class ClientSync {
     //       precisely the cadence this clause claims to bound.
     //   (d) afterReorg   - a reorg rollback ran since the last attempt: the source rewrote
     //       dispensers off-stream for the orphaned blocks, and the follower's rollback
-    //       leaves them alone, so the table is known stale (see applyReorgRollback).
+    //       leaves them alone, so the table is known stale (see applyReorgRollback). A
+    //       failed attempt retries after DISPENSERS_RECONCILE_REORG_RETRY_MS.
     // `_lastDispenserReconcileAt` is stamped by reconcileDispensers on success (covering
     // the from-height bootstrap reconcile too), so firstResume is false once any has run.
     shouldReconcileDispensers(nowMs){
@@ -3263,11 +3295,12 @@ class ClientSync {
         let firstResume = (this._lastDispenserReconcileAt == null);
         let periodic    = (this._catchUpCount % every === 0);
         let afterReorg  = (this._dispenserReconcileAfterReorg === true);
+        let reorgRetry  = dispenserReorgRetryDue(this, nowMs);
         let pending     = (this._dispenserReconcilePending === true);
         // Free function, not this.dispenserReconcileIntervalDue: this method is exercised
         // through prototype.call with hand-built contexts, which carry config and the stamp
         // and nothing else.
-        return firstResume || periodic || afterReorg || pending ||
+        return firstResume || periodic || afterReorg || reorgRetry || pending ||
                dispenserIntervalDue(this.config, this._lastDispenserReconcileAt, nowMs);
     }
 
@@ -3377,6 +3410,8 @@ class ClientSync {
         if(this.dbType !== 'decoder' || !source) return false;
         let attemptAt = Date.now();
         let startHeight = this.lastAppliedBlock;
+        let wasAfterReorg = (this._dispenserReconcileAfterReorg === true) ||
+            dispenserReorgRetryDue(this, attemptAt);
         this._dispenserReconcileAfterReorg = false;
         try {
             let dump = await ClientSync.prototype.fetchDispensersDump.call(
@@ -3384,6 +3419,7 @@ class ClientSync {
             if(!await ClientSync.prototype.applyDispensersDump.call(this, dump, startHeight)) return false;
             this._lastDispenserReconcileAttemptAt = attemptAt;
             this._lastDispenserReconcileAt = Date.now();
+            this._dispenserReorgRetryAt = null;
             this._dispenserReconcilePending = false;
             getLogger().info('Dispensers reconcile: replaced ' + dump.all.length + ' rows from ' + source +
                 ' for ' + this.chain + '/' + this.network);
@@ -3391,6 +3427,11 @@ class ClientSync {
         } catch(e){
             if(e && e.dispenserAnchorMismatch) this._dispenserReconcilePending = true;
             else this._lastDispenserReconcileAttemptAt = attemptAt;
+            if(wasAfterReorg){
+                let retryMs = parseInt(this.config['DISPENSERS_RECONCILE_REORG_RETRY_MS'], 10);
+                if(isNaN(retryMs) || retryMs < 0) retryMs = 300000;
+                this._dispenserReorgRetryAt = attemptAt + retryMs;
+            }
             getLogger().error(util.format('Dispensers reconcile failed against ' + source +
                 ' (local table left intact):', (e && e.message) ? e.message : e));
             try { await this.healSchemaIfStale(e); } catch(healErr){ /* advisory only */ }
@@ -3490,6 +3531,8 @@ class ClientSync {
 
     handleWebSocketMessage(data, source, sourceIndex, ws){
         if(ws && this.wsConns[sourceIndex] !== ws) return;
+        // A socket closing after eviction must not refresh liveness or tip state.
+        if(this._evictedSources.has(sourceIndex)) return;
         // Synchronous chaining keeps gap detection and apply work atomic and ordered
         // because ws does not await async listeners.
         let event;
@@ -3660,6 +3703,9 @@ class ClientSync {
     // sets running, and a stopped client is never restarted.
     async handleEvent(event, sourceIndex){
         if(this._stopping) return;
+        // Eviction can land inside a block event already on the chain, so events from
+        // that source may be queued behind it. None of them may drive replica state.
+        if(this._evictedSources.has(sourceIndex)) return;
         if(event.type === 'block'){
             updateLastKnownServerBlock(this, event.block_index);
             await this.handleBlock(event, sourceIndex);
@@ -3681,9 +3727,9 @@ class ClientSync {
                 finally { this._dispenserReconcileInFlight = false; }
             }
             if(this._stopping) return;
-            // Sweep completeness on the recurring signal from the primary source.
-            // Apply its own throttle and equal-height policy inside the helper.
-            // Query the same source that sends this status event.
+            // Sweep completeness on the recurring status signal. The helper applies its
+            // own throttle and equal-height policy and queries the same source that sent
+            // this status event.
             await this.maybeVerifyCompleteness(this.sources[sourceIndex], event.block_height);
         }
     }
@@ -3761,8 +3807,13 @@ class ClientSync {
         if(state !== 'broken') return false;
         getLogger().error('Chain continuity error (decoder): catch-up block ' + sinceBlock +
             ' does not build on the committed tip ' + dbTip + '; rewinding the orphaned tip before applying');
+        const generation = this._reorgGeneration;
         await this.handleReorg({ block_index: dbTip }, undefined, dbTip);
         this._catchUpPending = true;
+        // The cursor resync above can leave the rewound cursor equal to the value the
+        // runner captured, which reads as no progress; a landed rollback is progress, a
+        // refused one is not and must still end the loop.
+        if(this._reorgGeneration !== generation) this._catchUpTipMoved = true;
         return true;
     }
 
@@ -4521,11 +4572,12 @@ class ClientSync {
     // already set (a fresh bootstrap in this same process already set it). A
     // full-history replica never wrote one, so this is a no-op there and the floor
     // stays null (every block recomputes). Guarded for db instances without the
-    // durable store.
+    // durable store. The read is strict: a fault throws instead of reading as an
+    // unset floor, which would run a truncated replica as full-history.
     async loadBootstrapBase(){
         if(this._bootstrapBase !== null && this._bootstrapBase !== undefined) return;
         if(!this.db || typeof this.db.getSyncState !== 'function') return;
-        let v = await this.db.getSyncState(this.bootstrapBaseKey());
+        let v = await this.db.getSyncState(this.bootstrapBaseKey(), { rethrow: true });
         if(v === null || v === undefined) return;
         let n = Number(v);
         if(Number.isFinite(n)){
@@ -4559,7 +4611,7 @@ class ClientSync {
         if(!this.db || typeof this.db.getSyncState !== 'function') return 'ok';
         let raw;
         try {
-            raw = await this.db.getSyncState(this.rollbackGuardStateKey());
+            raw = await this.db.getSyncState(this.rollbackGuardStateKey(), { rethrow: true });
         } catch(e){
             getLogger().error(util.format('rollback guard state read failed:', e));
             return 'unreadable';
@@ -4634,17 +4686,18 @@ class ClientSync {
         // A halt write still being retried belongs to the halt being cleared.
         this.cancelHaltPersistRetry();
         this._haltDurable = true;
-        // A synthetic 'halt-state-check-failed' state says the durable table could not be
-        // READ, not that a divergence was adjudicated. Deleting sync_halt from here would
-        // destroy a genuine uncleared divergence row this process never managed to see,
-        // and clearing the stall is the one workaround an operator has, so it is exactly
-        // the path that would do it. Drop the in-memory flag only and let start()'s
-        // re-read decide what the table actually holds.
-        if(this._halted && this._halted.reason === 'halt-state-check-failed'){
+        // A synthetic read-failure state ('halt-state-check-failed' or an unreadable
+        // startup guard) says the durable table could not be READ, not that a divergence
+        // was adjudicated. Deleting sync_halt from here would destroy a genuine uncleared
+        // divergence row, or a halt copy, this process never managed to see, and clearing
+        // the stall is the one workaround an operator has, so it is exactly the path that
+        // would do it. Drop the in-memory flag only; the hold's own re-read decides what
+        // the table actually holds, and a clear never lets startup past an unread guard.
+        if(this._halted && UNREAD_STATE_HALTS.has(this._halted.reason)){
             const wasSynthetic = this._halted;
             this._halted = null;
-            getLogger().info('halt-state-check-failed state cleared for ' + this.chain + '/' + this.network +
-                '/' + this.dbType + '; sync_halt left untouched (it was never successfully read)');
+            getLogger().info(wasSynthetic.reason + ' state cleared for ' + this.chain + '/' + this.network +
+                '/' + this.dbType + '; durable state left untouched (it was never successfully read)');
             return wasSynthetic;
         }
         if(this._halted && this._halted.reason === 'rollback-guard-state-invalid'){
@@ -4848,6 +4901,8 @@ class ClientSync {
 
     applyLiveBlockUnderLock(event, opts){
         return this.withApplyLock(async () => {
+            // A halt can land while this block waits on the lock.
+            if(this._halted) return 'halted';
             if(opts && opts.reorgGeneration !== undefined &&
                opts.reorgGeneration !== this._reorgGeneration) return 'reorged';
             if(this.lastAppliedBlock !== null && event.block_index !== this.lastAppliedBlock + 1)
@@ -4858,6 +4913,29 @@ class ClientSync {
             return dbTip !== null && Number(dbTip) > Number(event.block_index)
                 ? 'stale' : 'applied';
         });
+    }
+
+    // True when the locked apply declined the block (nothing was committed).
+    logRefusedLiveBlock(event, applyResult){
+        if(applyResult === 'stale'){
+            getLogger().info('Skipping stale live block ' + event.block_index +
+                ': a concurrent apply committed a newer stored tip');
+            return true;
+        }
+        if(applyResult === 'halted'){
+            const halt = this._halted || {};
+            getLogger().error('Refusing live block ' + event.block_index + ': client was HALTED (' +
+                halt.reason + ') at block ' + halt.blockIndex + ' while the block waited for the apply lock');
+            return true;
+        }
+        if(applyResult === 'reorged' || applyResult === 'noncontiguous'){
+            getLogger().error('Refusing live block ' + event.block_index + ' at applied tip ' +
+                this.lastAppliedBlock + ': ' + (applyResult === 'reorged'
+                    ? 'a reorg completed while the block was waiting'
+                    : 'the block is not contiguous'));
+            return true;
+        }
+        return false;
     }
 
     async applyAndVerifyBlock(event, opts){
@@ -4873,18 +4951,7 @@ class ClientSync {
         let generation = this.rowGeneration();
         try {
             let applyResult = await this.applyLiveBlockUnderLock(event, opts);
-            if(applyResult === 'stale'){
-                getLogger().info('Skipping stale live block ' + event.block_index +
-                    ': a concurrent apply committed a newer stored tip');
-                return;
-            }
-            if(applyResult === 'reorged' || applyResult === 'noncontiguous'){
-                getLogger().error('Refusing live block ' + event.block_index + ' at applied tip ' +
-                    this.lastAppliedBlock + ': ' + (applyResult === 'reorged'
-                        ? 'a reorg completed while the block was waiting'
-                        : 'the block is not contiguous'));
-                return;
-            }
+            if(this.logRefusedLiveBlock(event, applyResult)) return;
             let computedRoots = this.carryUnverifiedRoots(event);
             if(this.dbType === 'indexer' && this.config['VERIFY_RECOMPUTE']){
                 let mismatches = await this.verifyRecompute(event, null, { recordUnverified: true, holdTip: true });
@@ -4978,10 +5045,17 @@ class ClientSync {
         if(q.valid) return 'ahead';
         getLogger().warn('Checkpoint-quorum anchor: served checkpoint past the tip for ' + this.chain + '/' +
             this.network + ' at block ' + cp.block_index + ' (seq ' + cp.checkpoint_seq + ', replica tip ' +
-            this.lastAppliedBlock + ') FAILED the pinned quorum (' + q.validSigs + '/' + q.quorum +
-            ' valid sigs, weighted=' + q.weighted + '); cannot follow rotation until the replica reaches ' +
-            'that height, not anchoring this cycle');
+            this.lastAppliedBlock + ') FAILED the pinned quorum (' + this.describeQuorumShortfall(q) +
+            '); cannot follow rotation until the replica reaches that height, not anchoring this cycle');
         return 'unanchored';
+    }
+
+    // The signature tally of a failed verdict, in the terms that decided it. The stake-weighted
+    // regime ignores the count-regime quorum figure verifyCheckpoint also returns, so quoting
+    // "n/quorum" there would read as a headcount shortfall when stake decided the verdict.
+    describeQuorumShortfall(q){
+        if(q.weighted) return q.validSigs + ' valid sigs, stake-weighted quorum not met, weighted=true';
+        return q.validSigs + '/' + q.quorum + ' valid sigs, weighted=false';
     }
 
     // A checkpoint body is source-controlled. Canonicalization rejects malformed
@@ -5161,7 +5235,7 @@ class ClientSync {
     async loadVerifiedCheckpointSeq(){
         if(this._lastVerifiedCheckpointSeq !== null) return;
         if(!this.db || typeof this.db.getSyncState !== 'function') return;
-        let value = await this.db.getSyncState(this.verifiedCheckpointSeqKey());
+        let value = await this.db.getSyncState(this.verifiedCheckpointSeqKey(), { rethrow: true });
         if(value === null || value === undefined) return;
         let seq = signedCheckpointSeq(value);
         if(seq === null) return;
@@ -5176,7 +5250,7 @@ class ClientSync {
     async loadVerifiedCheckpointBlock(){
         if(this._lastVerifiedCheckpointBlock !== null) return;
         if(!this.db || typeof this.db.getSyncState !== 'function') return;
-        let value = await this.db.getSyncState(this.verifiedCheckpointBlockKey());
+        let value = await this.db.getSyncState(this.verifiedCheckpointBlockKey(), { rethrow: true });
         if(value === null || value === undefined) return;
         let blockIndex = Number(value);
         if(!Number.isSafeInteger(blockIndex) || blockIndex < 0) return;
@@ -5424,23 +5498,30 @@ class ClientSync {
             // Lower the verified marker durably before any row goes: a marker left above
             // the rollback would vouch for the replacement blocks. A failed write throws
             // here, before the delete, and handleReorg halts on it.
-            await this.beginRowRemoval(event.block_index - 1);
+            // A failure halts before the lock releases, so a live block queued behind this
+            // rollback finds the hold instead of building on a half-removed range.
             try {
-                if(this.rollbackGuard){
-                    this.rollbackGuard.record(this.lastAppliedBlock, event.block_index);
-                    await this.persistRollbackGuardState();
+                await this.beginRowRemoval(event.block_index - 1);
+                try {
+                    if(this.rollbackGuard){
+                        this.rollbackGuard.record(this.lastAppliedBlock, event.block_index);
+                        await this.persistRollbackGuardState();
+                    }
+                    await this.rollback.rollback(event.block_index);
+                } finally {
+                    this.endRowRemoval();
                 }
-                await this.rollback.rollback(event.block_index);
-            } finally {
-                this.endRowRemoval();
+                this.lastAppliedBlock = event.block_index - 1;
+                this._reorgGeneration++;
+                // Reload the new tip's hashes, genesis block 0 included.
+                if(this.lastAppliedBlock >= 0)
+                    this.lastHashes = await this.db.getBlockHashRow(this.lastAppliedBlock);
+                else
+                    this.lastHashes = null;
+            } catch(e){
+                await this.haltForReorgRollbackFailure(event, e);
+                throw e;
             }
-            this.lastAppliedBlock = event.block_index - 1;
-            this._reorgGeneration++;
-            // Reload the new tip's hashes, genesis block 0 included.
-            if(this.lastAppliedBlock >= 0)
-                this.lastHashes = await this.db.getBlockHashRow(this.lastAppliedBlock);
-            else
-                this.lastHashes = null;
             return true;
         });
         if(!applied) return false;
@@ -5490,7 +5571,9 @@ class ClientSync {
         try {
             if(!await this.applyReorgRollback(event, expectedTip)) return;
         } catch(e){
-            await this.haltForReorgRollbackFailure(event, e);
+            // applyReorgRollback already halted under the apply lock.
+            if(!this._halted || this._halted.reason !== 'reorg-rollback-failed')
+                await this.haltForReorgRollbackFailure(event, e);
         }
         this.prunePendingReorgs();
         this.pruneBlockWorkAboveTip();

@@ -454,6 +454,7 @@ class Database {
         if(this.dbType !== 'indexer') return;
         await this.addMissingReplicatedColumns();
         await this.relaxReplicatedColumnNullability();
+        await this.widenReplicatedColumnTypes();
         await this.repairReplicatedAutoIncrement();
         await this.widenReplicatedAttestsRequestStatus();
     }
@@ -535,6 +536,31 @@ class Database {
             logger.info('Schema drift on ' + table + '.' + column + ': NOT NULL on replica but nullable upstream. Relaxing to allow NULL.');
             await this.runSqlMigrationStatement(
                 '2026-10-19-replica-columns.sql', migration
+            );
+        }
+    }
+
+    async widenReplicatedColumnTypes(){
+        // addMissingColumns never retypes an existing column, and followers run no
+        // indexer migrations, so selected upstream MODIFYs need an explicit heal.
+        let widen = [
+            { table: 'file_manifests', column: 'total_bytes',
+              migration: 'file-manifests-total-bytes-bigint-nullable' }
+        ];
+        for(let { table, column, migration } of widen){
+            let rows = await this.doQueryStrict(
+                "SELECT COLUMN_TYPE, IS_NULLABLE FROM information_schema.columns " +
+                "WHERE table_schema = ? AND table_name = ? AND COLUMN_NAME = ?",
+                [this.dbName, table, column]
+            );
+            if(rows.length === 0) continue;
+            let type = String(rows[0].COLUMN_TYPE || rows[0].column_type || '').toLowerCase();
+            let nullable = String(rows[0].IS_NULLABLE || rows[0].is_nullable || '').toUpperCase();
+            if(type.startsWith('bigint') && type.includes('unsigned') && nullable === 'YES') continue;
+            logger.info('Schema drift on ' + table + '.' + column + ': ' + type + ' ' + nullable +
+                ' on replica. Widening to BIGINT UNSIGNED NULL.');
+            await this.runSqlMigrationStatement(
+                '2026-10-19-replica-columns.sql', migration, undefined, { strict: true }
             );
         }
     }
@@ -672,6 +698,7 @@ class Database {
             await this.ensureReplicaVotesIndex();
             await this.ensureReplicaAnchorActionsPrimaryKey();
             await this.ensureReplicaValidatorRewardsIndex();
+            await this.ensureReplicaTickersTickKey();
         }
     }
 
@@ -879,6 +906,43 @@ class Database {
             // An absent table is harmless; other errors can leave reward identities ambiguous.
             if(e.errno !== 1146)
                 logger.error(util.format('Failed to rebuild the validator_rewards reward_unique key with round_qualifier:', e));
+        }
+    }
+
+    // The source widened this unique prefix so distinct long tickers stay distinct.
+    async ensureReplicaTickersTickKey(){
+        try {
+            let tableRows = await this.doQueryStrict(
+                "SELECT table_name FROM information_schema.tables " +
+                "WHERE table_schema = ? AND table_name = 'index_tickers'",
+                [this.dbName]
+            );
+            if(tableRows.length === 0) return;
+            let rows = await this.doQueryStrict(
+                "SELECT SUB_PART, NON_UNIQUE FROM information_schema.statistics " +
+                "WHERE table_schema = ? AND table_name = 'index_tickers' AND index_name = 'tick' LIMIT 1",
+                [this.dbName]
+            );
+            if(rows.length === 0){
+                logger.warn('index_tickers has no unique tick key; leaving it for operator repair.');
+                return;
+            }
+            let nonUnique = Number(rows[0].NON_UNIQUE ?? rows[0].non_unique);
+            let rawPart = rows[0].SUB_PART ?? rows[0].sub_part;
+            if(nonUnique !== 0){
+                logger.warn('index_tickers.tick is not unique; leaving it for operator repair.');
+                return;
+            }
+            if(rawPart === null || rawPart === undefined || Number(rawPart) >= 250) return;
+            logger.info('Schema drift on index_tickers: UNIQUE tick(' + rawPart +
+                ') detected. Widening to tick(250) to match the source key.');
+            await this.runSqlMigrationStatement(
+                '2026-10-19-replica-keys.sql', 'index-tickers-tick-full-prefix', undefined,
+                { strict: true }
+            );
+        } catch(e){
+            if(e.errno !== 1146)
+                logger.error(util.format('Failed to widen stale index_tickers.tick key to tick(250):', e));
         }
     }
 

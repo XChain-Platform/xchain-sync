@@ -111,7 +111,9 @@ module.exports = {
      * @returns {Promise<object[]>} the driver's row array
      */
     async findLookupPageAfter(table, col, after, limit, conn){
-        return await this.doQuery(
+        // A fail-soft empty result is indistinguishable from the end of this
+        // table to a paging follower, so lookup reads must propagate faults.
+        return await this.doQueryStrict(
             "SELECT * FROM `" + table + "` WHERE `" + col + "` > ? ORDER BY `" + col + "` ASC LIMIT ?",
             [after, limit],
             conn

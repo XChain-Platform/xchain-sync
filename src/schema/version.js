@@ -298,9 +298,10 @@
  *  21 - (indexer only) `index_tickers` unique key widens from tick(200) to tick(250)
  *       (2026-10-23-index-tickers-full-tick-prefix). It is stream:index wire-replicated,
  *       and above TICK_NORMALIZE_ACTIVATION two names that share their first 200
- *       characters both stream, so a v20 follower still on tick(200) hits
- *       ER_DUP_ENTRY under ClientApplier and stalls the queue. The migration is
- *       mode=auto, so the forced schema refresh widens the key on followers.
+ *       characters both stream. ClientApplier uses INSERT IGNORE for this table, so a
+ *       v20 follower still on tick(200) silently drops the second row. Sync runs no
+ *       indexer migrations; ensureReplicaTickersTickKey in src/db/index.js widens the
+ *       replica key during schema repair. Widening does not recover a row already dropped.
  *       Decoder is unaffected and stays at 5.
  *  22 - (indexer only) `index_memos.memo` collation utf8mb4_general_ci to
  *       utf8mb4_nopad_bin (2026-11-01-index-memos-binary-collation). Memo text that
@@ -328,7 +329,9 @@
  *       three secondary indexes support source-hash lookup, fill ordering and
  *       manifest completion lookup. A v23 follower would refuse a TOTAL_BYTES
  *       value above 4,294,967,295 and lacks both counters. The
- *       2026-11-17-file-multipart-uncapped migration is mode=auto. Decoder is
+ *       2026-11-17-file-multipart-uncapped migration is mode=auto, but followers run
+ *       no indexer migrations: schema refresh adds the counters, while
+ *       ensureReplicatedColumns widens total_bytes on existing replicas. Decoder is
  *       unaffected and stays at 5.
  *
  * MIGRATION_FRONTIER is the machine-readable half of that accounting: `through`

@@ -35,3 +35,5 @@ CREATE UNIQUE INDEX `poll_voter_action_choice` ON `votes` (poll_index, voter_add
 ALTER TABLE `anchor_actions` DROP PRIMARY KEY, ADD PRIMARY KEY (`action_index`, `section_index`);
 -- migration-key: validator-rewards-reward-unique
 ALTER TABLE `validator_rewards` DROP INDEX `reward_unique`, ADD UNIQUE INDEX `reward_unique` (`source_id`, `signing_pubkey_id`, `reward_type`, `round_reference`, `round_qualifier`);
+-- migration-key: index-tickers-tick-full-prefix
+ALTER TABLE `index_tickers` DROP INDEX IF EXISTS `tick`, ADD UNIQUE INDEX `tick` (tick(250));

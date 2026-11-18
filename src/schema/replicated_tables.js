@@ -67,8 +67,9 @@
  *                                     ClientApplier.applyDispensersReplace via
  *                                     ClientSync.reconcileDispensers, whose cadence is set
  *                                     by DISPENSERS_RECONCILE_EVERY and
- *                                     DISPENSERS_RECONCILE_MAX_INTERVAL_MS, plus one armed by
- *                                     every reorg rollback for the next status tick or catch-up.
+ *                                     DISPENSERS_RECONCILE_MAX_INTERVAL_MS. Every reorg
+ *                                     also arms an immediate attempt, and a failed attempt
+ *                                     retries after DISPENSERS_RECONCILE_REORG_RETRY_MS.
  *   - dispenser_extension_undo       decoder-local reorg journal: the pre-image of each row a
  *                                     format-2 expiration extend touched, written and consumed
  *                                     on the decoder's own block transaction (restored by
@@ -198,6 +199,14 @@ function getReplicatedTables(dbType){
     return [...new Set(all)];
 }
 
+// Infra-only forwarding uses registry-marked roots plus every streamed lookup
+// and actions, which closes the foreign-key surface of those root rows.
+function getInfraTables(dbType){
+    if(dbType === 'decoder') return new Set();
+    const roots = lifecycle.tablesWhere((row) => row.infra === true);
+    return new Set([...roots, ...getTopology('indexer').index, 'actions']);
+}
+
 // Replicated tables whose content cannot converge between source and replica, so
 // neither the /status row-count check (ClientSync.verifyTableCounts) nor the
 // content-parity plan may compare them. Both read this one declaration.
@@ -314,6 +323,6 @@ function lookupCursorColumn(table){
 }
 
 module.exports = {
-    getTopology, getReplicatedTables, missingReplicatedTables, lookupCursorColumn,
+    getTopology, getReplicatedTables, getInfraTables, missingReplicatedTables, lookupCursorColumn,
     contentParityPlan, contentParityExclusions, OPERATIONAL_LOG_TABLES
 };

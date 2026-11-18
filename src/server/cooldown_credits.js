@@ -99,7 +99,8 @@ async function collectMatured(kind, db, fromBlock, toBlock, conn){
     let to   = Number(toBlock);
     let finders = FINDERS[kind];
 
-    let completedStatusId = await db.getStatusId('completed');
+    // A swallowed query error here looks like "nothing matured" and ships a short payload.
+    let completedStatusId = await db.getStatusId('completed', { rethrow: true });
     if(completedStatusId === null || completedStatusId === undefined) return [];
 
     // An unstake created AND matured inside the same incremental window can be

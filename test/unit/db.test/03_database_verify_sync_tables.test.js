@@ -140,6 +140,8 @@ describe('Database.ensureReplicatedColumns()', function () {
             if (/SELECT EXTRA FROM information_schema\.columns/.test(sql)) return [{ EXTRA: 'auto_increment' }];
             // ENUM-widen check (5244): return a COLUMN_TYPE that already includes 'rejected'
             // so the heal is correctly skipped when the ENUM is already up to date.
+            if (/SELECT COLUMN_TYPE, IS_NULLABLE FROM information_schema\.columns/.test(sql))
+                return [{ COLUMN_TYPE: 'bigint(20) unsigned', IS_NULLABLE: 'YES' }];
             if (/SELECT COLUMN_TYPE FROM information_schema\.columns/.test(sql))
                 return [{ COLUMN_TYPE: "enum('pending','fulfilled','expired','errored','rejected')" }];
             // Ownership/nullability column-presence checks: column exists on replica

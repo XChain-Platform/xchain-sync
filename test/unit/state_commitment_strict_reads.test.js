@@ -77,6 +77,6 @@ describe('M-17: state-commitment input reads fail closed outside a transaction',
 
     it('getStatusId keeps the fail-soft default for its operational callers', async function () {
         assert.strictEqual(await db.getStatusId('completed'), null,
-            'rollback / cooldown-credit callers must not start throwing');
+            'rollback / state-hash callers must not start throwing');
     });
 });

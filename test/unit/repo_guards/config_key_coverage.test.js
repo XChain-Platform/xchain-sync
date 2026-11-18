@@ -81,7 +81,8 @@ describe('config key coverage: every config key src/ reads is declared by getCon
     });
 
     it('finds the known reads, so an empty scan cannot pass', function(){
-        for(const key of ['SNAPSHOT_MAX_CONTENT', 'DISPENSERS_RECONCILE_EVERY', 'DISPENSERS_RECONCILE_MAX_INTERVAL_MS']){
+        for(const key of ['SNAPSHOT_MAX_CONTENT', 'DISPENSERS_RECONCILE_EVERY',
+            'DISPENSERS_RECONCILE_MAX_INTERVAL_MS', 'DISPENSERS_RECONCILE_REORG_RETRY_MS']){
             assert.ok(reads.has(key), 'the scan no longer sees the read of ' + key);
         }
     });

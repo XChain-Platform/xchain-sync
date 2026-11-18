@@ -158,6 +158,35 @@ module.exports = {
         return this.restorePendingHaltValue(raw);
     },
 
+    // At startup, before any bootstrap or catch-up: reload the durable guards that
+    // decide how the replica resumes (truncation floor, verified checkpoint block and
+    // seq). Each loader reads strictly, so a fault holds the client in a synthetic halt
+    // and retries with bounded backoff instead of resuming as if no guard existed. An
+    // operator clear drops the flag but never skips the read.
+    async holdForDurableStartupState(){
+        let delay = FIRST_RETRY_MS;
+        while(this.running){
+            try {
+                await this.loadBootstrapBase();
+                await this.loadVerifiedCheckpointBlock();
+                await this.loadVerifiedCheckpointSeq();
+            } catch(e){
+                getLogger().error(util.format('durable startup guard read failed for ' + this.replicaLabel() +
+                    '; staying HALTED (fail-closed) until it can be read:', e));
+                if(!this._halted)
+                    this._halted = {
+                        blockIndex: -1, reason: 'startup-guard-state-unreadable', mismatches: [], sources: [], at: null
+                    };
+                await this.util.sleep(delay);
+                delay = Math.min(delay * 2, MAX_RETRY_MS);
+                continue;
+            }
+            if(this._halted && this._halted.reason === 'startup-guard-state-unreadable') this._halted = null;
+            return 'continue';
+        }
+        return 'stop';
+    },
+
     scheduleHaltPersistRetry(halt, delayMs){
         this.cancelHaltPersistRetry();
         if(this._stopping) return;

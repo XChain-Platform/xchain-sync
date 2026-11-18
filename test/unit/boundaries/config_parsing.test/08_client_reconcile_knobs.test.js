@@ -13,7 +13,7 @@ const assert = require('assert');
 const config = require('../../../../src/config');
 
 const KNOBS = ['DISPENSERS_RECONCILE_EVERY', 'DISPENSERS_RECONCILE_MAX_INTERVAL_MS',
-    'LOOKUP_PAGE_SIZE', 'GAP_LOG_INTERVAL_MS'];
+    'DISPENSERS_RECONCILE_REORG_RETRY_MS', 'LOOKUP_PAGE_SIZE', 'GAP_LOG_INTERVAL_MS'];
 
 // Clear the knobs around each test so an ambient value cannot leak in.
 function registerKnobHooks(){
@@ -36,32 +36,39 @@ describe('Boundary: Config Parsing', function(){
             let cfg = config.getConfig();
             assert.strictEqual(cfg.DISPENSERS_RECONCILE_EVERY, 20);
             assert.strictEqual(cfg.DISPENSERS_RECONCILE_MAX_INTERVAL_MS, 1800000);
+            assert.strictEqual(cfg.DISPENSERS_RECONCILE_REORG_RETRY_MS, 300000);
             assert.strictEqual(cfg.LOOKUP_PAGE_SIZE, 50000);
             assert.strictEqual(cfg.GAP_LOG_INTERVAL_MS, 30000);
         });
         it('pass a set value through', function(){
             process.env.DISPENSERS_RECONCILE_EVERY = '5';
             process.env.DISPENSERS_RECONCILE_MAX_INTERVAL_MS = '60000';
+            process.env.DISPENSERS_RECONCILE_REORG_RETRY_MS = '120000';
             process.env.LOOKUP_PAGE_SIZE = '1000';
             process.env.GAP_LOG_INTERVAL_MS = '5000';
             let cfg = config.getConfig();
             assert.strictEqual(cfg.DISPENSERS_RECONCILE_EVERY, 5);
             assert.strictEqual(cfg.DISPENSERS_RECONCILE_MAX_INTERVAL_MS, 60000);
+            assert.strictEqual(cfg.DISPENSERS_RECONCILE_REORG_RETRY_MS, 120000);
             assert.strictEqual(cfg.LOOKUP_PAGE_SIZE, 1000);
             assert.strictEqual(cfg.GAP_LOG_INTERVAL_MS, 5000);
         });
         it('keeps DISPENSERS_RECONCILE_MAX_INTERVAL_MS=0 as the documented disable', function(){
             process.env.DISPENSERS_RECONCILE_MAX_INTERVAL_MS = '0';
+            process.env.DISPENSERS_RECONCILE_REORG_RETRY_MS = '0';
             assert.strictEqual(config.getConfig().DISPENSERS_RECONCILE_MAX_INTERVAL_MS, 0);
+            assert.strictEqual(config.getConfig().DISPENSERS_RECONCILE_REORG_RETRY_MS, 0);
         });
         it('fall back to the default on a non-numeric or out-of-range value', function(){
             process.env.DISPENSERS_RECONCILE_EVERY = 'later';
             process.env.DISPENSERS_RECONCILE_MAX_INTERVAL_MS = '-1';
+            process.env.DISPENSERS_RECONCILE_REORG_RETRY_MS = '-1';
             process.env.LOOKUP_PAGE_SIZE = '0';
             process.env.GAP_LOG_INTERVAL_MS = '0';
             let cfg = config.getConfig();
             assert.strictEqual(cfg.DISPENSERS_RECONCILE_EVERY, 20);
             assert.strictEqual(cfg.DISPENSERS_RECONCILE_MAX_INTERVAL_MS, 1800000, 'a negative value must not read as the disable');
+            assert.strictEqual(cfg.DISPENSERS_RECONCILE_REORG_RETRY_MS, 300000);
             assert.strictEqual(cfg.LOOKUP_PAGE_SIZE, 50000, '0 must not become a one-row page');
             assert.strictEqual(cfg.GAP_LOG_INTERVAL_MS, 30000);
         });

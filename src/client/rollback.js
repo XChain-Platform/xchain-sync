@@ -43,9 +43,9 @@ const { getLogger } = require('../observability');
 const logger = getLogger();
 // ATTEST batch-rail versions and the completion stamp, shared with the forward carry in
 // src/server/updated_rows.js (class 5b) so the reverse reset below cannot drift from what it delivers.
-// updated_rows.js requires only src/consensus/state_hash.js, so this introduces no cycle.
+// Import the dependency-free leaf that defines them, avoiding the server carry's dependency graph.
 const { ATTEST_BATCH_HEAD_VERSION, ATTEST_BATCH_CONTINUATION_VERSION,
-        ATTEST_BATCH_COMPLETION_STAMP } = require('../server/updated_rows');
+        ATTEST_BATCH_COMPLETION_STAMP } = require('../server/updated_rows/table_specs.js');
 
 // What markets.tick1_id / tick2_id hold for a side that is the chain's native coin
 // rather than a token: the coin has no index_tickers row, and NULL is distinct inside
@@ -886,7 +886,7 @@ class ClientRollback {
             // encoding can never revive a head whose own completing chunk survives.
             //
             // Runs BEFORE the dataTables delete, while both rows are still present. The three
-            // version/stamp constants are imported from updated_rows.js so the forward carry and
+            // version/stamp constants are imported from updated_rows/table_specs.js so the forward carry and
             // this reverse reset cannot drift apart; the twin to change in lockstep is
             // xchain-indexer/src/db/rollback/batch_heads.js.
             if(firstActionIndex !== null){
