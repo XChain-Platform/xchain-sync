@@ -38,14 +38,7 @@ async function holdTip(ctx){
     assert.strictEqual(ctx.sync.lastAppliedBlock, 199);
 }
 
-describe('ClientSync reorg at a committed but held tip @regression', function(){
-    beforeEach(function(){
-        sinon.stub(console, 'log');
-        sinon.stub(console, 'error');
-        sinon.stub(console, 'warn');
-    });
-    afterEach(function(){ sinon.restore(); });
-
+function registerRollbackAtTipTests(){
     it('rolls back a direct reorg at the stored tip and applies its replacement', async function(){
         const ctx = heldClient();
         await holdTip(ctx);
@@ -76,7 +69,9 @@ describe('ClientSync reorg at a committed but held tip @regression', function(){
         assert.strictEqual(ctx.rollback.rollback.calledOnceWith(200), true);
         assert.strictEqual(ctx.sync.lastAppliedBlock, 199);
     });
+}
 
+function registerHeldTipFailureTests(){
     it('halts instead of dropping a direct reorg when the stored tip read fails', async function(){
         const ctx = heldClient();
         await holdTip(ctx);
@@ -113,4 +108,16 @@ describe('ClientSync reorg at a committed but held tip @regression', function(){
         assert.strictEqual(ctx.sync.lastAppliedBlock, 199);
         assert.strictEqual(ctx.db.tip, 200);
     });
+}
+
+describe('ClientSync reorg at a committed but held tip @regression', function(){
+    beforeEach(function(){
+        sinon.stub(console, 'log');
+        sinon.stub(console, 'error');
+        sinon.stub(console, 'warn');
+    });
+    afterEach(function(){ sinon.restore(); });
+
+    registerRollbackAtTipTests();
+    registerHeldTipFailureTests();
 });

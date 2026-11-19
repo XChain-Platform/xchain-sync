@@ -142,18 +142,7 @@ function haltCopyHoldCases(){
     });
 }
 
-describe('ClientSync startup lifecycle integrity @regression', function(){
-    beforeEach(function(){
-        sinon.stub(console, 'log'); sinon.stub(console, 'error'); sinon.stub(console, 'warn');
-    });
-    afterEach(function(){ sinon.restore(); });
-
-    startupTipReadCases();
-
-    haltCopyRetryCases();
-
-    haltCopyHoldCases();
-
+function lifecycleTerminalCases(){
     it('returns stop when shutdown lands while a cleared startup halt is sleeping', async function(){
         const sync = Object.create(ClientSync.prototype);
         sync.running = true;
@@ -204,4 +193,19 @@ describe('ClientSync startup lifecycle integrity @regression', function(){
         assert.strictEqual(sync.synchronizeStoredReplica.callCount, 2);
         assert.strictEqual(sync.beginLiveFollow.calledOnce, true);
     });
+}
+
+describe('ClientSync startup lifecycle integrity @regression', function(){
+    beforeEach(function(){
+        sinon.stub(console, 'log'); sinon.stub(console, 'error'); sinon.stub(console, 'warn');
+    });
+    afterEach(function(){ sinon.restore(); });
+
+    startupTipReadCases();
+
+    haltCopyRetryCases();
+
+    haltCopyHoldCases();
+
+    lifecycleTerminalCases();
 });

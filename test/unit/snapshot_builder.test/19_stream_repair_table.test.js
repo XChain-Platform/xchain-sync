@@ -24,17 +24,9 @@ function streamBody(builder, db, table){
     });
 }
 
-describe('SnapshotBuilder streamRepairTable', function(){
-    let builder;
+let builder;
 
-    beforeEach(function(){
-        builder = new SnapshotBuilder(new Utility());
-    });
-
-    afterEach(function(){
-        sinon.restore();
-    });
-
+function registerStreamRepairTableTests(){
     it('rejects non-repairable, unsafe, and decoder table requests before SQL @regression', async function(){
         for(const table of ['blocks', 'index_transactions', 'mappings_actions;DROP TABLE blocks']){
             let db = createMockDb();
@@ -86,4 +78,16 @@ describe('SnapshotBuilder streamRepairTable', function(){
         assert.strictEqual(db.commitReadSnapshot.called, false);
         assert.strictEqual(builder._inflightSnapshots.has(db), false, 'snapshot slot released');
     });
+}
+
+describe('SnapshotBuilder streamRepairTable', function(){
+    beforeEach(function(){
+        builder = new SnapshotBuilder(new Utility());
+    });
+
+    afterEach(function(){
+        sinon.restore();
+    });
+
+    registerStreamRepairTableTests();
 });

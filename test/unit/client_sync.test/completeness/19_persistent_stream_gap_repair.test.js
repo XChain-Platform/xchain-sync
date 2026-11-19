@@ -150,7 +150,9 @@ function registerGuardTests(){
         assert.strictEqual(local.mappings_actions.length, 1186);
         assert.match(lines(console.error), /Stream-table repair pass failed .*reorged during repair read/);
     });
+}
 
+function registerRepairRouteTests(){
     it('falls back to the legacy full snapshot only when the route is absent', async function(){
         let missing = new Error('not found');
         missing.response = { status: 404,
@@ -225,6 +227,7 @@ describe('ClientSync', function(){
         registerFakeReplica();
         registerRepairTests();
         registerGuardTests();
+        registerRepairRouteTests();
         registerRegistryTests();
     });
 });
