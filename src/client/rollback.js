@@ -846,7 +846,7 @@ class ClientRollback {
                             " AND p.pre_archive_status_id IS NULL",
                             [firstActionIndex, foldArchiveHeadFloor(this.network, 'DOGE'), firstActionIndex]);
                         if(stuckHeads.length){
-                            console.error('rollback: archive heads ' + stuckHeads.map(row => row.action_index).join(', ') +
+                            logger.error('rollback: archive heads ' + stuckHeads.map(row => row.action_index).join(', ') +
                                 " remain invalid_archive because this replica lacks the source's unverified status row; " +
                                 'a snapshot re-sync is required to converge');
                         }

@@ -5667,63 +5667,60 @@ class ClientSync {
         return Promise.resolve(this.haltForExcessiveRollback(event, depth)).then(() => true);
     }
 
-    async applyReorgRollback(event, expectedTip, retroactiveReports){
-        let applied = await this.withApplyLock(async () => {
-            if(this._halted){
-                if(typeof this.refuseReorgWhileHalted === 'function') this.refuseReorgWhileHalted(event);
-                return false;
-            }
-            if(typeof expectedTip === 'number' && this.lastAppliedBlock !== expectedTip){
-                getLogger().warn('Skipping reorg for ' + this.chain + '/' + this.network +
-                    ': expected replica tip ' + expectedTip + ' moved to ' + this.lastAppliedBlock +
-                    ' before the apply lock was taken');
-                return false;
-            }
-            const storedTip = this.db && typeof this.db.getLastBlock === 'function'
-                ? await this.db.getLastBlock(null, { rethrow: true }) : null;
-            const committedTip = ClientSync.prototype.effectiveReorgTip.call(this, storedTip);
-            // The caller's above-tip check ran before this lock was taken, so a rollback that
-            // queued ahead of this one may have lowered the tip below the target. Re-test
-            // under the lock: a rollback to an unapplied height deletes nothing and would
-            // otherwise move the cursor forward past blocks the replica does not hold.
-            if(committedTip !== null && event.block_index > committedTip){
-                getLogger().warn('Skipping reorg for ' + this.chain + '/' + this.network +
-                    ': target block ' + event.block_index + ' is above the replica tip (' +
-                    committedTip + ') once the apply lock was taken; a no-op');
-                return false;
-            }
-            const refusal = ClientSync.prototype.refuseExcessiveRollback.call(
-                this, event, committedTip, retroactiveReports);
-            if(refusal === true || (refusal && await refusal)) return false;
-            // Lower the verified marker durably before any row goes: a marker left above
-            // the rollback would vouch for the replacement blocks. A failed write throws
-            // here, before the delete, and handleReorg halts on it.
-            // A failure halts before the lock releases, so a live block queued behind this
-            // rollback finds the hold instead of building on a half-removed range.
+    async applyReorgRollbackUnderLock(event, expectedTip, retroactiveReports){
+        if(this._halted){
+            if(typeof this.refuseReorgWhileHalted === 'function') this.refuseReorgWhileHalted(event);
+            return false;
+        }
+        if(typeof expectedTip === 'number' && this.lastAppliedBlock !== expectedTip){
+            getLogger().warn('Skipping reorg for ' + this.chain + '/' + this.network +
+                ': expected replica tip ' + expectedTip + ' moved to ' + this.lastAppliedBlock +
+                ' before the apply lock was taken');
+            return false;
+        }
+        const storedTip = this.db && typeof this.db.getLastBlock === 'function'
+            ? await this.db.getLastBlock(null, { rethrow: true }) : null;
+        const committedTip = ClientSync.prototype.effectiveReorgTip.call(this, storedTip);
+        // Re-test the target after taking the lock because an earlier rollback may lower the tip.
+        if(committedTip !== null && event.block_index > committedTip){
+            getLogger().warn('Skipping reorg for ' + this.chain + '/' + this.network +
+                ': target block ' + event.block_index + ' is above the replica tip (' +
+                committedTip + ') once the apply lock was taken; a no-op');
+            return false;
+        }
+        const refusal = ClientSync.prototype.refuseExcessiveRollback.call(
+            this, event, committedTip, retroactiveReports);
+        if(refusal === true || (refusal && await refusal)) return false;
+        // Lower the verified marker before deleting rows so a failed write leaves them held.
+        try {
+            await this.beginRowRemoval(event.block_index - 1);
             try {
-                await this.beginRowRemoval(event.block_index - 1);
-                try {
-                    if(this.rollbackGuard){
-                        this.rollbackGuard.record(committedTip, event.block_index);
-                        await this.persistRollbackGuardState();
-                    }
-                    await this.rollback.rollback(event.block_index);
-                } finally {
-                    this.endRowRemoval();
+                if(this.rollbackGuard){
+                    this.rollbackGuard.record(committedTip, event.block_index);
+                    await this.persistRollbackGuardState();
                 }
-                this.lastAppliedBlock = event.block_index - 1;
-                this._reorgGeneration++;
-                // Reload the new tip's hashes, genesis block 0 included.
-                if(this.lastAppliedBlock >= 0)
-                    this.lastHashes = await this.db.getBlockHashRow(this.lastAppliedBlock);
-                else
-                    this.lastHashes = null;
-            } catch(e){
-                await this.haltForReorgRollbackFailure(event, e);
-                throw e;
+                await this.rollback.rollback(event.block_index);
+            } finally {
+                this.endRowRemoval();
             }
-            return true;
-        });
+            this.lastAppliedBlock = event.block_index - 1;
+            this._reorgGeneration++;
+            // Reload the new tip's hashes, genesis block 0 included.
+            if(this.lastAppliedBlock >= 0)
+                this.lastHashes = await this.db.getBlockHashRow(this.lastAppliedBlock);
+            else
+                this.lastHashes = null;
+        } catch(e){
+            await this.haltForReorgRollbackFailure(event, e);
+            throw e;
+        }
+        return true;
+    }
+
+    async applyReorgRollback(event, expectedTip, retroactiveReports){
+        let applied = await this.withApplyLock(() =>
+            ClientSync.prototype.applyReorgRollbackUnderLock.call(
+                this, event, expectedTip, retroactiveReports));
         if(!applied) return false;
         // The source rewrote dispensers off-stream for the orphaned blocks, so arm a reconcile
         // for the next status tick or catch-up rather than waiting out the interval.
