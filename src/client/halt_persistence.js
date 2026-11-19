@@ -139,7 +139,7 @@ module.exports = {
             this._halted = synthetic;
             let delay = FIRST_RETRY_MS;
             while(this.running && this._halted === synthetic){
-                await this.util.sleep(delay);
+                await this.sleepUntilStop(delay);
                 if(!(this.running && this._halted === synthetic)) break;
                 try {
                     raw = await this.db.getSyncState(this.pendingHaltKey(), { rethrow: true });
@@ -177,7 +177,7 @@ module.exports = {
                     this._halted = {
                         blockIndex: -1, reason: 'startup-guard-state-unreadable', mismatches: [], sources: [], at: null
                     };
-                await this.util.sleep(delay);
+                await this.sleepUntilStop(delay);
                 delay = Math.min(delay * 2, MAX_RETRY_MS);
                 continue;
             }

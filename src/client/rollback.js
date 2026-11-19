@@ -833,16 +833,35 @@ class ClientRollback {
                     // the source indexer's term. Rationale and the arming precondition live in
                     // src/consensus/gates/archive_rollback_author_scope_gate.js.
                     let authorScope = archiveAuthorScopeJoin(block_index, this.network);
+                    const unverifiedStatusId = await this.db.getStatusId('unverified', { rethrow: true });
+                    if(unverifiedStatusId === null){
+                        const stuckHeads = await this.db.doQuery(
+                            "SELECT p.action_index FROM anchor_actions p " +
+                            "JOIN index_statuses ps ON ps.id = p.status_id AND ps.status = 'invalid_archive' " +
+                            "JOIN anchor_actions c ON c.version = 2 AND c.match_batch_seq = p.match_batch_seq AND c.action_index >= ? " +
+                            "JOIN index_statuses cs ON cs.id = c.status_id AND cs.status = 'valid' " +
+                            authorScope +
+                            "WHERE " + archiveHeadPickPredicate('p') +
+                            " AND p.action_index < ? AND " + archiveHeadPredicate('p') +
+                            " AND p.pre_archive_status_id IS NULL",
+                            [firstActionIndex, foldArchiveHeadFloor(this.network, 'DOGE'), firstActionIndex]);
+                        if(stuckHeads.length){
+                            console.error('rollback: archive heads ' + stuckHeads.map(row => row.action_index).join(', ') +
+                                " remain invalid_archive because this replica lacks the source's unverified status row; " +
+                                'a snapshot re-sync is required to converge');
+                        }
+                    }
                     await this.db.doQuery(
                         "UPDATE anchor_actions p " +
                         "JOIN index_statuses ps ON ps.id = p.status_id AND ps.status = 'invalid_archive' " +
                         "JOIN anchor_actions c ON c.version = 2 AND c.match_batch_seq = p.match_batch_seq AND c.action_index >= ? " +
                         "JOIN index_statuses cs ON cs.id = c.status_id AND cs.status = 'valid' " +
                         authorScope +
-                        "JOIN index_statuses us ON us.status = 'unverified' " +
+                        "LEFT JOIN index_statuses us ON us.status = 'unverified' " +
                         "SET p.status_id = COALESCE(p.pre_archive_status_id, us.id), p.pre_archive_status_id = NULL " +
                         "WHERE " + archiveHeadPickPredicate('p') +
-                        " AND p.action_index < ? AND " + archiveHeadPredicate('p'),
+                        " AND p.action_index < ? AND " + archiveHeadPredicate('p') +
+                        " AND COALESCE(p.pre_archive_status_id, us.id) IS NOT NULL",
                         // Bind in SQL order: the chunk join, the pick predicate's fold floor, then the parent bound.
                         [firstActionIndex, foldArchiveHeadFloor(this.network, 'DOGE'), firstActionIndex]);
                 } catch(e){

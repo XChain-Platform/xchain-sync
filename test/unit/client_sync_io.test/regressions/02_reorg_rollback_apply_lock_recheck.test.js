@@ -15,14 +15,14 @@ const Utility    = require('../../../../src/util');
 const HashVerifier = require('../../../../src/client/hash_verifier');
 
 // A replica at `tip` whose rollback is a stub, with the real apply lock.
-function makeSync(tip){
+function makeSync(tip, maxRollbackDepth = 500){
     let db = {
         dbName: 'indexer_db', dbType: 'indexer',
         getLastBlock: sinon.stub().resolves(null), getActiveHalt: sinon.stub().resolves(null),
         getBlockHashRow: sinon.stub().resolves(null), setSyncState: sinon.stub().resolves()
     };
     let rollback = { rollback: sinon.stub().resolves() };
-    let config = { SYNC_SOURCES: 'http://src1:3006', MAX_ROLLBACK_DEPTH: 10 };
+    let config = { SYNC_SOURCES: 'http://src1:3006', MAX_ROLLBACK_DEPTH: maxRollbackDepth };
     let sync = new ClientSync('bitcoin', 'mainnet', db, { applyBlock: sinon.stub().resolves() },
         rollback, new HashVerifier(), config, new Utility());
     sync.lastAppliedBlock = tip;
@@ -60,5 +60,28 @@ describe('ClientSync reorg rollback re-checks the tip under the apply lock @regr
         assert.strictEqual(await second, true);
         assert.deepStrictEqual(rollback.rollback.args.map(a => a[0]), [150, 100]);
         assert.strictEqual(sync.lastAppliedBlock, 99);
+    });
+
+    it('refuses when the rollback depth grows past the limit while waiting for the lock', async function(){
+        const { sync, rollback } = makeSync(1000, 126);
+        sinon.stub(sync, 'haltForExcessiveRollback').resolves();
+        sinon.stub(sync, 'persistRollbackGuardState').resolves();
+        let releaseLock;
+        const held = sync.withApplyLock(() => new Promise(resolve => { releaseLock = resolve; }));
+        await new Promise(resolve => setImmediate(resolve));
+
+        const reorg = sync.handleReorg({ type: 'reorg', block_index: 875 });
+        await new Promise(resolve => setImmediate(resolve));
+        sync.lastAppliedBlock = 1001;
+        releaseLock();
+        await Promise.all([held, reorg]);
+
+        assert.strictEqual(sync.haltForExcessiveRollback.calledOnceWithExactly(
+            sinon.match({ block_index: 875 }), 127), true);
+        assert.strictEqual(rollback.rollback.called, false);
+        assert.strictEqual(sync.beginRowRemoval.called, false);
+        assert.strictEqual(sync.persistRollbackGuardState.called, false);
+        assert.deepStrictEqual(sync.rollbackGuard.toState(), { peak: null, low: null });
+        assert.strictEqual(sync.lastAppliedBlock, 1001);
     });
 });

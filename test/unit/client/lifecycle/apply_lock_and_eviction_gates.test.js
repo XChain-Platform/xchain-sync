@@ -155,6 +155,12 @@ function holdLock(sync){
     return release;
 }
 
+function deferred(){
+    let resolve;
+    const promise = new Promise(r => { resolve = r; });
+    return { promise, resolve };
+}
+
 function registerLiveApplyTests(){
     it('does not commit a block queued on the apply lock when a halt lands first', async function(){
         const sync = liveSync();
@@ -246,6 +252,93 @@ describe('ClientSync live apply under a halt @regression', function(){
 
     registerLiveApplyTests();
     registerFailedRollbackTests();
+});
+
+function verificationSync(){
+    const sync = liveSync();
+    sync.finishAppliedBlock.restore();
+    sinon.spy(sync, 'finishAppliedBlock');
+    sinon.stub(sync, 'scheduleHeartbeat');
+    sinon.stub(sync, 'tracksVerifiedTip').returns(false);
+    sync.config.VERIFY_RECOMPUTE = true;
+    return sync;
+}
+
+function registerLiveVerificationGenerationTests(){
+    it('does not restore the applied cursor after rows change during recompute @regression', async function(){
+        const sync = verificationSync();
+        const gate = deferred();
+        sinon.stub(sync, 'verifyRecompute').returns(gate.promise);
+        const applying = sync.applyAndVerifyBlock({ block_index: 11, block_time: 1 });
+        await new Promise(resolve => setImmediate(resolve));
+        sync.bumpRowGeneration();
+        sync.lastAppliedBlock = 9;
+        gate.resolve(null);
+        await applying;
+        assert.strictEqual(sync.lastAppliedBlock, 9);
+        assert.strictEqual(sync.finishAppliedBlock.called, false);
+    });
+
+    it('does not halt on a recompute result invalidated by row removal @regression', async function(){
+        const sync = verificationSync();
+        const gate = deferred();
+        sinon.stub(sync, 'verifyRecompute').returns(gate.promise);
+        sinon.stub(sync, 'haltOnDivergence').resolves();
+        const applying = sync.applyAndVerifyBlock({ block_index: 11, block_time: 1 });
+        await new Promise(resolve => setImmediate(resolve));
+        sync.bumpRowGeneration();
+        gate.resolve([{ field: 'ledger_hash' }]);
+        await applying;
+        assert.strictEqual(sync.haltOnDivergence.called, false);
+        assert.strictEqual(sync.finishAppliedBlock.called, false);
+    });
+
+    it('does not halt on a state hash result invalidated by row removal @regression', async function(){
+        const sync = verificationSync();
+        const gate = deferred();
+        sync.config.VERIFY_RECOMPUTE = false;
+        sync.config.VERIFY_STATE_HASH = true;
+        sync.haltOnLiveStateHashDivergence.restore();
+        sinon.stub(sync, 'stateHashMismatch').returns(gate.promise);
+        sinon.stub(sync, 'haltOnDivergence').resolves();
+
+        const applying = sync.applyAndVerifyBlock({ block_index: 11, block_time: 1, state_hash: 'expected' });
+        await new Promise(resolve => setImmediate(resolve));
+        sync.bumpRowGeneration();
+        gate.resolve({ field: 'state_hash', a: 'expected', b: 'other' });
+        await applying;
+
+        assert.strictEqual(sync.haltOnDivergence.called, false);
+        assert.strictEqual(sync.finishAppliedBlock.called, false);
+    });
+}
+
+function registerLiveVerificationCaptureTests(){
+    it('captures the verification generation after a queued block commits @regression', async function(){
+        const sync = liveSync();
+        const release = holdLock(sync);
+        sinon.stub(sync, 'tracksVerifiedTip').returns(true);
+        sinon.stub(sync, 'advanceVerifiedTip').resolves();
+        const applying = sync.applyAndVerifyBlock({ block_index: 11, block_time: 1 });
+        await new Promise(resolve => setImmediate(resolve));
+
+        sync.bumpRowGeneration();
+        release();
+        await applying;
+
+        assert.strictEqual(sync.advanceVerifiedTip.calledOnce, true);
+        assert.strictEqual(sync.advanceVerifiedTip.firstCall.args[1], sync.rowGeneration());
+    });
+}
+
+describe('ClientSync live verification generation @regression', function(){
+    beforeEach(function(){
+        sinon.stub(console, 'log'); sinon.stub(console, 'error'); sinon.stub(console, 'warn');
+    });
+    afterEach(function(){ sinon.restore(); });
+
+    registerLiveVerificationGenerationTests();
+    registerLiveVerificationCaptureTests();
 });
 
 describe('ClientSync catch-up 404 from a source that is behind @regression', function(){

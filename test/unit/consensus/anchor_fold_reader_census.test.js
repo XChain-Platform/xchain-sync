@@ -37,14 +37,14 @@ describe('anchor fold reader census', function () {
         const relativePath = 'src/client/rollback.js';
         const source = read(relativePath);
 
-        assert.strictEqual(count(source, "archiveHeadPredicate('p')"), 1,
-            failure(relativePath, 'expected exactly one fold row predicate'));
-        assert.strictEqual(count(source, "archiveHeadPickPredicate('p')"), 1,
-            failure(relativePath, 'expected exactly one forward parent-pick predicate'));
+        assert.strictEqual(count(source, "archiveHeadPredicate('p')"), 2,
+            failure(relativePath, 'expected the fold row predicate in the restore UPDATE and the stuck-heads SELECT'));
+        assert.strictEqual(count(source, "archiveHeadPickPredicate('p')"), 2,
+            failure(relativePath, 'expected the forward parent-pick predicate in the restore UPDATE and the stuck-heads SELECT'));
         assert.strictEqual(count(source, VERSION_SPLICE), 0,
             failure(relativePath, 'expected no frozen archive-head version splice in the reset'));
-        assert.strictEqual(count(source, CHUNK_JOIN), 1,
-            failure(relativePath, 'expected exactly one invalid_archive v2 chunk join'));
+        assert.strictEqual(count(source, CHUNK_JOIN), 2,
+            failure(relativePath, 'expected the invalid_archive v2 chunk join in the restore UPDATE and the stuck-heads SELECT'));
     });
 
     it('pins the database updated-rows reader', function () {

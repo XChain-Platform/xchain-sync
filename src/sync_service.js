@@ -463,6 +463,10 @@ class SyncService {
         // sync is permanently dead while the process still appears healthy.
         // Log the full error and exit so the container restart policy surfaces it.
         sync.start().catch(e => {
+            if(sync._stopping){
+                getLogger().warn(util.format('ClientSync stopped while startup was settling for ' + key + ':', e));
+                return;
+            }
             getLogger().error(util.format('ClientSync crashed for ' + key + '; exiting for restart:', e));
             process.exit(1);
         });

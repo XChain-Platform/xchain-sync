@@ -38,6 +38,36 @@ function haltCopyContext(getSyncState, sleep){
     return sync;
 }
 
+function deferred(){
+    let resolve;
+    const promise = new Promise(r => { resolve = r; });
+    return { promise, resolve };
+}
+
+function stoppableStartupSync(){
+    const sync = Object.create(ClientSync.prototype);
+    Object.assign(sync, { chain: 'bitcoin', network: 'mainnet', dbType: 'indexer', running: false });
+    Object.assign(sync, {
+        pendingHashes: new Map(), _strictConfirmPending: new Set(), _applyTimers: new Map(),
+        _pendingReorgs: new Map(), _strictReorgPending: new Set(), _reconnectTimers: new Map(),
+        _streamWatchdogs: new Map(), _sourceLastWsEventAt: new Map(), _sourceLastReportedTip: new Map(),
+        _sourcesNeedingRecovery: new Set(), _inFlightWork: new Set(), wsConns: []
+    });
+    sync['_stopping'] = false;
+    sync.warnTrustPosture = sinon.stub();
+    sync.resolveStartupHalt = sinon.stub().resolves('continue');
+    sync.holdForDurableStartupState = sinon.stub().resolves('continue');
+    sync.holdForRollbackGuardState = sinon.stub().resolves('continue');
+    sync.ensureLiveFollowTip = sinon.stub();
+    sync.prepareLiveFollow = sinon.stub().resolves();
+    sync.beginLiveFollow = sinon.stub().callsFake(() => { sync.running = false; });
+    sync.cancelHaltPersistRetry = sinon.stub();
+    sync.clearAllPendingReorgs = sinon.stub();
+    sync.forgetSourceRetry = sinon.stub();
+    sync.util = { sleep: sinon.stub().resolves() };
+    return sync;
+}
+
 // Startup tip reads: a read fault propagates, only a missing blocks table means an empty replica.
 function startupTipReadCases(){
     it('propagates startup tip read faults without entering either bootstrap path', async function(){
@@ -195,6 +225,130 @@ function lifecycleTerminalCases(){
     });
 }
 
+function shutdownDuringStartupCases(){
+    it('drains paused startup and does not enter live follow after stop @regression', async function(){
+        const sync = stoppableStartupSync();
+        const gate = deferred();
+        sync.synchronizeStoredReplica = sinon.stub().returns(gate.promise);
+        const started = sync.start();
+        await new Promise(resolve => setImmediate(resolve));
+
+        let drained = false;
+        const stopping = sync.stop().then(() => { drained = true; });
+        await new Promise(resolve => setImmediate(resolve));
+        assert.strictEqual(drained, false);
+
+        gate.resolve();
+        await Promise.all([started, stopping]);
+        assert.strictEqual(sync.ensureLiveFollowTip.called, false);
+        assert.strictEqual(sync.prepareLiveFollow.called, false);
+        assert.strictEqual(sync.beginLiveFollow.called, false);
+    });
+
+    it('does not begin live follow when stop lands during preparation @regression', async function(){
+        const sync = stoppableStartupSync();
+        const gate = deferred();
+        sync.synchronizeStoredReplica = sinon.stub().resolves();
+        sync.prepareLiveFollow = sinon.stub().returns(gate.promise);
+        const started = sync.start();
+        await new Promise(resolve => setImmediate(resolve));
+
+        const stopping = sync.stop();
+        gate.resolve();
+        await Promise.all([started, stopping]);
+
+        assert.strictEqual(sync.beginLiveFollow.called, false);
+    });
+
+}
+
+function shutdownBootstrapCases(){
+    it('does not apply a snapshot downloaded after stop @regression', async function(){
+        const sync = stoppableStartupSync();
+        const gate = deferred();
+        sync.sources = ['http://source'];
+        sync.activeSourceIndices = sinon.stub().returns([0]);
+        sync.primarySourceIndex = sinon.stub().returns(0);
+        sync.fetchAndApplySchema = sinon.stub().resolves();
+        sync.bootstrapDownloadSnapshot = sinon.stub().returns(gate.promise);
+        sync.bootstrapApplySnapshot = sinon.stub().resolves(true);
+
+        const bootstrapping = sync.bootstrapRotateSources();
+        await new Promise(resolve => setImmediate(resolve));
+        sync['_stopping'] = true;
+        gate.resolve({ block_height: 10 });
+        await bootstrapping;
+
+        assert.strictEqual(sync.bootstrapApplySnapshot.called, false);
+    });
+
+    it('finalizes a snapshot marker when stop lands after its commit @regression', async function(){
+        const sync = stoppableStartupSync();
+        sync.primarySource = sinon.stub().returns('http://source');
+        sync.config = {
+            BOOTSTRAP_MAX_RETRIES: 1, BOOTSTRAP_RETRY_BASE_MS: 1,
+            BOOTSTRAP_RETRY_MAX_MS: 1
+        };
+        sync.bootstrapRotateSources = sinon.stub().callsFake(async () => {
+            sync.lastAppliedBlock = 10;
+            sync['_stopping'] = true;
+            return true;
+        });
+        sync.adoptVerifiedTip = sinon.stub().resolves();
+
+        await sync.bootstrapFromSnapshot();
+
+        assert.strictEqual(sync.adoptVerifiedTip.calledOnceWithExactly(10), true);
+    });
+}
+
+// A retry sleep that never elapses: only the stop signal can end the hold.
+async function assertStopSettlesHold(sync, run){
+    sync.util = { sleep: sinon.stub().returns(new Promise(() => {})) };
+    sync.running = true;
+    sync.armStopSignal();
+    sync.replicaLabel = () => 'bitcoin/mainnet/indexer';
+    let result;
+    const holding = run().then(value => { result = value; });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.strictEqual(sync.util.sleep.called, true);
+    await sync.stop();
+    await holding;
+    return result;
+}
+
+function shutdownHoldCases(){
+    it('settles the durable guard retry hold when stop lands @regression', async function(){
+        const sync = stoppableStartupSync();
+        sync.loadBootstrapBase = sinon.stub().rejects(new Error('read failed'));
+        const result = await assertStopSettlesHold(sync, () => ClientSync.prototype.holdForDurableStartupState.call(sync));
+        assert.strictEqual(result, 'stop');
+    });
+
+    it('settles the rollback guard unreadable hold when stop lands @regression', async function(){
+        const sync = stoppableStartupSync();
+        sync.loadRollbackGuardState = sinon.stub().resolves('unreadable');
+        const result = await assertStopSettlesHold(sync, () => ClientSync.prototype.holdForRollbackGuardState.call(sync));
+        assert.strictEqual(result, 'stop');
+    });
+
+    it('settles the rollback guard invalid hold when stop lands @regression', async function(){
+        const sync = stoppableStartupSync();
+        sync.loadRollbackGuardState = sinon.stub().resolves('invalid');
+        const result = await assertStopSettlesHold(sync, () => ClientSync.prototype.holdForRollbackGuardState.call(sync));
+        assert.strictEqual(result, 'stop');
+    });
+
+    it('settles the halt copy read retry hold when stop lands @regression', async function(){
+        const sync = stoppableStartupSync();
+        sync.db = { getSyncState: sinon.stub().rejects(new Error('read failed')) };
+        sync.pendingHaltKey = () => 'pending_halt';
+        sync['_halted'] = null;
+        const result = await assertStopSettlesHold(sync, () => ClientSync.prototype.restorePendingHalt.call(sync));
+        assert.strictEqual(result, true);
+    });
+}
+
 describe('ClientSync startup lifecycle integrity @regression', function(){
     beforeEach(function(){
         sinon.stub(console, 'log'); sinon.stub(console, 'error'); sinon.stub(console, 'warn');
@@ -208,4 +362,10 @@ describe('ClientSync startup lifecycle integrity @regression', function(){
     haltCopyHoldCases();
 
     lifecycleTerminalCases();
+
+    shutdownDuringStartupCases();
+
+    shutdownBootstrapCases();
+
+    shutdownHoldCases();
 });

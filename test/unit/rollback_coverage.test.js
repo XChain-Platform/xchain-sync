@@ -899,7 +899,8 @@ describe('Rollback coverage guard @regression', function(){
             // like 'invalid_archive' normalizes to a bare ` invalid_archive ` -- match that form.
             { name: 'anchor invalid_archive parent join',   re: /JOIN index_statuses ps ON ps\.id = p\.status_id AND ps\.status = invalid_archive/ },
             { name: 'anchor orphaned v2 chunk join',        re: /JOIN anchor_actions c ON c\.version = 2 AND c\.match_batch_seq = p\.match_batch_seq/ },
-            { name: 'anchor journal restore and clear',     re: /JOIN index_statuses us ON us\.status = unverified SET p\.status_id = COALESCE\(p\.pre_archive_status_id, us\.id\), p\.pre_archive_status_id = NULL/ },
+            { name: 'anchor journal restore and clear',     re: /LEFT JOIN index_statuses us ON us\.status = unverified SET p\.status_id = COALESCE\(p\.pre_archive_status_id, us\.id\), p\.pre_archive_status_id = NULL/ },
+            { name: 'anchor restore non-null guard',        re: /COALESCE\(p\.pre_archive_status_id, us\.id\) IS NOT NULL/ },
             // The parent predicate must select every head the forward chunk path can pick
             // and stamp (v1, plus a v3 fold row above the DOGE fold floor) via the shared
             // archiveHeadPickPredicate, on both sides, rather than a hardcoded literal that
@@ -914,7 +915,7 @@ describe('Rollback coverage guard @regression', function(){
             // sides, between the chunk-status join and the reset join. A side that drops it
             // resets under a different batch key than its twin the moment the flag day arms.
             { name: 'publisher author-scope splice',
-              re: /cs\.status = valid (\$\{)?authorScope\}? JOIN index_statuses us/ },
+              re: /cs\.status = valid (\$\{)?authorScope\}? LEFT JOIN index_statuses us/ },
         ];
         for(const [label, p] of [['xchain-sync src/client/rollback.js (replica)', syncPath], ['xchain-indexer src/rollback/ + src/db/rollback/ (source)', indexerPath]]){
             const src = norm(readSourceText(p));
