@@ -77,7 +77,7 @@ dotenv.config();
 // Before anything else logs. checkStartupEnv's console.error calls are exactly
 // the lines an operator needs levelled and timestamped, and installObservability
 // does not run until well past module load, so the patch has to land here.
-const { patchConsole, getLogger } = require('./observability');
+const { patchConsole, getLogger, installSqlTiming } = require('./observability');
 patchConsole({ service: 'xchain-sync', version: require('../package.json').version });
 
 const REQUIRED_ENV = ['HUB_API_HOST'];
@@ -731,6 +731,7 @@ function createApp(syncService, cfg, app = express()){
     // spend the caller's budget instead of being free to repeat.
     app.use(backstopLimiter);
     app.use(express.json({ limit: '16kb' }));
+    installSqlTiming(app, { service: 'xchain-sync' });
     app.use(createApiKeyMiddleware(cfg['SYNC_API_KEY']));
 
     // WebSocket upgrades arrive as 'upgrade' events and never enter this
