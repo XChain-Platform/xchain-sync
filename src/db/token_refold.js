@@ -274,6 +274,16 @@ function compareTickIds(a, b){
     return left < right ? -1 : (left > right ? 1 : 0);
 }
 
+function unionTickIds(...groups){
+    const found = new Map();
+    for(const group of groups){
+        for(const id of (group || [])){
+            if(id !== null && id !== undefined) found.set(String(id), id);
+        }
+    }
+    return [...found.values()].sort(compareTickIds);
+}
+
 // Read before the generic deletes, as the source read phase does. Missing legacy
 // tables are skipped independently so one schema gap does not discard the other sets.
 async function collectRefoldTickIds(db, firstActionIndex, tables){
@@ -369,4 +379,5 @@ const RESTATED = Object.freeze({
     U64_MAX, MIN_TOKEN_DECIMALS, MAX_TOKEN_DECIMALS, FOLD_KEYS: Object.freeze(Object.keys(rowValues({}))),
 });
 
-module.exports = { FOLD_COLUMNS, RESTATED, foldIssueRows, collectRefoldTickIds, refoldTokenRows, tokenFoldRows };
+module.exports = { FOLD_COLUMNS, RESTATED, foldIssueRows, collectRefoldTickIds, unionTickIds,
+    refoldTokenRows, tokenFoldRows };

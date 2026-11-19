@@ -54,8 +54,9 @@ module.exports = {
     // stops applying, both freeze at the same number, and lag_blocks publishes 0
     // while the node is hours behind. Only the replication subsystem can tell those
     // apart. Returns { isReplica, running, secondsBehind }: isReplica false on a
-    // primary/co-located source (empty result set), null when the read itself was
-    // refused (missing REPLICATION CLIENT grant), which callers must treat as stale.
+    // primary/co-located source (empty result set with no configured connection),
+    // null when the configured connection is absent or the read itself was refused,
+    // which callers must treat as stale.
     async getReplicaStatus(conn){
         // Multi-source first: `SHOW REPLICA STATUS` reports only the UNNAMED
         // connection, so a replica whose connections are all named answers it with
@@ -78,18 +79,18 @@ module.exports = {
             }
             return { isReplica: null, running: null, secondsBehind: null };
         }
-        // No connections at all: a primary, or a server whose databases are fed by
-        // the sync protocol rather than native replication. Fresh by this probe; the
-        // client-side staleness window covers that path.
-        if(!rows || rows.length === 0)
+        const wanted = this.replicaConnectionName;
+
+        // No connections at all is a primary only when the operator did not name a
+        // required replication channel. A configured-but-missing channel is unknown.
+        if((!rows || rows.length === 0) && !wanted)
             return { isReplica: false, running: null, secondsBehind: null };
 
-        let parsed = rows.map(readReplicaStatusRow);
+        const parsed = (rows || []).map(readReplicaStatusRow);
 
         // A named-but-absent connection is an assertion that no longer matches the
         // server, not an absence of replication: fail closed rather than silently
         // measuring a different stream.
-        const wanted = this.replicaConnectionName;
         if(wanted){
             const hit = parsed.find(p => p.name === wanted);
             if(!hit){

@@ -2467,6 +2467,70 @@ class ClientSync {
             dbTip + '; catch-up asked only ' + source + ' and does not fail over to another source.');
     }
 
+    // A post-commit verification failure deliberately leaves the in-memory cursor
+    // behind the stored tip. Once the tail verifies, restore the cursor/hash pair
+    // before any catch-up consumer uses it. `guard` carries the row and reorg
+    // generations read before the tip, so a replacement that completed after that
+    // read voids the resync. A recompute replica also needs its marker at the tip,
+    // and no live block at or below the tip may still be awaiting its post-commit
+    // checks, since none of the guards above move while those checks run.
+    // 'held' (marker below the tip or a live check pending) and 'unresolved' (no hash
+    // row yet) leave the cursor where it was and let the pass continue as it would
+    // without the resync.
+    async syncCursorToCommittedTip(dbTip, guard){
+        const behind = () => dbTip !== null && typeof this.lastAppliedBlock === 'number' &&
+            this.lastAppliedBlock < dbTip;
+        if(!behind()) return 'unchanged';
+        const oldCursor = this.lastAppliedBlock;
+        const changed = () => this._halted || this.rowsChangedSince(guard.rowGeneration) ||
+            this._reorgGeneration !== guard.reorgGeneration;
+        const unverified = () => this.liveVerifyPendingAtOrBelow(dbTip) ||
+            (this.tracksVerifiedTip() && this._verifiedTip !== dbTip);
+        const result = await this.withApplyLock(async () => {
+            if(changed()) return 'moved';
+            const currentTip = await this.db.getLastBlock(null, { rethrow: true });
+            if(currentTip !== dbTip || changed()) return 'moved';
+            if(!behind()) return 'unchanged';
+            if(unverified()) return 'held';
+            const row = await this.db.getBlockHashRow(dbTip, null, { rethrow: true });
+            if(row === null) return 'unresolved';
+            if(changed()) return 'moved';
+            if(unverified()) return 'held';
+            this.lastAppliedBlock = dbTip;
+            this.lastHashes = row;
+            return 'resynced';
+        });
+        if(result === 'resynced'){
+            getLogger().warn('Resynced applied cursor from ' + oldCursor +
+                ' to verified committed tip ' + dbTip + ' before catch-up');
+            this.scheduleHeartbeat();
+        } else if(result === 'held' || result === 'unresolved'){
+            const why = result === 'unresolved' ? 'tip hash row is unresolved'
+                : this.liveVerifyPendingAtOrBelow(dbTip) ? 'a live block\'s post-commit checks are pending'
+                    : 'verified marker is at ' + this._verifiedTip;
+            getLogger().warn('Applied cursor ' + oldCursor + ' stays below committed tip ' + dbTip + ': ' + why);
+        }
+        return result;
+    }
+
+    // Resume from the committed tip only once every block up to it is verified.
+    // A block committed and never verified (a recompute that errored, a process
+    // stopped mid-verification, a cleared halt) recomputes here first, so the
+    // range below cannot bury it. Returns false when the pass must stop.
+    async prepareCatchUpFromTip(dbTip, sinceBlock, cursorGuard){
+        if(dbTip === null){
+            this.startVerifiedTipBelow(sinceBlock);
+            return true;
+        }
+        if(await this.verifyUnverifiedTail() !== 'ok') return false;
+        if(await this.syncCursorToCommittedTip(dbTip, cursorGuard) !== 'moved') return true;
+        // A live apply, row removal or reorg changed the tip after it was read, so the
+        // pass re-runs on fresh reads instead of downloading from a stale bound.
+        this._catchUpPending = true;
+        this._catchUpTipMoved = true;
+        return false;
+    }
+
     async runIncrementalCatchUp(){
         // Use one active preferred source for the entire pass so download, recovery,
         // and optional verification share one upstream identity. An empty source list
@@ -2490,15 +2554,11 @@ class ClientSync {
             // Keep this read inside the recovery boundary so transient query faults
             // abort the pass and schema faults reach the debounced repair path. WebSocket
             // event callers do not catch a rejection escaping the in-flight runner.
+            const cursorGuard = { rowGeneration: this.rowGeneration(), reorgGeneration: this._reorgGeneration };
             dbTip = await this.db.getLastBlock(null, { rethrow: true });
             sinceBlock = (dbTip === null ? 0 : dbTip) + 1;
 
-            // Resume from the committed tip only once every block up to it is verified.
-            // A block committed and never verified (a recompute that errored, a process
-            // stopped mid-verification, a cleared halt) recomputes here first, so the
-            // range below cannot bury it.
-            if(dbTip === null) this.startVerifiedTipBelow(sinceBlock);
-            else if(await this.verifyUnverifiedTail() !== 'ok') return;
+            if(!(await this.prepareCatchUpFromTip(dbTip, sinceBlock, cursorGuard))) return;
 
             // Preserve the server's inclusive since-bound by starting one block after
             // the committed tip. A null tip maps to block one through the zero seed.
@@ -5051,8 +5111,29 @@ class ClientSync {
                 if(dbTip !== null && Number(dbTip) > Number(event.block_index))
                     return { status: 'stale' };
             }
+            // Marked before the lock is released, so a cursor resync that takes the
+            // lock next already sees this block's post-commit checks as pending.
+            this.markLiveVerify(event.block_index, 1);
             return { status: 'applied', generation: this.rowGeneration() };
         });
+    }
+
+    // Committed live blocks whose post-commit checks have not settled (block -> count).
+    // While one is pending, "cursor below the stored tip" is a check in progress, not a
+    // held block, so the catch-up cursor resync must not publish it.
+    markLiveVerify(blockIndex, delta){
+        const inFlight = this._liveVerifyInFlight || (this._liveVerifyInFlight = new Map());
+        const count = (inFlight.get(blockIndex) || 0) + delta;
+        if(count > 0) inFlight.set(blockIndex, count);
+        else inFlight.delete(blockIndex);
+    }
+
+    liveVerifyPendingAtOrBelow(height){
+        if(!this._liveVerifyInFlight) return false;
+        for(const blockIndex of this._liveVerifyInFlight.keys()){
+            if(Number(blockIndex) <= Number(height)) return true;
+        }
+        return false;
     }
 
     // True when the locked apply declined the block (nothing was committed).
@@ -5098,8 +5179,9 @@ class ClientSync {
         // Check train activation before writing any part of the block.
         if(await this.checkTrainActivation(event.block_index)) return;
         if(await this.liveBlockBlockedByUnverifiedTail(event)) return;
+        let applyResult = null;
         try {
-            let applyResult = await this.applyLiveBlockUnderLock(event, opts);
+            applyResult = await this.applyLiveBlockUnderLock(event, opts);
             if(this.logRefusedLiveBlock(event, applyResult)) return;
             let generation = applyResult.generation;
             let computedRoots = this.carryUnverifiedRoots(event);
@@ -5141,6 +5223,8 @@ class ClientSync {
             // or a restart recomputes it before anything builds on it.
             // Heal schema gaps and let later status events drive catch-up.
             await this.healSchemaIfStale(e);
+        } finally {
+            if(applyResult && applyResult.status === 'applied') this.markLiveVerify(event.block_index, -1);
         }
     }
 

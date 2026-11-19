@@ -456,6 +456,9 @@ class Database {
         await this.relaxReplicatedColumnNullability();
         await this.widenReplicatedColumnTypes();
         await this.repairReplicatedAutoIncrement();
+        // Full-snapshot commit and allocator repair are separate because ALTER TABLE
+        // implicitly commits. Repeating this on replica startup closes that crash gap.
+        await this.resetAutoIncrementToMax('validator_rewards');
         await this.widenReplicatedAttestsRequestStatus();
     }
 

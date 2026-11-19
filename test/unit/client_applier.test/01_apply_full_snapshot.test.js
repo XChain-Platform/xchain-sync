@@ -96,6 +96,29 @@ function registerFullSnapshotCases1(){
         assert.deepStrictEqual(deletes, ['DELETE FROM `transactions`', 'DELETE FROM `blocks`']);
         assert.strictEqual(db.commitTransaction.calledOnce, true);
     });
+    it('resets validator_rewards AUTO_INCREMENT only after the snapshot commits', async function(){
+        db.doQuery.withArgs(sinon.match(/^SELECT COALESCE\(MAX\(id\)/)).resolves([{ next_id: '3' }]);
+        await applier.applyFullSnapshot({
+            schema_version: SCHEMA_VERSION.indexer,
+            block_height: 10,
+            tables: { validator_rewards: [{ id: 1 }, { id: 2 }] }
+        });
+        const alter = db.doQuery.getCalls().find(c =>
+            c.args[0] === 'ALTER TABLE `validator_rewards` AUTO_INCREMENT = 3');
+        assert.ok(alter, 'the imported maximum must determine the next local reward id');
+        assert.ok(db.commitTransaction.firstCall.callId < alter.callId, 'ALTER TABLE must run after commit');
+    });
+    it('does not reset the allocator when snapshot insertion rolls back', async function(){
+        db.doQuery.withArgs(sinon.match(/^INSERT (?:IGNORE )?INTO `validator_rewards`/)).rejects(new Error('insert failed'));
+        await assert.rejects(() => applier.applyFullSnapshot({
+            schema_version: SCHEMA_VERSION.indexer,
+            block_height: 10,
+            tables: { validator_rewards: [{ id: 1 }] }
+        }), /insert failed/);
+        const alters = db.doQuery.getCalls().filter(c => /^ALTER TABLE `validator_rewards`/.test(c.args[0]));
+        assert.deepStrictEqual(alters, []);
+        assert.ok(db.rollbackTransaction.calledOnce);
+    });
 }
 
 function registerFullSnapshotRepairCase(){

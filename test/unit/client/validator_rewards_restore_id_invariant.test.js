@@ -12,8 +12,9 @@
 // INSERT IGNORE, so a carried id that lands on a locally minted one is dropped on the
 // PRIMARY KEY. The only statement that lets the replica mint an id is the RB-ANCHOR
 // restore, and it is safe because the source runs the identical statement over the
-// same replicated log rows, which keeps the replica's counter at or below the
-// source's. These guards fail when either half of that argument is broken.
+// same replicated log rows. Full snapshot replacement also resets the replica
+// allocator to MAX(id)+1, keeping its counter at or below the source's. These
+// guards fail when either half of that argument is broken.
 
 const assert = require('assert');
 const fs     = require('fs');
@@ -22,6 +23,7 @@ const { siblingCheckout, skipOrFail } = require('../../helpers/sibling_checkout.
 
 const SRC = path.resolve(__dirname, '..', '..', '..', 'src');
 const SYNC_RESTORE = path.join(SRC, 'client', 'rollback.js');
+const APPLIER = path.join(SRC, 'client', 'applier.js');
 const INDEXER_PURGE = path.resolve(__dirname, '..', '..', '..', '..', 'xchain-indexer', 'src', 'db', 'rollback', 'purge.js');
 
 // Quotes, backticks and string-concatenation joins are not part of the statement.
@@ -74,6 +76,15 @@ describe('validator_rewards restore id invariant', function(){
         assert.deepStrictEqual(writers, [path.join('client', 'rollback.js')],
             'another statement inserts into validator_rewards; if it lets AUTO_INCREMENT assign the id, ' +
             'a later streamed reward can be dropped on the PRIMARY KEY, so carry the source id instead');
+    });
+
+    it('full snapshots rebase the validator_rewards allocator after commit', function(){
+        const code = fs.readFileSync(APPLIER, 'utf8');
+        assert.match(code, /POST_SNAPSHOT_AUTO_INCREMENT_TABLES\s*=\s*Object\.freeze\(\['validator_rewards'\]\)/);
+        const commit = code.indexOf('commitTransaction()');
+        const reset = code.indexOf('resetAutoIncrementToMax(table)');
+        assert.ok(commit >= 0 && reset > commit,
+            'allocator reset must remain after the full snapshot commit because ALTER TABLE implicitly commits');
     });
 
     it('the restore extractor fails on text that lacks the statement', function(){

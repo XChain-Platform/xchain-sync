@@ -40,6 +40,10 @@ const logger = getLogger();
 // to a full recompute anyway); fall back to the unscoped rebuild.
 const MAX_SCOPED_REBUILD_IDS = 1000;
 
+// Snapshot DELETE preserves this table's allocator, but rollback can mint local
+// ids that must stay at or below the source allocator carried by later rows.
+const POST_SNAPSHOT_AUTO_INCREMENT_TABLES = Object.freeze(['validator_rewards']);
+
 // Tables whose presence in a block/catch-up payload can change a token's
 // ownership-escrow gate (a GIVE_OWNERSHIP offer opening or its status moving to a
 // closed state). When any appears, re-derive tokens.escrow_action_index from the
@@ -100,7 +104,8 @@ function initializeIgnoreTables(applier) {
         // their carried id, so a carried id that lands on a locally minted one is dropped on
         // the PRIMARY KEY. The one place the replica mints an id is the RB-ANCHOR restore,
         // which is safe only because the source runs the identical restore over the same
-        // replicated log rows (replica counter stays at or below the source's). The table is
+        // replicated log rows. Full snapshots reset the replica allocator to MAX(id)+1,
+        // keeping its counter at or below the source's even after replacing older data. The table is
         // not in localSurrogateIdOnlyTables because round_reference is nullable and a UNIQUE
         // key does not dedupe NULLs, and not in idKeyedIgnoreTables because that check treats
         // PRIMARY duplicates as benign. validator_rewards_restore_id_invariant.test.js pins it.
@@ -494,6 +499,11 @@ class ClientApplier {
 
             if((await this.db.commitTransaction()) === false)
                 throw new Error('full snapshot: no open transaction at commit; nothing was committed');
+            // ALTER TABLE implicitly commits, so allocator repair must stay after the
+            // snapshot transaction. A failure aborts cursor advancement and makes the
+            // idempotent full-snapshot apply retry.
+            for(const table of POST_SNAPSHOT_AUTO_INCREMENT_TABLES)
+                await this.db.resetAutoIncrementToMax(table);
             logger.info('Full snapshot applied (' + this.util.getTimer(timer) + ')');
         } catch(e){
             await rollbackPreservingError(this.db, e, 'Full snapshot apply');

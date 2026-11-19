@@ -229,12 +229,23 @@ async function reverseCooldownMaturities(db, blockIndex, network, coin){
     try {
         let completedStatusId = await db.getStatusId('completed');
         let validStatusId = await db.getStatusId('valid');
-        if(completedStatusId === null || validStatusId === null) return;
+        if(completedStatusId === null || validStatusId === null) return [];
         let gasTick = gasTickSymbol();
         let deleteReleases = gateRegistry.activeAt(MATURITY_ESCROW_REVERSAL_KEY, network, coin, Number(blockIndex), null);
+        const tickIds = [];
         if(gasTick){
+            const rows = await db.doQuery(
+                "SELECT t.id AS tick_id FROM index_tickers t WHERE t.tick = ? AND EXISTS (" +
+                "SELECT 1 FROM unstakes u WHERE u.status_id = ? AND u.cooldown_end_block >= ? AND u.block_index < ?)",
+                [gasTick, completedStatusId, blockIndex, blockIndex], null, { rethrow: true });
+            tickIds.push(...(rows || []).map(row => row.tick_id));
             await deleteCapabilityMaturityLedgerRows(db, gasTick, completedStatusId, blockIndex, deleteReleases);
         }
+        const contractRows = await db.doQuery(
+            "SELECT DISTINCT tick_id FROM contract_unstakes " +
+            "WHERE status_id = ? AND cooldown_end_block >= ? AND block_index < ?",
+            [completedStatusId, blockIndex, blockIndex], null, { rethrow: true });
+        tickIds.push(...(contractRows || []).map(row => row.tick_id));
         await deleteContractMaturityLedgerRows(db, completedStatusId, blockIndex, deleteReleases);
         await db.doQuery(
             "UPDATE unstakes SET status_id = ? WHERE status_id = ? AND cooldown_end_block >= ? AND block_index < ?",
@@ -242,8 +253,10 @@ async function reverseCooldownMaturities(db, blockIndex, network, coin){
         await db.doQuery(
             "UPDATE contract_unstakes SET status_id = ? WHERE status_id = ? AND cooldown_end_block >= ? AND block_index < ?",
             [validStatusId, completedStatusId, blockIndex, blockIndex]);
+        return tokenRefold.unionTickIds(tickIds);
     } catch(e){
         if(!isSchemaGapError(e)) throw e;
+        return [];
     }
 }
 
@@ -820,9 +833,10 @@ class ClientRollback {
             // re-maturity sweep skips forever, diverging from the source (which now reverses it on
             // every rollback). Predicates key only on cooldown_end_block/block_index; the GAS tick
             // (capability refund) is the frozen consensus constant, never a hub poll. rebuildBalances
-            // below recomputes wholesale from the surviving credits, so no per-row seeding is needed.
+            // below recomputes wholesale, while the affected ticks feed the metadata refold set.
             // Runs BEFORE the dataTables delete.
-            await reverseCooldownMaturities(this.db, block_index, this.network, this.coin);
+            const cooldownRefoldTickIds = await reverseCooldownMaturities(
+                this.db, block_index, this.network, this.coin);
 
             // Restore the surviving archive head (v1, or a v3 fold row) stamped by an orphaned final chunk.
             // Journaled heads recover their prior status; legacy heads become unverified.
@@ -942,6 +956,7 @@ class ClientRollback {
                     if(!isSchemaGapError(e)) throw e;
                 }
             }
+            refoldTickIds = tokenRefold.unionTickIds(refoldTickIds, cooldownRefoldTickIds);
 
             if(firstActionIndex !== null){
                 for(let table of this.dataTables){
