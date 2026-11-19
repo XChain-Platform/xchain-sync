@@ -47,7 +47,7 @@ function sqlDir(){
 }
 const { assertValidIdentifier, requireStakeWeight } = require('./shared.js');
 const util = require('node:util');
-const { getLogger, getSqlTiming } = require('../observability');
+const { getLogger } = require('../observability');
 const envConfig = require('../config');
 const { bigIntTypeCast } = require('../util/wire_codec');
 const logger = getLogger();
@@ -189,7 +189,7 @@ class Database {
 
         Object.assign(this, connectionRetryConfig());
 
-        this.pool = getSqlTiming().wrapPool(mariadb.createPool(this.connectionPoolParams));
+        this.pool = mariadb.createPool(this.connectionPoolParams);
         this.transactionConnection = null;
 
         this.circuitState     = 'closed';
