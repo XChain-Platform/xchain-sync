@@ -87,96 +87,74 @@ async function waitForLine(lines) {
     return JSON.parse(lines[0].trim());
 }
 
-function createSuiteState() {
-    return {
-        originalEnv: Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]])),
-        nativeFetch: global.fetch,
-        shipped: [],
-        pool: { query: async () => [] },
-        server: null,
-        baseUrl: null
-    };
-}
-
-function installFetchStub(state) {
-    Object.assign(process.env, timingEnv());
-    global.fetch = (url, options) => {
-        if (url === TIMING_URL) {
-            state.shipped.push(options.body);
-            return Promise.resolve({ status: 200, body: { cancel: () => Promise.resolve() } });
-        }
-        return state.nativeFetch(url, options);
-    };
-}
-
-function buildTestApp(state) {
-    // Build the app before opening the Database, as startApi does: the shared timing
-    // instance may predate this env, and createApp is what reconfigures it.
-    const { createApp } = require('../../../src/api');
-    const dbRef = { db: null };
-    const app = createApp(provider(dbRef), appConfig());
-    const Database = proxyquire('../../../src/db', {
-        mariadb: Object.assign({}, mariadb, { createPool: () => state.pool })
-    });
-    const db = new Database('127.0.0.1', 3306, 'test', 'test', 'test', {}, 'indexer');
-    let queried = false;
-    db.getLastBlock = async () => {
-        if (!queried) {
-            queried = true;
-            await db.pool.query('SELECT 1');
-        }
-        return null;
-    };
-    db.listExistingTables = async () => new Set();
-    db.getSyncState = undefined;
-    dbRef.db = db;
-    return app;
-}
-
-async function startTestServer(state, app) {
-    state.server = http.createServer(app);
-    await new Promise((resolve) => state.server.listen(0, '127.0.0.1', resolve));
-    state.baseUrl = 'http://127.0.0.1:' + state.server.address().port;
-}
-
-async function restoreSuiteState(state) {
-    if (state.server) {
-        state.server.closeAllConnections();
-        await new Promise((resolve) => state.server.close(resolve));
-    }
-    global.fetch = state.nativeFetch;
-    for (const [key, value] of Object.entries(state.originalEnv)) {
-        if (value === undefined) delete process.env[key];
-        else process.env[key] = value;
-    }
-    // Re-read the restored env so later suites see the shared instance disabled.
-    await require('../../../src/observability').installSqlTiming(null, { service: 'xchain-sync' }).stop();
-}
-
-function registerSqlTimingWiringSuite() {
+describe('SQL timing wiring', function () {
     this.timeout(10000);
 
-    const state = createSuiteState();
+    const originalEnv = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
+    const nativeFetch = global.fetch;
+    const shipped = [];
+    const pool = { query: async () => [] };
+    let server;
+    let baseUrl;
 
     before(async function () {
-        installFetchStub(state);
-        await startTestServer(state, buildTestApp(state));
+        Object.assign(process.env, timingEnv());
+        global.fetch = (url, options) => {
+            if (url === TIMING_URL) {
+                shipped.push(options.body);
+                return Promise.resolve({ status: 200, body: { cancel: () => Promise.resolve() } });
+            }
+            return nativeFetch(url, options);
+        };
+
+        // Build the app before opening the Database, as startApi does: the shared timing
+        // instance may predate this env, and createApp is what reconfigures it.
+        const { createApp } = require('../../../src/api');
+        const dbRef = { db: null };
+        const app = createApp(provider(dbRef), appConfig());
+        const Database = proxyquire('../../../src/db', {
+            mariadb: Object.assign({}, mariadb, { createPool: () => pool })
+        });
+        const db = new Database('127.0.0.1', 3306, 'test', 'test', 'test', {}, 'indexer');
+        let queried = false;
+        db.getLastBlock = async () => {
+            if (!queried) {
+                queried = true;
+                await db.pool.query('SELECT 1');
+            }
+            return null;
+        };
+        db.listExistingTables = async () => new Set();
+        db.getSyncState = undefined;
+        dbRef.db = db;
+
+        server = http.createServer(app);
+        await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+        baseUrl = 'http://127.0.0.1:' + server.address().port;
     });
 
     after(async function () {
-        await restoreSuiteState(state);
+        if (server) {
+            server.closeAllConnections();
+            await new Promise((resolve) => server.close(resolve));
+        }
+        global.fetch = nativeFetch;
+        for (const [key, value] of Object.entries(originalEnv)) {
+            if (value === undefined) delete process.env[key];
+            else process.env[key] = value;
+        }
+        // Re-read the restored env so later suites see the shared instance disabled.
+        await require('../../../src/observability').installSqlTiming(null, { service: 'xchain-sync' }).stop();
     });
 
     it('emits the status route with its wrapped pool query count', async function () {
-        const response = await fetch(state.baseUrl + '/status');
+        const response = await fetch(baseUrl + '/status');
         assert.strictEqual(response.status, 200);
         await response.json();
 
-        const line = await waitForLine(state.shipped);
+        const line = await waitForLine(shipped);
         assert.strictEqual(line.route, 'GET /xchain-sync/status');
         assert.strictEqual(line.query_count, 1);
         assert.strictEqual(line.project, 'xchain-platform');
     });
-}
-
-describe('SQL timing wiring', registerSqlTimingWiringSuite);
+});
