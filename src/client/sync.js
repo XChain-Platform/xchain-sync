@@ -932,6 +932,7 @@ class ClientSync {
 
     async waitForStartupHalt(){
         while(this.running && this._halted){ await this.util.sleep(5000); }
+        if(!this.running || this._stopping) return 'stop';
         return this._halted ? 'stop' : 'restart';
     }
 
@@ -1037,6 +1038,7 @@ class ClientSync {
     }
 
     async start(){
+        if(this._stopping) return;
         this.running = true;
         getLogger().info('ClientSync starting for ' + this.chain + '/' + this.network + '/' + this.dbType);
         this.warnTrustPosture();
@@ -1793,7 +1795,12 @@ class ClientSync {
             }
             if(this.incrementalCatchUpBlocked(servedBase)) return 'blocked';
             this._bootstrapBase = servedBase;
-            await this.persistBootstrapBase(this._bootstrapBase);
+            try {
+                await this.persistBootstrapBase(this._bootstrapBase, { rethrow: true });
+            } catch(e){
+                await this.restoreBootstrapWindowPosture(previousPosture);
+                throw e;
+            }
             if(this.incrementalCatchUpBlocked(servedBase)){
                 await this.restoreBootstrapWindowPosture(previousPosture);
                 return 'blocked';
@@ -2891,41 +2898,109 @@ class ClientSync {
         }));
     }
 
-    // Re-read `tables` from the source's full snapshot and replace the replica's rows,
-    // only when the snapshot is at the replica's own height and holds exactly the row
-    // count the sweep saw at the source. Anything else skips or logs; the gap tracker
-    // keeps reporting until a sweep sees the counts match.
+    parseRepairTableResponse(response, source, table){
+        let jsonStr = response.data;
+        if(Buffer.isBuffer(jsonStr)){
+            try { jsonStr = zlib.gunzipSync(jsonStr); } catch(e){}
+        }
+        let payload;
+        try {
+            payload = JSON.parse(jsonStr.toString());
+        } catch(parseErr){
+            throw new Error('Repair table download truncated or corrupt from ' + source +
+                ' (' + table + ' failed JSON.parse): ' + parseErr.message);
+        }
+        if(payload.schema_version !== SCHEMA_VERSION.indexer)
+            throw new Error('Repair table schema mismatch for ' + table + ': server=' +
+                payload.schema_version + ' client=' + SCHEMA_VERSION.indexer);
+        if(payload.table !== table || !Array.isArray(payload.rows))
+            throw new Error('Malformed repair table payload for ' + table);
+        return { block_height: payload.block_height, rows: payload.rows };
+    }
+
+    async downloadRepairTable(source, table){
+        let url = source + '/snapshot-table/' + this.dbType + '/' + this.chain + '/' +
+            this.network + '/' + table;
+        let response = await axios.get(url, {
+            headers: this.upstreamHeaders(),
+            responseType: 'arraybuffer',
+            timeout: 300000,
+            decompress: true,
+            maxContentLength: this.config['SNAPSHOT_MAX_CONTENT']
+        });
+        return this.parseRepairTableResponse(response, source, table);
+    }
+
+    missingRepairTableRoute(error){
+        if(!error || !error.response || error.response.status !== 404) return false;
+        let data = error.response.data;
+        if(Buffer.isBuffer(data)) data = data.toString();
+        if(typeof data === 'string'){
+            try { data = JSON.parse(data); } catch(e){ return true; }
+        }
+        return !!data && data.error === 'Not found';
+    }
+
+    async downloadRepairTableCompatible(source, table){
+        try {
+            return await this.downloadRepairTable(source, table);
+        } catch(e){
+            if(!this.missingRepairTableRoute(e)) throw e;
+            this._legacyRepairTableSources = this._legacyRepairTableSources || new Set();
+            if(!this._legacyRepairTableSources.has(source)){
+                this._legacyRepairTableSources.add(source);
+                getLogger().warn('Stream-table repair source lacks /snapshot-table; using legacy full snapshot');
+            }
+            let { snapshotData } = await this.downloadIncrementalCatchUp(source, 0);
+            let rows = snapshotData.tables && snapshotData.tables[table];
+            return { block_height: snapshotData.block_height, rows };
+        }
+    }
+
+    repairFailureMessage(error){
+        let message = error && error.message ? error.message : String(error);
+        if(/maxContentLength|content length|larger than max/i.test(message))
+            return 'repair payload exceeds SNAPSHOT_MAX_CONTENT: ' + message;
+        return message;
+    }
+
+    // Re-read each table through its bounded repair route and replace the replica's
+    // rows only when the source height, replica branch, and observed count still match.
+    // Older sources use the legacy full snapshot path until they are upgraded.
     async repairShortStreams(source, tables, shortfalls){
         try {
             let expected = new Map((shortfalls || []).filter(m => m && tables.has(m.table))
                 .map(m => [m.table, Number(m.sourceCount)]));
-            let height = this.lastAppliedBlock;
-            let { snapshotData } = await this.downloadIncrementalCatchUp(source, 0);
-            if(Number(snapshotData.block_height) !== Number(height)){
-                getLogger().warn('Stream-table repair skipped: source moved from block ' +
-                    height + ' to ' + snapshotData.block_height + ' during the repair read.');
-                return;
-            }
             for(let table of tables){
-                let rows = snapshotData.tables && snapshotData.tables[table];
+                let height = this.lastAppliedBlock;
+                let reorgGeneration = this._reorgGeneration;
+                let repair = await this.downloadRepairTableCompatible(source, table);
+                if(Number(repair.block_height) !== Number(height)){
+                    getLogger().warn('Stream-table repair skipped: source moved from block ' +
+                        height + ' to ' + repair.block_height + ' during the repair read.');
+                    continue;
+                }
+                let rows = repair.rows;
                 if(!Array.isArray(rows)) throw new Error('repair snapshot omitted table ' + table);
                 if(Number.isFinite(expected.get(table)) && rows.length !== expected.get(table))
                     throw new Error('repair snapshot for ' + table + ' held ' + rows.length +
                         ' row(s), expected ' + expected.get(table));
-                await this.replaceReplicaStreamTable(table, rows, height);
+                await this.replaceReplicaStreamTable(table, rows, height, reorgGeneration);
                 getLogger().warn('Stream-table repair: replaced ' + table + ' from ' + source +
                     ' at block ' + height + ' (' + rows.length + ' row(s)).');
             }
         } catch(repairErr){
             getLogger().error(util.format('Stream-table repair pass failed against ' + source + ':',
-                repairErr.message || repairErr));
+                this.repairFailureMessage(repairErr)));
         }
     }
 
-    // Swap one table's rows in a single transaction under the apply lock, refusing if a
-    // block applied since the repair read (the snapshot would then be one block stale).
-    replaceReplicaStreamTable(table, rows, expectedHeight){
+    // Swap one table in a transaction under the apply lock. Height blocks ordinary
+    // advancement; generation blocks a rollback and re-apply to the same height.
+    replaceReplicaStreamTable(table, rows, expectedHeight, expectedGeneration){
         return this.withApplyLock(async () => {
+            if(this._reorgGeneration !== expectedGeneration)
+                throw new Error('replica reorged during repair read');
             if(Number(this.lastAppliedBlock) !== Number(expectedHeight))
                 throw new Error('replica advanced during repair read');
             await this.db.beginTransaction();
@@ -5448,8 +5523,32 @@ class ClientSync {
         return null;
     }
 
-    ignoreReorgWithoutTip(event){
-        if(this.lastAppliedBlock === null){
+    effectiveReorgTip(storedTip){
+        const cursor = Number(this.lastAppliedBlock);
+        const stored = Number(storedTip);
+        const hasCursor = this.lastAppliedBlock !== null && Number.isFinite(cursor);
+        const hasStored = storedTip !== null && Number.isFinite(stored);
+        if(!hasCursor) return hasStored ? stored : null;
+        return hasStored ? Math.max(cursor, stored) : cursor;
+    }
+
+    // The tip a reorg is judged against: the larger of the cursor and the stored tip,
+    // because a committed block whose verification threw leaves the cursor below the
+    // rows. A failed stored-tip read halts instead of letting the cursor alone decide,
+    // since a reorg dropped as above-tip would leave the orphaned rows in place.
+    // Returns { failed: true } after halting, else { tip }.
+    async readReorgTip(event){
+        try {
+            const storedTip = await this.db.getLastBlock(null, { rethrow: true });
+            return { failed: false, tip: this.effectiveReorgTip(storedTip) };
+        } catch(e){
+            await this.haltForReorgRollbackFailure(event, e);
+            return { failed: true, tip: null };
+        }
+    }
+
+    ignoreReorgWithoutTip(event, tip){
+        if(tip === null){
             getLogger().warn('Ignoring reorg for ' + this.chain + '/' + this.network +
                 ': no committed tip yet (replica empty); a reorg has nothing to roll back');
             return true;
@@ -5457,11 +5556,11 @@ class ClientSync {
         return false;
     }
 
-    ignoreReorgAboveTip(event){
-        if(this.lastAppliedBlock !== null && event.block_index > this.lastAppliedBlock){
+    ignoreReorgAboveTip(event, tip){
+        if(tip !== null && event.block_index > tip){
             getLogger().warn('Ignoring reorg for ' + this.chain + '/' + this.network +
                 ': target block ' + event.block_index + ' is above the replica tip (' +
-                this.lastAppliedBlock + '); a reorg to an unapplied block is a no-op');
+                tip + '); a reorg to an unapplied block is a no-op');
             return true;
         }
         return false;
@@ -5485,14 +5584,17 @@ class ClientSync {
                     ' before the apply lock was taken');
                 return false;
             }
+            const storedTip = this.db && typeof this.db.getLastBlock === 'function'
+                ? await this.db.getLastBlock(null, { rethrow: true }) : null;
+            const committedTip = ClientSync.prototype.effectiveReorgTip.call(this, storedTip);
             // The caller's above-tip check ran before this lock was taken, so a rollback that
             // queued ahead of this one may have lowered the tip below the target. Re-test
             // under the lock: a rollback to an unapplied height deletes nothing and would
             // otherwise move the cursor forward past blocks the replica does not hold.
-            if(this.lastAppliedBlock !== null && event.block_index > this.lastAppliedBlock){
+            if(committedTip !== null && event.block_index > committedTip){
                 getLogger().warn('Skipping reorg for ' + this.chain + '/' + this.network +
                     ': target block ' + event.block_index + ' is above the replica tip (' +
-                    this.lastAppliedBlock + ') once the apply lock was taken; a no-op');
+                    committedTip + ') once the apply lock was taken; a no-op');
                 return false;
             }
             // Lower the verified marker durably before any row goes: a marker left above
@@ -5504,7 +5606,7 @@ class ClientSync {
                 await this.beginRowRemoval(event.block_index - 1);
                 try {
                     if(this.rollbackGuard){
-                        this.rollbackGuard.record(this.lastAppliedBlock, event.block_index);
+                        this.rollbackGuard.record(committedTip, event.block_index);
                         await this.persistRollbackGuardState();
                     }
                     await this.rollback.rollback(event.block_index);
@@ -5552,10 +5654,13 @@ class ClientSync {
         getLogger().info('Reorg event received for ' + this.chain + '/' + this.network + ' at block ' + event.block_index);
         if(this.refuseReorgWhileHalted(event)) return;
 
-        if(this.ignoreReorgWithoutTip(event)) return;
-        if(this.ignoreReorgAboveTip(event)) return;
+        const tipRead = await this.readReorgTip(event);
+        if(tipRead.failed) return;
+        const committedTip = tipRead.tip;
+        if(this.ignoreReorgWithoutTip(event, committedTip)) return;
+        if(this.ignoreReorgAboveTip(event, committedTip)) return;
 
-        const depth = this.rollbackGuard.depthFor(this.lastAppliedBlock, event.block_index);
+        const depth = this.rollbackGuard.depthFor(committedTip, event.block_index);
         if(depth > this.maxRollbackDepth){
             const admission = this.retroactiveReorgAdmission(event, depth, retroactiveReports);
             if(!admission.admit){
@@ -5591,9 +5696,13 @@ class ClientSync {
         }
         if(sourceIndex === undefined || sourceIndex === null)
             return this.applyAgreedReorg({ event, rewind: !!rewind });
-        if(this.ignoreReorgWithoutTip(event) || this.ignoreReorgAboveTip(event)) return;
+        const tipRead = await this.readReorgTip(event);
+        if(tipRead.failed) return;
+        const committedTip = tipRead.tip;
+        if(this.ignoreReorgWithoutTip(event, committedTip) ||
+           this.ignoreReorgAboveTip(event, committedTip)) return;
 
-        const depth = this.rollbackGuard.depthFor(this.lastAppliedBlock, event.block_index);
+        const depth = this.rollbackGuard.depthFor(committedTip, event.block_index);
         const retroactiveQuorumRequired = depth > this.maxRollbackDepth && !!event.retroactive &&
             this.activeSourceCount() > 1;
         if(!this.sourceReorgQuorumActive() && !retroactiveQuorumRequired){

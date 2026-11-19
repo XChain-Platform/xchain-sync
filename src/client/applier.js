@@ -481,9 +481,10 @@ class ClientApplier {
                 this.logLargeTableInsert(table, rows);
             }
 
-            // Drops orphaned state_tree_roots at or above the snapshot height, keyed by ticker.
+            // The snapshot replaces every table these follower-derived roots describe.
+            // Keep only the root seeded below; older heights must read as not recomputed.
             try {
-                await this.db.deleteStateTreeRootsFromBlock(this.coinTicker, this.network, snapshotData.block_height);
+                await this.db.deleteStateTreeRootsForChain(this.coinTicker, this.network);
             } catch(e){
                 this.ignoreSchemaGap(e);
             }

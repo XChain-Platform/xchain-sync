@@ -71,4 +71,19 @@ module.exports = {
             [chain, network, blockHeight]);
     },
 
+    /**
+     * Delete every locally-derived root for one chain and network. A full
+     * snapshot replaces the tables these roots describe, so none of the old
+     * rows remain justified. `chain` is the TICKER every writer stores.
+     *
+     * @param {string} chain the coin ticker
+     * @param {string} network
+     * @returns {Promise<object>} the driver's result
+     */
+    async deleteStateTreeRootsForChain(chain, network){
+        return await this.doQuery(
+            'DELETE FROM state_tree_roots WHERE chain = ? AND network = ?',
+            [chain, network]);
+    },
+
 };

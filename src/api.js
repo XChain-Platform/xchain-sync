@@ -1118,6 +1118,34 @@ function createApp(syncService, cfg, app = express()){
         }
     });
 
+    // GET /snapshot-table/:dbType/:chain/:network/:table : one complete table
+    // for registry-approved replace repair. The builder validates the allowlist
+    // before interpolating the table name and streams one consistent read view.
+    app.get('/snapshot-table/:dbType/:chain/:network/:table', incrSnapshotLimiter, async (req, res) => {
+        if(cfg['SYNC_MODE'] !== 'server')
+            return res.status(403).json({ error: 'Snapshots only available in server mode', code: 'FORBIDDEN' });
+
+        let dbType = validateDbType(req.params.dbType);
+        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'", code: 'BAD_REQUEST' });
+        if(dbType !== 'indexer')
+            return res.status(400).json({ error: 'Replace repair is indexer-only', code: 'REPAIR_TABLE_NOT_ALLOWED' });
+
+        let { chain, network, table } = req.params;
+        let db = syncService.getDatabase(chain, network, dbType);
+        if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found', code: 'NOT_FOUND' });
+
+        let builder = syncService.getSnapshotBuilder();
+        if(!builder) return res.status(500).json({ error: 'Snapshot builder not initialized', code: 'INTERNAL_ERROR' });
+
+        try {
+            await builder.streamRepairTable(db, table, res);
+        } catch(e){
+            console.error('[API error] /snapshot-table/:dbType/:chain/:network/:table:', e);
+            if(!res.headersSent)
+                res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
+        }
+    });
+
     // GET /snapshot-dispensers/:dbType/:chain/:network?after_tx=&after_addr=
     // The WHOLE decoder `dispensers` table in one statement-consistent response
     // (has_more always false) for the client's replace-table reconcile. dispensers

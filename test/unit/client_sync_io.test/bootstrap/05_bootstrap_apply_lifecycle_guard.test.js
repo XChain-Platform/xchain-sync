@@ -158,6 +158,49 @@ describe('ClientSync bootstrap window lifecycle guard @regression', function(){
     });
 });
 
+describe('ClientSync bootstrap floor durability @regression', function(){
+    quietConsole();
+
+    async function assertForwardFloorFailure(failure){
+        const { sync, db, applier } = makeSync({ VERIFY_RECOMPUTE: true });
+        initializeVerifiedPosture(sync);
+        db.setSyncState = sinon.stub().callsFake(async (key, value) => {
+            if(key === 'bootstrap_base:indexer' && value === '100'){
+                if(failure === 'throw') throw new Error('floor write lost');
+                return false;
+            }
+            return true;
+        });
+
+        await assert.rejects(() => heldWindow(sync),
+            failure === 'throw' ? /floor write lost/ : /bootstrap base write failed/);
+        assert.strictEqual(applier.applyIncrementalSnapshot.called, false);
+        assert.strictEqual(db.setSyncState.calledWith('verified_tip:indexer', '100'), false);
+        assert.strictEqual(db.setSyncState.calledWith('bootstrap_base:indexer', '10'), true);
+        assert.strictEqual(sync._bootstrapBase, 10);
+        assert.strictEqual(sync._verifiedTip, 40);
+    }
+
+    it('undoes posture when the forward floor write reports failure', async function(){
+        await assertForwardFloorFailure('false');
+    });
+
+    it('undoes posture when the forward floor write throws', async function(){
+        await assertForwardFloorFailure('throw');
+    });
+
+    it('deletes an uncertain first floor write before failing the round', async function(){
+        const { sync, db, applier } = makeSync({ VERIFY_RECOMPUTE: true });
+        sync._bootstrapBase = null;
+        db.setSyncState = sinon.stub().rejects(new Error('floor write lost'));
+
+        await assert.rejects(() => heldWindow(sync), /floor write lost/);
+        assert.strictEqual(applier.applyIncrementalSnapshot.called, false);
+        assert.strictEqual(db.deleteSyncState.calledWith('bootstrap_base:indexer'), true);
+        assert.strictEqual(sync._bootstrapBase, null);
+    });
+});
+
 describe('ClientSync bootstrap window lifecycle guard @regression', function(){
     quietConsole();
 

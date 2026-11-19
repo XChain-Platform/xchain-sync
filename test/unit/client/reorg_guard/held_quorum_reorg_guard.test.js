@@ -72,7 +72,7 @@ describe('ClientSync held quorum timer across a reorg @regression', function(){
 
         await sync.handleBlock(blockEvent(101), 0);
         const reorg = sync.handleReorg({ type: 'reorg', block_index: 98 });
-        for(let i = 0; i < 5 && !rollback.called; i++) await Promise.resolve();
+        for(let i = 0; i < 10 && !rollback.called; i++) await Promise.resolve();
         assert.strictEqual(rollback.calledOnce, true, 'rollback holds the apply lock');
 
         clock.tick(5100);

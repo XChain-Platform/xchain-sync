@@ -154,6 +154,34 @@ describe('ClientSync startup lifecycle integrity @regression', function(){
 
     haltCopyHoldCases();
 
+    it('returns stop when shutdown lands while a cleared startup halt is sleeping', async function(){
+        const sync = Object.create(ClientSync.prototype);
+        sync.running = true;
+        sync['_stopping'] = false;
+        sync['_halted'] = { reason: 'test-halt' };
+        sync.util = { sleep: sinon.stub().callsFake(async () => {
+            sync['_halted'] = null;
+            sync.running = false;
+            sync['_stopping'] = true;
+        }) };
+
+        assert.strictEqual(await sync.waitForStartupHalt(), 'stop');
+        assert.strictEqual(sync.util.sleep.calledOnce, true);
+    });
+
+    it('does not enter startup after stop has made the client terminal', async function(){
+        const sync = Object.create(ClientSync.prototype);
+        sync.running = false;
+        sync['_stopping'] = true;
+        sync.warnTrustPosture = sinon.stub();
+        sync.resolveStartupHalt = sinon.stub().resolves('stop');
+
+        await sync.start();
+
+        assert.strictEqual(sync.resolveStartupHalt.called, false);
+        assert.strictEqual(sync.running, false);
+    });
+
     it('restarts startup guards after an operator clears the copy-read hold', async function(){
         const sync = Object.create(ClientSync.prototype);
         Object.assign(sync, { chain: 'bitcoin', network: 'mainnet', dbType: 'indexer' });
