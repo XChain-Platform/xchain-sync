@@ -499,17 +499,19 @@ class ClientApplier {
 
             if((await this.db.commitTransaction()) === false)
                 throw new Error('full snapshot: no open transaction at commit; nothing was committed');
-            // ALTER TABLE implicitly commits, so allocator repair must stay after the
-            // snapshot transaction. A failure aborts cursor advancement and makes the
-            // idempotent full-snapshot apply retry.
-            for(const table of POST_SNAPSHOT_AUTO_INCREMENT_TABLES)
-                await this.db.resetAutoIncrementToMax(table);
+            await this.resetPostSnapshotAutoIncrement();
             logger.info('Full snapshot applied (' + this.util.getTimer(timer) + ')');
         } catch(e){
             await rollbackPreservingError(this.db, e, 'Full snapshot apply');
             logger.error(util.format('Error applying full snapshot:', e));
             throw e;
         }
+    }
+
+    // Repair allocators after commit because ALTER TABLE commits implicitly.
+    async resetPostSnapshotAutoIncrement(){
+        for(const table of POST_SNAPSHOT_AUTO_INCREMENT_TABLES)
+            await this.db.resetAutoIncrementToMax(table);
     }
 
     /**

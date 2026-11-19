@@ -40,14 +40,8 @@ module.exports = {
         return await this.doQuery('DELETE FROM `' + table + '`');
     },
 
-    /**
-     * Re-establish an AUTO_INCREMENT allocator from the rows a full snapshot kept.
-     * ALTER TABLE cannot bind its numeric value, so validate the aggregate before
-     * interpolation. Missing legacy tables or id columns are benign schema gaps.
-     *
-     * @param {string} table
-     * @returns {Promise<boolean>} true when the allocator was reset
-     */
+    // Re-establish an AUTO_INCREMENT allocator from the rows a snapshot kept.
+    // Treat missing legacy tables or id columns as benign schema gaps.
     async resetAutoIncrementToMax(table){
         assertValidIdentifier(table);
         try {
@@ -59,8 +53,9 @@ module.exports = {
             const text = String(raw);
             if(!/^[0-9]+$/.test(text) || BigInt(text) < 1n)
                 throw new Error('Unsafe AUTO_INCREMENT value for ' + table + ': ' + text);
-            await this.doQuery('ALTER TABLE `' + table + '` AUTO_INCREMENT = ' + BigInt(text).toString(),
-                [], null, { rethrow: true });
+            await this.runSqlMigrationStatement(
+                '2026-10-19-replica-columns.sql', 'reset-auto-increment',
+                { table, next_id: BigInt(text).toString() }, { rethrow: true });
             return true;
         } catch(e){
             if(e && (e.errno === 1146 || e.errno === 1054)) return false;

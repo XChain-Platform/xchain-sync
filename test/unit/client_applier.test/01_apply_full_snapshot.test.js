@@ -96,6 +96,9 @@ function registerFullSnapshotCases1(){
         assert.deepStrictEqual(deletes, ['DELETE FROM `transactions`', 'DELETE FROM `blocks`']);
         assert.strictEqual(db.commitTransaction.calledOnce, true);
     });
+}
+
+function registerFullSnapshotAllocatorCases(){
     it('resets validator_rewards AUTO_INCREMENT only after the snapshot commits', async function(){
         db.doQuery.withArgs(sinon.match(/^SELECT COALESCE\(MAX\(id\)/)).resolves([{ next_id: '3' }]);
         await applier.applyFullSnapshot({
@@ -320,6 +323,7 @@ describe('ClientApplier', function(){
 
     describe('applyFullSnapshot', function(){
         registerFullSnapshotCases1();
+        registerFullSnapshotAllocatorCases();
         registerFullSnapshotRepairCase();
         registerFullSnapshotCases2();
         registerFullSnapshotCases3();
