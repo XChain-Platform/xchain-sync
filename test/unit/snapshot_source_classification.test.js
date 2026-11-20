@@ -173,6 +173,7 @@ describe('source-unstreamed table set', function(){
                 dbType: 'indexer',
                 beginTransaction: sinon.stub().resolves(),
                 commitTransaction: sinon.stub().resolves(),
+                resetAutoIncrementToMax: sinon.stub().resolves(),
                 rollbackTransaction: sinon.stub().resolves(),
                 deleteStateTreeRootsForChain: sinon.stub().resolves(),
                 deleteAllRows: sinon.stub().resolves(),

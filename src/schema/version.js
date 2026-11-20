@@ -334,6 +334,15 @@
  *       ensureReplicatedColumns widens total_bytes on existing replicas. Decoder is
  *       unaffected and stays at 5.
  *
+ * Index-only frontier record (no version bump): the
+ *       2026-11-19-vote-watermark-action-index-idx migration adds non-unique
+ *       (poll_index, action_index) and (tick_id, action_index) secondary indexes to
+ *       `votes` and `vote_delegations`. It changes neither replicated columns nor
+ *       payload shape, so an older follower can still store every streamed row.
+ *       The same frontier date carries 2026-11-19-pending-hub-pushes-widen-payload,
+ *       which widens the hub-push queue `pending_hub_pushes` that never rides the wire.
+ *       Indexer stays at 24 and decoder stays at 5.
+ *
  * MIGRATION_FRONTIER is the machine-readable half of that accounting: `through`
  * is the newest migration DATE whose replicated DDL is folded into the version
  * above. `before` names the earlier files with replicated DDL so a newly added
@@ -359,7 +368,7 @@ const SCHEMA_VERSION = { indexer: 24, decoder: 5 };
 
 const MIGRATION_FRONTIER = {
     indexer: {
-        through: '2026-11-17',
+        through: '2026-11-19',
         before: [
             '2026-05-30-balances-composite-index.sql',
             '2026-06-03-unique-full-column-index-addresses.sql',
@@ -434,15 +443,20 @@ const MIGRATION_FRONTIER = {
             '2026-11-01-index-memos-binary-collation.sql',
             '2026-11-15-file-multipart-tables.sql',
             '2026-11-16-mappings-actions-address-history-idx.sql',
-            '2026-11-16-price-snapshots-pair-status-ts-index.sql'
-        ],
-        accounted: [
+            '2026-11-16-price-snapshots-pair-status-ts-index.sql',
             '2026-11-17-file-multipart-uncapped.sql'
         ],
+        accounted: [
+            '2026-11-19-pending-hub-pushes-widen-payload.sql',
+            '2026-11-19-vote-watermark-action-index-idx.sql'
+        ],
         hashes: {
-            '2026-11-17-file-multipart-uncapped.sql':
-                'f4e671e3893001de14c5b27700872816a340837675a1ca16edc16e6a8b9a09ba'
-        }
+            '2026-11-19-pending-hub-pushes-widen-payload.sql': 'a3fbee1967cf769450c5fffff4188f18fac7287583a96efb505ad4564203b75f',
+            '2026-11-19-vote-watermark-action-index-idx.sql': 'cf86d73e231ffa9b2e4a58f20d70f5f2e820c8f4d0b4bf0d878dfd623f7b626f'
+        },
+        indexOnly: [
+            '2026-11-19-vote-watermark-action-index-idx.sql'
+        ]
     },
     decoder: {
         through: '2026-08-22',
