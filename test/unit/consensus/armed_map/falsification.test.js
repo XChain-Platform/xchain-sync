@@ -29,7 +29,7 @@ const { createRequire } = require('module');
 
 const ROOT = path.join(__dirname, '../../../..');
 const COMPLETENESS = 'test/unit/consensus/armed_map/completeness.test.js';
-const runnerRequire = createRequire(require.main.filename);
+const runnerRequire = createRequire(__filename);
 const NODE_MODULES = path.dirname(path.dirname(runnerRequire.resolve('mocha/package.json')));
 const VENUE_ENV = { XC_ROLLCALL_REGTEST_ACTIVATION: 'armed', XC_ROLLCALL_GATES_REGTEST_ACTIVATION: 'armed' };
 const SHARED_ROW_FILES = ['shared_rows.js', 'shared_rows_1.js', 'shared_rows_2.js',

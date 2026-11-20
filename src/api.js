@@ -72,7 +72,7 @@ function hubConsensusHashFields(syncService){
     };
 }
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
 // Before anything else logs. checkStartupEnv's console.error calls are exactly
 // the lines an operator needs levelled and timestamped, and installObservability
