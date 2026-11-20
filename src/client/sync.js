@@ -1028,6 +1028,8 @@ class ClientSync {
         let source = typeof this.primarySource === 'function' ? this.primarySource() : this.sources[0];
         await this.fetchAndApplySchema(source);
         if(this._stopping) return 'stopped';
+        if(await this.healTailLookupsBeforeWalk(source, this.lastAppliedBlock) !== 'ok') return;
+        if(this._stopping) return 'stopped';
         // Every committed block above the last verified one recomputes before any catch-up:
         // the process may have stopped between a commit and its verification. A halt or a
         // hold leaves the replica at its stored tip; live-follow then refuses to advance.
@@ -1038,9 +1040,10 @@ class ClientSync {
     }
 
     ensureLiveFollowTip(){
-        if(this.lastAppliedBlock === null){
+        if(!Number.isSafeInteger(this.lastAppliedBlock) || this.lastAppliedBlock < 0){
             throw new Error('Refusing to enter live-follow: replica still empty after bootstrap for ' +
-                this.chain + '/' + this.network + '/' + this.dbType);
+                this.chain + '/' + this.network + '/' + this.dbType +
+                ' (invalid tip ' + String(this.lastAppliedBlock) + ')');
         }
     }
 
@@ -1423,6 +1426,10 @@ class ClientSync {
                !!(e.message && e.message.includes('maxContentLength'));
     }
 
+    isLookupPageOverflow(e){
+        return !!(e && e.lookupPageOverflow);
+    }
+
     // Seconds the source says to wait after a 429, or null when the error is not
     // a rate-limit. Reads Retry-After first, then express-rate-limit's
     // RateLimit-Reset; returns 0 when neither header is present so the caller can
@@ -1500,6 +1507,34 @@ class ClientSync {
         getLogger().error('window on top would leave unfetched blocks marked verified, so the replica is HALTING.');
         getLogger().error('Operator must wipe this replica database and restart it to seed an empty window with');
         getLogger().error('SYNC_BOOTSTRAP_DEPTH, or raise SNAPSHOT_MAX_CONTENT, then clear the halt.');
+        getLogger().error('================================================================');
+        stopDivergenceApply(this);
+    }
+
+    async haltOnLookupPageTooLarge(source, cause){
+        if(this._halted) return;
+        const overflow = (cause && cause.lookupPageOverflow) || {};
+        const blockIndex = Number.isInteger(this.lastAppliedBlock) ? this.lastAppliedBlock : 0;
+        this._halted = {
+            blockIndex, reason: 'lookup-page-too-large',
+            mismatches: [{
+                limit_bytes: this.config['SNAPSHOT_MAX_CONTENT'] || null,
+                table: overflow.table || null,
+                after_id: Number.isInteger(overflow.afterId) ? overflow.afterId : null,
+                page_size: Number.isInteger(overflow.pageSize) ? overflow.pageSize : null,
+                message: (cause && cause.message) || null
+            }],
+            sources: [source], at: new Date().toISOString()
+        };
+        await this.persistHalt(this._halted);
+        getLogger().error('================================================================');
+        getLogger().error('LOOKUP PAGE TOO LARGE HALT: ' + this.chain + '/' + this.network + '/' + this.dbType);
+        getLogger().error('the ' + (overflow.table || 'lookup') + ' page after id ' +
+            (Number.isInteger(overflow.afterId) ? overflow.afterId : 'unknown') + ' with LOOKUP_PAGE_SIZE=' +
+            (overflow.pageSize || this.lookupPageSize()) + ' exceeds SNAPSHOT_MAX_CONTENT (' +
+            (this.config['SNAPSHOT_MAX_CONTENT'] || 'unset') + ' bytes).');
+        getLogger().error('Lower LOOKUP_PAGE_SIZE or raise SNAPSHOT_MAX_CONTENT, then clear the halt.');
+        getLogger().error('The replica database does not need wiping or reseeding.');
         getLogger().error('================================================================');
         stopDivergenceApply(this);
     }
@@ -1622,6 +1657,11 @@ class ClientSync {
     }
 
     async bootstrapApplySnapshot(snapshotData){
+        const height = snapshotData && snapshotData.block_height;
+        if(!Number.isSafeInteger(height) || height < 0){
+            throw new Error('Full snapshot has invalid block_height (' + String(height) + ') for ' +
+                this.chain + '/' + this.network + '/' + this.dbType + '; refusing to apply');
+        }
         if(await this.checkTrainActivation(snapshotData.block_height)) return false;
         const result = await this.withApplyLock(async () => {
             if(this.incrementalCatchUpBlocked(snapshotData.block_height)) return 'blocked';
@@ -1752,20 +1792,33 @@ class ClientSync {
         // config.js always populates these three keys with clamped defaults
         // (5 / 2000 / 60000 via parseIntMin0/parseIntMin1), so no consumer-side
         // fallback is needed; trusting them keeps the default in one place.
-        let maxRetries = this.config['BOOTSTRAP_MAX_RETRIES'];
-        let baseMs = this.config['BOOTSTRAP_RETRY_BASE_MS'];
-        let maxMs  = this.config['BOOTSTRAP_RETRY_MAX_MS'];
-
+        const maxRetries = this.config['BOOTSTRAP_MAX_RETRIES'];
+        const baseMs = this.config['BOOTSTRAP_RETRY_BASE_MS'];
+        const maxMs  = this.config['BOOTSTRAP_RETRY_MAX_MS'];
+        const retryState = { committedSource: null };
         for(let round = 0; ; round++){
             if(this._stopping) return 'stopped';
             let result;
             try {
-                result = await this.bootstrapFromHeight(depth);
+                if(retryState.committedSource){
+                    result = await this.finishBootstrapFromHeight(retryState.committedSource);
+                } else {
+                    if(round > 0){
+                        const storedTip = await this.db.getLastBlock(null, { rethrow: true });
+                        if(storedTip !== null){
+                            throw new BootstrapExhaustedError('Bootstrap-from-height refused to re-seed non-empty ' +
+                                this.chain + '/' + this.network + '/' + this.dbType + ' replica at block ' + storedTip);
+                        }
+                    }
+                    result = await this.bootstrapFromHeight(depth, retryState);
+                }
                 if(result === true) return; // success: tip committed
             } catch(e){
                 if(this._stopping) return 'stopped';
                 if(e instanceof BootstrapExhaustedError) throw e;
-                if(this.isContentLengthOverflow(e))
+                if(this.isLookupPageOverflow(e))
+                    await this.haltOnLookupPageTooLarge(this.primarySource(), e);
+                else if(this.isContentLengthOverflow(e))
                     await this.haltOnSnapshotTooLarge(this.primarySource(), e, depth);
                 getLogger().error(util.format('Bootstrap-from-height round ' + (round + 1) + ' failed for ' +
                     this.chain + '/' + this.network + ':', e));
@@ -1783,7 +1836,7 @@ class ClientSync {
                 throw new BootstrapExhaustedError('Bootstrap-from-height failed: exhausted after ' + (round + 1) +
                     ' round(s) for ' + this.chain + '/' + this.network + '/' + this.dbType);
             }
-            let delay = Math.min(maxMs, baseMs * Math.pow(2, round));
+            const delay = Math.min(maxMs, baseMs * Math.pow(2, round));
             getLogger().warn('Bootstrap-from-height round ' + (round + 1) + ' failed for ' +
                 this.chain + '/' + this.network + '; retrying in ' + delay + 'ms');
             await this.sleepUntilStop(delay);
@@ -1945,7 +1998,7 @@ class ClientSync {
 
     // The indexer join block has no predecessor, so recompute skips only that block.
     // Later blocks fold their committed predecessors and retain chained verification.
-    async bootstrapFromHeight(depth){
+    async bootstrapFromHeight(depth, retryState){
         if(this._stopping) return 'stopped';
         const source = this.primarySource();
         if(!source) throw new Error('Bootstrap-from-height: no sync source');
@@ -1962,7 +2015,12 @@ class ClientSync {
         if(this._stopping) return 'stopped';
         const applyResult = await this.applyBootstrapWindow(snapshotData, base, tip);
         if(applyResult !== true) return applyResult;
+        if(retryState) retryState.committedSource = source;
 
+        return this.finishBootstrapFromHeight(source);
+    }
+
+    async finishBootstrapFromHeight(source){
         // Re-page lookups so rows added during the window request exist locally.
         await this.syncLookupTablesPaged(source);
         await this.refreshTipHashes();
@@ -2072,7 +2130,13 @@ class ClientSync {
             }
             let pages = 0;
             while(true){
-                let response = await this.fetchLookupPage(source, table, afterId, pageSize, maxBlock);
+                let response;
+                try {
+                    response = await this.fetchLookupPage(source, table, afterId, pageSize, maxBlock);
+                } catch(e){
+                    if(this.isContentLengthOverflow(e)) e.lookupPageOverflow = { table, afterId, pageSize };
+                    throw e;
+                }
                 let page = this.parseLookupPage(response, source, table, expected);
                 let rows = page.rows || [];
                 if(rows.length){
@@ -2087,6 +2151,23 @@ class ClientSync {
             if(pages > 1) getLogger().info('Lookup-sync ' + table + ': ' + pages + ' page(s) up to id ' + afterId);
         }
         return true;
+    }
+
+    async healTailLookupsBeforeWalk(source, committedTip){
+        if(!this.tracksVerifiedTip() || this._truncatedDepth < 1 ||
+           !Number.isInteger(committedTip) || committedTip < 0 || !source) return 'ok';
+        try {
+            if(this._verifiedTip === undefined) await this.loadVerifiedTip();
+            if(Number.isInteger(this._verifiedTip) && this._verifiedTip >= committedTip) return 'ok';
+            const guard = { reorgGeneration: this._reorgGeneration };
+            const paged = await this.syncLookupTablesPaged(source, { tip: committedTip }, guard);
+            return paged === false ? 'moved' : 'ok';
+        } catch(e){
+            if(this.isLookupPageOverflow(e)) await this.haltOnLookupPageTooLarge(source, e);
+            else getLogger().warn(util.format('Lookup heal before verified-tail walk failed for ' +
+                this.chain + '/' + this.network + '/' + this.dbType + '; holding the replica:', e));
+            return 'held';
+        }
     }
 
     // Serialize all replica-mutating operations (live block apply, incremental
@@ -2387,41 +2468,46 @@ class ClientSync {
             reconciled ? null : new Set(['dispensers']));
     }
 
+    async handleCatchUpContentLengthOverflow(source, sinceBlock, error, dbTip){
+        if(this._truncatedDepth >= 1){
+            if(this.incrementalCatchUpBlocked(sinceBlock)) return;
+            let freshTip;
+            try {
+                freshTip = await this.db.getLastBlock(null, { rethrow: true });
+            } catch(tipError){
+                getLogger().error(util.format('Catch-up size fallback could not re-read the committed tip; halting:',
+                    tipError));
+                await this.haltOnCatchUpTooLarge(source, sinceBlock,
+                    Number.isInteger(dbTip) ? dbTip : 0, error);
+                return;
+            }
+            if(freshTip !== null){
+                await this.haltOnCatchUpTooLarge(source, sinceBlock, freshTip, error);
+                return;
+            }
+            getLogger().warn('Incremental catch-up payload too large at sinceBlock ' + sinceBlock +
+                '; falling back to bounded height bootstrap (SYNC_BOOTSTRAP_DEPTH=' +
+                this._truncatedDepth + ', truncated replica).');
+            await this.bootstrapFromHeightRetry(this._truncatedDepth);
+            return;
+        }
+        if(this.incrementalCatchUpBlocked(sinceBlock)) return;
+        getLogger().warn('Incremental catch-up payload too large at sinceBlock ' + sinceBlock +
+            '; falling back to full bootstrap.');
+        await this.bootstrapFromSnapshot();
+    }
+
     async handleIncrementalCatchUpFailure(source, sinceBlock, error, dbTip){
         // Separate response-cap failures from ordinary transport and apply failures.
         // A deeply lagged replica cannot reduce an already oversized catch-up window
         // by retrying the identical request.
-        let isSizeError = this.isContentLengthOverflow(error);
-        if(isSizeError){
-            // Use the bounded bootstrap for replicas whose full snapshot exceeds the cap.
-            // Their configured depth exists because buffering and applying complete
-            // chain history cannot fit beneath the snapshot limit.
-
-            // Avoid routing bounded replicas through the full bootstrap. That path can
-            // hit the same cap, exhaust retries, and enter a permanent process restart
-            // loop without making synchronization progress.
-            if(this._truncatedDepth >= 1){
-                if(dbTip !== null){
-                    await this.haltOnCatchUpTooLarge(source, sinceBlock, dbTip, error);
-                    return;
-                }
-                if(this.incrementalCatchUpBlocked(sinceBlock)) return;
-                getLogger().warn('Incremental catch-up payload too large at sinceBlock ' + sinceBlock +
-                    '; falling back to bounded height bootstrap (SYNC_BOOTSTRAP_DEPTH=' +
-                    this._truncatedDepth + ', truncated replica).');
-                await this.bootstrapFromHeightRetry(this._truncatedDepth);
-                return;
-            }
-
-            // Use the full bootstrap when a full-history catch-up window exceeds the cap.
-            // A full snapshot can still fit when the incremental response covering a
-            // very wide range is the object that crosses the limit.
+        if(this.isLookupPageOverflow(error)){
             if(this.incrementalCatchUpBlocked(sinceBlock)) return;
-            getLogger().warn('Incremental catch-up payload too large at sinceBlock ' + sinceBlock +
-                '; falling back to full bootstrap.');
-            await this.bootstrapFromSnapshot();
+            await this.haltOnLookupPageTooLarge(source, error);
             return;
         }
+        if(this.isContentLengthOverflow(error))
+            return this.handleCatchUpContentLengthOverflow(source, sinceBlock, error, dbTip);
 
         // A 404 means the queried source holds no rows at or past this height: the replica
         // is current or that source is behind. It logs one warn line instead of an error
@@ -2521,6 +2607,14 @@ class ClientSync {
         if(dbTip === null){
             this.startVerifiedTipBelow(sinceBlock);
             return true;
+        }
+        const healed = await this.healTailLookupsBeforeWalk(this.primarySource(), dbTip);
+        if(healed !== 'ok'){
+            if(healed === 'moved'){
+                this._catchUpPending = true;
+                this._catchUpTipMoved = true;
+            }
+            return false;
         }
         if(await this.verifyUnverifiedTail() !== 'ok') return false;
         if(await this.syncCursorToCommittedTip(dbTip, cursorGuard) !== 'moved') return true;
@@ -3074,6 +3168,9 @@ class ClientSync {
                 getLogger().warn('Stream-table repair source lacks /snapshot-table; using legacy full snapshot');
             }
             let { snapshotData } = await this.downloadIncrementalCatchUp(source, 0);
+            if(snapshotData.schema_version !== SCHEMA_VERSION.indexer)
+                throw new Error('Repair table schema mismatch for ' + table + ': server=' +
+                    snapshotData.schema_version + ' client=' + SCHEMA_VERSION.indexer);
             let rows = snapshotData.tables && snapshotData.tables[table];
             return { block_height: snapshotData.block_height, rows };
         }
@@ -5373,12 +5470,14 @@ class ClientSync {
     // Mismatches when a served checkpoint names another chain or network than this replica.
     // One federation set signs every chain, so a genuine checkpoint for another chain passes
     // the quorum; only this binding keeps its roots from being compared by height here.
+    // Network matching is exact because both the activation registry and signed canonical form
+    // use the exact network string; a case-only variant is not the checkpoint that was signed.
     // An absent field is left to the quorum check, since the canonical signs both fields.
     checkpointBindingMismatches(c){
         let mism = [];
         if(c.chain != null && String(coinTicker(String(c.chain))).toUpperCase() !== String(this.coinTicker).toUpperCase())
             mism.push({ field: 'checkpoint_chain', a: c.chain, b: this.coinTicker });
-        if(c.network != null && String(c.network).toLowerCase() !== String(this.network).toLowerCase())
+        if(c.network != null && String(c.network) !== String(this.network))
             mism.push({ field: 'checkpoint_network', a: c.network, b: this.network });
         return mism.length ? mism : null;
     }
@@ -5404,7 +5503,13 @@ class ClientSync {
         }
         // Pre-commitment: nothing to anchor, since below the flag day a served root is unsigned
         if(cp.state_root == null || !checkpointVerifier.commitmentActive(cp)) return true;
-        if(typeof cp.block_index !== 'number') return true;      // malformed: no height to anchor
+        if(typeof cp.block_index !== 'number'){
+            getLogger().warn('Checkpoint-quorum anchor: served checkpoint for ' + this.chain + '/' +
+                this.network + ' has a non-number block_index (' + JSON.stringify(cp.block_index) +
+                ', seq ' + cp.checkpoint_seq + '); source may be withholding anchorable checkpoints, ' +
+                'not anchoring this cycle');
+            return true;
+        }
         if(checkpointVerifier.tryCanonicalCheckpoint(cp) === null){
             getLogger().warn('Checkpoint-quorum anchor: served checkpoint for ' + this.chain + '/' +
                 this.network + ' at block ' + cp.block_index + ' (seq ' + cp.checkpoint_seq +

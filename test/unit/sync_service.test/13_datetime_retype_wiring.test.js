@@ -88,6 +88,7 @@ describe("SyncService", function(){
 
             await service.discoverChains();
 
+            assert.deepStrictEqual(vst.firstCall.args[0], { includeIndexerOwned: false });
             assert.strictEqual(dtr.calledOnce, true);
             assert.deepStrictEqual(dtr.firstCall.args[0], { includeFollowerDerived: false });
             assert.strictEqual(dtr.calledAfter(vst), true);
@@ -112,6 +113,7 @@ describe("SyncService", function(){
 
             await service.discoverChains();
 
+            assert.strictEqual(vst.firstCall.args[0], undefined);
             assert.strictEqual(dtr.calledOnce, true);
             assert.deepStrictEqual(dtr.firstCall.args[0], { includeFollowerDerived: true });
             assert.strictEqual(dtr.calledAfter(vst), true);

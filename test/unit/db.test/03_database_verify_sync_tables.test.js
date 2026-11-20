@@ -26,6 +26,24 @@ describe('Database.verifySyncTables()', function () {
         assert.strictEqual(conn.query.callCount, 3, 'all three sync-owned tables probed');
     });
 
+    it('source indexer mode skips tables owned by the indexer', async function () {
+        sinon.stub(fs, 'readdirSync').returns([
+            'escrow_leaf_journal.sql', 'merkle_epochs.sql', 'state_tree_nodes.sql',
+            'state_tree_roots.sql', 'sync_halt.sql', 'sync_meta.sql'
+        ]);
+        let conn = fakeConn([]);
+        sinon.stub(db, 'getConnection').resolves(conn);
+        let create = sinon.stub(db, 'createTableFromFile').resolves();
+
+        let result = await db.verifySyncTables({ includeIndexerOwned: false });
+
+        assert.strictEqual(result, true);
+        assert.deepStrictEqual(conn.query.getCalls().map(call => call.args[1][1]),
+            ['merkle_epochs', 'sync_halt', 'sync_meta']);
+        assert.deepStrictEqual(create.getCalls().map(call => call.args[0]),
+            ['merkle_epochs.sql', 'sync_halt.sql', 'sync_meta.sql']);
+    });
+
     it('throws (via util.throwError) when query fails', async function () {
         sinon.stub(fs, 'readdirSync').returns(['sync_meta.sql']);
         let conn = {

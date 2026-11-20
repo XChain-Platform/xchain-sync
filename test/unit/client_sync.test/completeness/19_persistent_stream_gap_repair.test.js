@@ -49,7 +49,8 @@ function registerFakeReplica(){
         config.COMPLETENESS_CHECK_INTERVAL = 60000;
         sync.lastAppliedBlock = 100;
         local = { mappings_actions: SOURCE_ROWS.slice(0, 1186), mappings_files: [1, 2, 3, 4] };
-        snapshot = { block_height: 100, tables: { mappings_actions: SOURCE_ROWS.slice() } };
+        snapshot = { schema_version: SCHEMA_VERSION.indexer, block_height: 100,
+            tables: { mappings_actions: SOURCE_ROWS.slice() } };
         db.getTableCount = sinon.stub().callsFake(async (table) => (local[table] || []).length);
         db.setSyncState = sinon.stub().resolves();
         db.getSyncState = sinon.stub().resolves(null);
@@ -179,6 +180,34 @@ function registerRepairRouteTests(){
         assert.strictEqual(sync.downloadIncrementalCatchUp.called, false);
         assert.strictEqual(db.deleteAllRows.called, false);
         assert.match(lines(console.error), /Stream-table repair pass failed .*chain not found/);
+    });
+
+    it('refuses a legacy snapshot with a mismatched schema before replacing rows @regression', async function(){
+        const missing = new Error('not found');
+        missing.response = { status: 404, data: { error: 'Not found', code: 'NOT_FOUND' } };
+        sync.downloadRepairTable.rejects(missing);
+        snapshot.schema_version = SCHEMA_VERSION.indexer + 1;
+        await sweep(sourceCounts());
+        await sweep(sourceCounts());
+
+        assert.strictEqual(sync.downloadIncrementalCatchUp.calledOnce, true);
+        assert.strictEqual(db.deleteAllRows.called, false);
+        assert.strictEqual(local.mappings_actions.length, 1186);
+        assert.match(lines(console.error), /Repair table schema mismatch for mappings_actions/);
+    });
+
+    it('refuses a legacy snapshot with no schema version before replacing rows @regression', async function(){
+        const missing = new Error('not found');
+        missing.response = { status: 404, data: { error: 'Not found', code: 'NOT_FOUND' } };
+        sync.downloadRepairTable.rejects(missing);
+        delete snapshot.schema_version;
+        await sweep(sourceCounts());
+        await sweep(sourceCounts());
+
+        assert.strictEqual(sync.downloadIncrementalCatchUp.calledOnce, true);
+        assert.strictEqual(db.deleteAllRows.called, false);
+        assert.strictEqual(local.mappings_actions.length, 1186);
+        assert.match(lines(console.error), /Repair table schema mismatch for mappings_actions/);
     });
 
     it('parses a bounded repair-table response and checks its schema', async function(){

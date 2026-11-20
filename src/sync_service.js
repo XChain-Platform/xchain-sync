@@ -348,7 +348,11 @@ class SyncService {
         } else {
             db = new Database(cfg.db_host, cfg.db_port, cfg.db_name, cfg.db_user, cfg.db_pass, this.util, cfg.dbType);
         }
-        await db.verifySyncTables();
+        // The source indexer decides whether its migration ledger is fresh from
+        // which declared tables exist, so the sync server must not create them.
+        await db.verifySyncTables(this.config['REPLICA_DB_HOST']
+            ? undefined
+            : { includeIndexerOwned: false });
         // Leave the indexer's own table to the indexer by excluding follower-derived columns.
         await db.ensureDatetimeColumns({ includeFollowerDerived: false });
         await db.assertStakeWeightOrderingCollation();

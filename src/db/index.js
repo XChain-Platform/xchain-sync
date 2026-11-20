@@ -262,7 +262,7 @@ class Database {
     // durable divergence halt (sync_halt) applies to BOTH db types.
     // ClientSync checks and records halts for decoder replicas too, and
     // without the table every decoder client start logged a 1146 probe error.
-    async verifySyncTables(){
+    async verifySyncTables({ includeIndexerOwned = true } = {}){
         let dir  = sqlDir();
         let files = fs.readdirSync(dir);
         let db    = await this.getConnection();
@@ -275,6 +275,8 @@ class Database {
             if(file.indexOf('.sql') !== -1){
                 let table = file.substring(0, file.indexOf('.sql'));
                 if(this.dbType !== 'indexer' && table !== 'sync_halt') continue;
+                let tableLifecycle = lifecycle.entry(table);
+                if(!includeIndexerOwned && tableLifecycle && tableLifecycle.owner === 'indexer') continue;
                 checked++;
                 try {
                     let results = await db.query("SELECT * FROM information_schema.tables WHERE table_schema = ? AND table_name = ?", [this.dbName, table]);
