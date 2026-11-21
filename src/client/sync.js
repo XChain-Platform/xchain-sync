@@ -1030,6 +1030,7 @@ class ClientSync {
         if(this._stopping) return 'stopped';
         if(await this.healTailLookupsBeforeWalk(source, this.lastAppliedBlock) !== 'ok') return;
         if(this._stopping) return 'stopped';
+        if(await this.resumeSnapshotCrossCheck() === 'halted') return 'halted';
         // Every committed block above the last verified one recomputes before any catch-up:
         // the process may have stopped between a commit and its verification. A halt or a
         // hold leaves the replica at its stored tip; live-follow then refuses to advance.
@@ -1602,6 +1603,7 @@ class ClientSync {
                 // the whole chain). The marker starts at its tip, which carries only the
                 // bootstrap's own check (the source quorum when several are configured).
                 await this.adoptVerifiedTip(this.lastAppliedBlock);
+                await this.clearSnapshotPending();
                 return;
             }
             if(this._stopping) return 'stopped';
@@ -1656,7 +1658,7 @@ class ClientSync {
         }
     }
 
-    async bootstrapApplySnapshot(snapshotData){
+    async bootstrapApplySnapshot(snapshotData, sourceIndex){
         const height = snapshotData && snapshotData.block_height;
         if(!Number.isSafeInteger(height) || height < 0){
             throw new Error('Full snapshot has invalid block_height (' + String(height) + ') for ' +
@@ -1665,9 +1667,13 @@ class ClientSync {
         if(await this.checkTrainActivation(snapshotData.block_height)) return false;
         const result = await this.withApplyLock(async () => {
             if(this.incrementalCatchUpBlocked(snapshotData.block_height)) return 'blocked';
+            await this.recordSnapshotPending(height, sourceIndex);
             // The full snapshot deletes every row before reinserting: a walk in flight
-            // discards whatever it read, and the marker is set at the tip afterwards.
-            await this.beginRowRemoval();
+            // discards whatever it read, and the marker that vouched for the old rows
+            // is durably lowered below the snapshot tip first (lower only: a stop
+            // before the commit leaves the old rows in place). The tip is adopted
+            // after the bootstrap checks pass.
+            await this.beginRowRemoval(height - 1);
             try {
                 if(this.incrementalCatchUpBlocked(snapshotData.block_height)) return 'blocked';
                 await this.applier.applyFullSnapshot(snapshotData);
@@ -1765,7 +1771,7 @@ class ClientSync {
         try {
             const snapshotData = await this.bootstrapDownloadSnapshot(source);
             if(this._stopping) return 'stopped';
-            const applyResult = await this.bootstrapApplySnapshot(snapshotData);
+            const applyResult = await this.bootstrapApplySnapshot(snapshotData, sourceIndex);
             if(applyResult === 'blocked') return applyResult;
             if(!applyResult) return false;
             if(!await this.bootstrapVerifySnapshot(sourceIndex)) return false;
@@ -2340,6 +2346,9 @@ class ClientSync {
             // The tip read yields while the lock is held. Re-check immediately before
             // starting the apply so a halt or strict hold raised during that read wins.
             if(this.incrementalCatchUpBlocked(sinceBlock)) return 'blocked';
+            // A redelivered tip block can start its post-commit checks without moving
+            // the tip, so the pass-level hold cannot see it; nothing applies above it.
+            if(this.liveVerifyPendingAtOrBelow(currentTip)) return 'pending';
             if(currentTip === dbTip){
                 await this.applier.applyIncrementalSnapshot(snapshotData);
                 return { status: 'applied', reorgGeneration: this._reorgGeneration };
@@ -2404,6 +2413,10 @@ class ClientSync {
         // live writer can advance the tip, then apply it under the same lock.
         let applyResult = await this.applyIncrementalCatchUpUnderLock(snapshotData, sinceBlock, dbTip);
         if(applyResult === 'blocked') return true;
+        if(applyResult === 'pending'){
+            await this.holdCatchUpForLiveVerify(dbTip);
+            return true;
+        }
         if(applyResult === 'moved'){
             this._catchUpPending = true;
             this._catchUpTipMoved = true;
@@ -2560,9 +2573,10 @@ class ClientSync {
     // read voids the resync. A recompute replica also needs its marker at the tip,
     // and no live block at or below the tip may still be awaiting its post-commit
     // checks, since none of the guards above move while those checks run.
-    // 'held' (marker below the tip or a live check pending) and 'unresolved' (no hash
-    // row yet) leave the cursor where it was and let the pass continue as it would
-    // without the resync.
+    // 'pending' (a live check in flight) leaves the cursor and stops the pass until the
+    // check settles. 'held' (marker below the tip) and 'unresolved' (no hash row yet)
+    // leave the cursor where it was and let the pass continue as it would without the
+    // resync.
     async syncCursorToCommittedTip(dbTip, guard){
         const behind = () => dbTip !== null && typeof this.lastAppliedBlock === 'number' &&
             this.lastAppliedBlock < dbTip;
@@ -2570,18 +2584,18 @@ class ClientSync {
         const oldCursor = this.lastAppliedBlock;
         const changed = () => this._halted || this.rowsChangedSince(guard.rowGeneration) ||
             this._reorgGeneration !== guard.reorgGeneration;
-        const unverified = () => this.liveVerifyPendingAtOrBelow(dbTip) ||
-            (this.tracksVerifiedTip() && this._verifiedTip !== dbTip);
+        const unverified = () => this.liveVerifyPendingAtOrBelow(dbTip) ? 'pending'
+            : (this.tracksVerifiedTip() && this._verifiedTip !== dbTip) ? 'held' : null;
         const result = await this.withApplyLock(async () => {
             if(changed()) return 'moved';
             const currentTip = await this.db.getLastBlock(null, { rethrow: true });
             if(currentTip !== dbTip || changed()) return 'moved';
             if(!behind()) return 'unchanged';
-            if(unverified()) return 'held';
+            if(unverified()) return unverified();
             const row = await this.db.getBlockHashRow(dbTip, null, { rethrow: true });
             if(row === null) return 'unresolved';
             if(changed()) return 'moved';
-            if(unverified()) return 'held';
+            if(unverified()) return unverified();
             this.lastAppliedBlock = dbTip;
             this.lastHashes = row;
             return 'resynced';
@@ -2590,9 +2604,9 @@ class ClientSync {
             getLogger().warn('Resynced applied cursor from ' + oldCursor +
                 ' to verified committed tip ' + dbTip + ' before catch-up');
             this.scheduleHeartbeat();
-        } else if(result === 'held' || result === 'unresolved'){
+        } else if(result === 'held' || result === 'unresolved' || result === 'pending'){
             const why = result === 'unresolved' ? 'tip hash row is unresolved'
-                : this.liveVerifyPendingAtOrBelow(dbTip) ? 'a live block\'s post-commit checks are pending'
+                : result === 'pending' ? 'a live block\'s post-commit checks are pending'
                     : 'verified marker is at ' + this._verifiedTip;
             getLogger().warn('Applied cursor ' + oldCursor + ' stays below committed tip ' + dbTip + ': ' + why);
         }
@@ -2617,12 +2631,33 @@ class ClientSync {
             return false;
         }
         if(await this.verifyUnverifiedTail() !== 'ok') return false;
-        if(await this.syncCursorToCommittedTip(dbTip, cursorGuard) !== 'moved') return true;
+        // A live block at or below the tip still running its post-commit checks reads
+        // the stored tip's state; a range applied above it now would change that state
+        // under the check, so the pass waits and re-runs instead of downloading.
+        const cursor = this.liveVerifyPendingAtOrBelow(dbTip) ? 'pending'
+            : await this.syncCursorToCommittedTip(dbTip, cursorGuard);
+        if(cursor === 'pending'){
+            await this.holdCatchUpForLiveVerify(dbTip);
+            return false;
+        }
+        if(cursor !== 'moved') return true;
         // A live apply, row removal or reorg changed the tip after it was read, so the
         // pass re-runs on fresh reads instead of downloading from a stale bound.
         this._catchUpPending = true;
         this._catchUpTipMoved = true;
         return false;
+    }
+
+    // Wait, outside the apply lock, for the live checks at or below `height` to settle,
+    // then queue one more pass on fresh reads. A check that halted stops that pass
+    // through incrementalCatchUpBlocked; one that dropped its verdict leaves the block
+    // to the next pass's tail walk.
+    async holdCatchUpForLiveVerify(height){
+        getLogger().info('Catch-up of ' + this.replicaLabel() + ' from committed tip ' + height +
+            ' waits for a live block\'s post-commit checks before it applies anything above it');
+        await this.waitForLiveVerifyAtOrBelow(height);
+        this._catchUpPending = true;
+        this._catchUpTipMoved = true;
     }
 
     async runIncrementalCatchUp(){
@@ -4838,6 +4873,66 @@ class ClientSync {
     // ever did).
     bootstrapBaseKey(){ return 'bootstrap_base:' + this.dbType; }
 
+    // Durable record of a full snapshot whose bootstrap cross-check has not finished:
+    // {"height": H, "source": i}. Written strictly before the rows are replaced, and only
+    // when there is a peer to cross-check against; a restart that finds it at the stored
+    // tip re-runs the cross-check the stop skipped.
+    snapshotPendingKey(){ return 'snapshot_pending:' + this.dbType; }
+
+    async recordSnapshotPending(height, sourceIndex){
+        if(!this.db || typeof this.db.setSyncState !== 'function') return;
+        const from = sourceIndex === undefined ? this.primarySourceIndex() : sourceIndex;
+        if(!this.bootstrapPeerIndices(from).length) return;
+        const value = JSON.stringify({ height, source: Number.isInteger(from) ? from : null });
+        if(await this.db.setSyncState(this.snapshotPendingKey(), value, { rethrow: true }) === false)
+            throw new Error('snapshot pending record write failed');
+    }
+
+    // Fail-soft: a leftover record only re-runs the cross-check on the next start.
+    async clearSnapshotPending(){
+        if(!this.db || typeof this.db.deleteSyncState !== 'function') return;
+        return this.db.deleteSyncState(this.snapshotPendingKey());
+    }
+
+    // An operator clear of a halt at a pending snapshot's tip rules on that snapshot's
+    // cross-check, which halts there; kept, the record would re-run the check and re-halt
+    // on every start. The marker already sits below the snapshot tip, so the next walk
+    // still recomputes it. A halt at another height leaves the record, and the cross-check,
+    // in place. Fail-soft: a record that cannot be read or removed only re-runs the check.
+    async dropSnapshotPendingForClear(halt){
+        if(!halt || !this.db || typeof this.db.getSyncState !== 'function') return;
+        let pending = null;
+        try { pending = JSON.parse(await this.db.getSyncState(this.snapshotPendingKey())); } catch(e){ pending = null; }
+        if(!pending || typeof pending !== 'object' || pending.height !== halt.blockIndex) return;
+        let dropped = false;
+        try { dropped = await this.clearSnapshotPending() !== false; } catch(e){ dropped = false; }
+        if(!dropped) getLogger().error('Could not remove the ' + this.snapshotPendingKey() + ' record for ' +
+            this.replicaLabel() + '; the next start re-runs its bootstrap cross-check');
+    }
+
+    // At startup, before the tail walk. A record at the stored tip means the process
+    // stopped after the snapshot committed (or before a same-height one did, where the
+    // check is harmless) and before its cross-check finished, so it runs now. A record at
+    // another height is a snapshot that never committed. The read is strict: an unreadable
+    // record is not an absent one. Returns 'halted' when the cross-check halted (the record
+    // stays), else 'ok'. Never raises the marker; the walk after it recomputes the tip.
+    async resumeSnapshotCrossCheck(){
+        if(!this.db || typeof this.db.getSyncState !== 'function') return 'ok';
+        const raw = await this.db.getSyncState(this.snapshotPendingKey(), { rethrow: true });
+        if(raw === null || raw === undefined) return 'ok';
+        let pending = null;
+        try { pending = JSON.parse(raw); } catch(e){ pending = null; }
+        if(pending && typeof pending === 'object' && pending.height === this.lastAppliedBlock){
+            const known = Number.isInteger(pending.source) && this.activeSourceIndices().includes(pending.source);
+            getLogger().warn('Full snapshot at block ' + pending.height + ' of ' + this.replicaLabel() +
+                ' committed without a finished bootstrap cross-check; running it before resuming');
+            await this.bootstrapVerifySnapshot(known ? pending.source : undefined);
+            if(this._halted) return 'halted';
+        }
+        await this.clearSnapshotPending();
+        return 'ok';
+    }
+
     // Persist the truncation join floor durably so it survives a restart. Guarded:
     // the durable store is optional (older db instances / test mocks may not expose
     // it), so a missing setSyncState degrades to in-memory-only behaviour rather
@@ -5013,6 +5108,7 @@ class ClientSync {
                 ((e && e.message) || String(e)));
         }
         await this.dropPendingHaltCopy();
+        await this.dropSnapshotPendingForClear(this._halted);
         const was = this._halted;
         if(was && was.reason === 'max-rollback-depth-exceeded')
             await this.resetRollbackGuardState();
@@ -5223,6 +5319,21 @@ class ClientSync {
         const count = (inFlight.get(blockIndex) || 0) + delta;
         if(count > 0) inFlight.set(blockIndex, count);
         else inFlight.delete(blockIndex);
+        if(delta < 0 && this._liveVerifyWaiters && this._liveVerifyWaiters.length){
+            this._liveVerifyWaiters = this._liveVerifyWaiters.filter(w => {
+                if(this.liveVerifyPendingAtOrBelow(w.height)) return true;
+                w.resolve();
+                return false;
+            });
+        }
+    }
+
+    // Resolves once no live block at or below `height` has post-commit checks pending.
+    waitForLiveVerifyAtOrBelow(height){
+        if(!this.liveVerifyPendingAtOrBelow(height)) return Promise.resolve();
+        return new Promise(resolve => {
+            (this._liveVerifyWaiters || (this._liveVerifyWaiters = [])).push({ height, resolve });
+        });
     }
 
     liveVerifyPendingAtOrBelow(height){

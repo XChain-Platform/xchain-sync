@@ -340,9 +340,13 @@ class ClientApplier {
     // set, which captures EXACT pairs at its ledger choke point. Collects pairs
     // (not the address x tick cross-product) from the applied credits/debits/escrows
     // rows (the source has already merged backdated cooldown-refund credits into
-    // data.credits), skips native-coin rows with a NULL address_id/tick_id (matching
-    // the indexer guard `address != null && tick != null && tick !== ''`), and
-    // resolves the surrogate ids to canonical strings. NO cap: every touched pair
+    // data.credits), skips native-coin rows with a NULL address_id/tick_id, and
+    // resolves the surrogate ids to canonical strings. The skip keeps exactly the
+    // pairs the indexer's ledgerKeysForBlock keeps (`address != null && tick != null
+    // && tick !== ''`), the reference its touch guard checks _smtTouched against. The
+    // _smtTouched choke point also drops an empty canonical address, which is the one
+    // pair the two rules can disagree on; createAddress returns null for an empty
+    // address before interning anything. NO cap: every touched pair
     // must be recomputed (unlike the balance-cache rebuild, which can fall back to a
     // full recompute). Runs inside the apply txn so freshly-inserted index rows resolve.
     async collectSmtTouchedKeys(data){
