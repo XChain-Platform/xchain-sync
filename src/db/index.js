@@ -571,25 +571,30 @@ class Database {
     }
 
     async repairReplicatedAutoIncrement(){
-        // AUTO_INCREMENT repair for hub-mirror id cursors. An origin migration restores
-        // the attribute, but a replica bootstrapped from stripped DDL has no automated path.
-        // Detect and restore it here; the same definition is a no-op and an absent table skips.
+        // AUTO_INCREMENT and signedness repair for hub-mirror id cursors. The table
+        // definitions in the indexer SQL directory are the authoritative shapes.
         let autoIncTables = [
-            'price_snapshots',
-            'cross_chain_matches',
-            'capability_snapshots',
-            'state_checkpoints'
+            { table: 'price_snapshots', unsigned: false },
+            { table: 'cross_chain_matches', unsigned: true },
+            { table: 'capability_snapshots', unsigned: true },
+            { table: 'state_checkpoints', unsigned: true }
         ];
-        for(let table of autoIncTables){
+        for(let { table, unsigned } of autoIncTables){
             let colRows = await this.doQuery(
-                "SELECT EXTRA FROM information_schema.columns WHERE table_schema = ? AND table_name = ? AND COLUMN_NAME = 'id'",
+                "SELECT EXTRA, COLUMN_TYPE FROM information_schema.columns " +
+                "WHERE table_schema = ? AND table_name = ? AND COLUMN_NAME = 'id'",
                 [this.dbName, table]
             );
             if(colRows.length === 0) continue;   // table absent or has no id column; skip
             let extra = colRows[0].EXTRA || colRows[0].extra || '';
-            if(String(extra).toLowerCase().indexOf('auto_increment') !== -1) continue;  // already correct; no-op
+            let type = String(colRows[0].COLUMN_TYPE || colRows[0].column_type || '').toLowerCase();
+            let hasAutoIncrement = String(extra).toLowerCase().indexOf('auto_increment') !== -1;
+            let wrongSign = unsigned && type.indexOf('unsigned') === -1;
+            if(hasAutoIncrement && !wrongSign) continue;
 
-            logger.info('Schema drift on ' + table + '.id: AUTO_INCREMENT missing on replica. Repairing.');
+            let drift = [hasAutoIncrement ? null : 'AUTO_INCREMENT missing', wrongSign ? 'signed but UNSIGNED declared' : null]
+                .filter(Boolean).join(' and ');
+            logger.info('Schema drift on ' + table + '.id: ' + drift + ' on replica. Repairing.');
             // Re-key any id=0 rows before the ALTER rebuilds the index (avoids a
             // collision when the AUTO_INCREMENT attribute is restored). Mirrors the
             // indexer migration. The old scalar-subquery UPDATE assigned EVERY id=0
@@ -611,7 +616,8 @@ class Database {
                 await this.doQuery('SET @n := ?', [base]);
                 await this.doQuery('UPDATE `' + table + '` SET id = (@n := @n + 1) WHERE id = 0 ORDER BY id ASC');
                 await this.runSqlMigrationStatement(
-                    '2026-10-19-replica-columns.sql', 'repair-auto-increment', { table }
+                    '2026-10-19-replica-columns.sql',
+                    unsigned ? 'repair-auto-increment-unsigned' : 'repair-auto-increment', { table }
                 );
                 logger.info('Repaired AUTO_INCREMENT on ' + table + '.id');
             } catch(e){

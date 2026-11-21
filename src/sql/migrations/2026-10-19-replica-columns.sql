@@ -36,6 +36,8 @@ ALTER TABLE `contract_emissions` MODIFY COLUMN `action_index` BIGINT UNSIGNED NU
 ALTER TABLE `file_manifests` MODIFY COLUMN `total_bytes` BIGINT UNSIGNED NULL;
 -- migration-key: repair-auto-increment
 ALTER TABLE `{{table}}` MODIFY id BIGINT NOT NULL AUTO_INCREMENT;
+-- migration-key: repair-auto-increment-unsigned
+ALTER TABLE `{{table}}` MODIFY id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT;
 -- migration-key: reset-auto-increment
 ALTER TABLE `{{table}}` AUTO_INCREMENT = {{next_id}};
 -- migration-key: attests-request-status

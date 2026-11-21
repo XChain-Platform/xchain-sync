@@ -93,6 +93,8 @@ describe('replica SQL migrations', function(){
         const db = fakeDb();
         await db.runSqlMigrationStatement('2026-10-19-replica-columns.sql', 'repair-auto-increment', { table: 'credits' });
         assert.strictEqual(db.calls[0].sql, 'ALTER TABLE `credits` MODIFY id BIGINT NOT NULL AUTO_INCREMENT');
+        await db.runSqlMigrationStatement('2026-10-19-replica-columns.sql', 'repair-auto-increment-unsigned', { table: 'credits' });
+        assert.strictEqual(db.calls[1].sql, 'ALTER TABLE `credits` MODIFY id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT');
         await assert.rejects(() => db.runSqlMigrationStatement('2026-10-19-replica-columns.sql', 'repair-auto-increment'),
             /Missing SQL migration replacement: table/);
     });

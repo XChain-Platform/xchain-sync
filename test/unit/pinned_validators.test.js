@@ -253,7 +253,13 @@ describe('pinnedValidators: assertPinnedEnvOverrides @regression', function(){
     });
 
     it('ignores a prefixed name with no CHAIN_NETWORK shape (the getters never read it)', function(){
-        pinned.assertPinnedEnvOverrides({ CHECKPOINT_VALIDATORS_BADKEY: 'not json' });
+        const set = JSON.stringify(goodSet), seed = JSON.stringify(goodSeed);
+        assertRefuses({ CHECKPOINT_VALIDATORS_BTCMAINNET: set }, 'CHECKPOINT_VALIDATORS_BTCMAINNET');
+        assertRefuses({ CHECKPOINT_VALIDATORS_BTC_MAINNET_: set }, 'CHECKPOINT_VALIDATORS_BTC_MAINNET_');
+        assertRefuses({ CHECKPOINT_SEED_MAINNET: seed }, 'CHECKPOINT_SEED_MAINNET');
+        assertRefuses({ CHECKPOINT_VALIDATORS_BADKEY: 'not json' }, 'CHECKPOINT_VALIDATORS_BADKEY');
+        assertRefuses({ CHECKPOINT_VALIDATORS_: set }, 'CHECKPOINT_VALIDATORS_');
+        pinned.assertPinnedEnvOverrides({ CHECKPOINT_VALIDATORS_BADKEY: '' });
     });
 
     it('does not reject a chain/network pair that is absent from the baked-in map', function(){
@@ -271,7 +277,7 @@ describe('pinnedValidators: assertPinnedEnvOverrides @regression', function(){
         assertRefuses({ CHECKPOINT_SEED_DOGE_SIGNET: seed }, 'CHECKPOINT_SEED_DOGE_SIGNET (pinned seed checkpoint) names no');
         // A mis-cased prefix is never read by the getters either, so it is refused, not skipped.
         assertRefuses({ checkpoint_seed_doge_mainnet: seed }, 'checkpoint_seed_doge_mainnet (pinned seed checkpoint) names no');
-        pinned.assertPinnedEnvOverrides({ checkpoint_validators_badkey: 'not json' });
+        assertRefuses({ checkpoint_validators_badkey: 'not json' }, 'checkpoint_validators_badkey');
         for(const chain of ['BTC', 'LTC', 'DOGE', 'BITCOIN', 'LITECOIN', 'DOGECOIN']){
             for(const net of ['MAINNET', 'TESTNET', 'REGTEST']){
                 pinned.assertPinnedEnvOverrides({ ['CHECKPOINT_VALIDATORS_' + chain + '_' + net]: set,

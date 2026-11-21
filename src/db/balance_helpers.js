@@ -86,8 +86,12 @@ function minimalSupply(sumExpr, decimals) {
 //
 // A DECIMAL scale cannot be a bind parameter, hence one UPDATE per distinct precision
 // clamped to [0,18] (typically 1 or 2). A token with no ledger rows resolves to '0'
-// through the LEFT JOIN, matching getTokenSupply's all-zero result.
-async function recomputeTokenSupplies(db) {
+// through the LEFT JOIN, matching getTokenSupply's all-zero result. A truncated
+// replica can set minTokenActionIndex to leave pre-floor tokens untouched because
+// it does not hold the complete ledger needed to recompute them.
+async function recomputeTokenSupplies(db, opts) {
+    const minTokenActionIndex = opts && opts.minTokenActionIndex;
+    const scoped = minTokenActionIndex !== null && minTokenActionIndex !== undefined;
     let precisions = await db.doQuery('SELECT DISTINCT decimals FROM tokens');
     for (let row of (precisions || [])) {
         let d = Math.max(0, Math.min(18, parseInt(row.decimals) || 0));
@@ -104,8 +108,8 @@ async function recomputeTokenSupplies(db) {
             +   ') u GROUP BY tick_id'
             + ') agg ON agg.tick_id = tok.tick_id '
             + "SET tok.supply = COALESCE(agg.supply, '0') "
-            + 'WHERE tok.decimals = ?',
-            [d]
+            + 'WHERE tok.decimals = ?' + (scoped ? ' AND tok.action_index >= ?' : ''),
+            scoped ? [d, minTokenActionIndex] : [d]
         );
     }
 }

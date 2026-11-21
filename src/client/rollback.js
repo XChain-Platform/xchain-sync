@@ -1386,7 +1386,8 @@ class ClientRollback {
                 const refold = await tokenRefold.refoldTokenRows(this.db, refoldTickIds);
                 if(refold.skipped.length)
                     logger.warn('ClientRollback: tokens refold skipped ' + refold.skipped.length + ' tick(s) whose first ' +
-                        'issuance is not held locally (truncated replica?); tick_ids ' + refold.skipped.slice(0, 20).join(','));
+                        'issuance is not held locally (truncated replica?); their supply keeps the source value until ' +
+                        'a forward window touches the tick; tick_ids ' + refold.skipped.slice(0, 20).join(','));
             } catch(e){
                 if(!isSchemaGapError(e)){ logger.error(util.format('refoldTokenRows after rollback failed:', e)); throw e; }
             }
@@ -1396,9 +1397,15 @@ class ClientRollback {
             // IN PLACE (no new row), so it survives the block-scoped deletes with the
             // inflated value; the source indexer's rollback recomputes it (updateTokens),
             // so without this the replica serves an over-inflated supply until the next
-            // full snapshot. Mirrors xchain-indexer getTokenSupply (see balance-helpers).
+            // full snapshot. A truncated replica scopes this to tokens whose first
+            // issuance is held, because a pre-floor token has only a partial ledger.
+            // Mirrors xchain-indexer getTokenSupply (see balance-helpers).
             try {
-                await balanceHelpers.recomputeTokenSupplies(this.db);
+                if(truncatedReplica)
+                    await balanceHelpers.recomputeTokenSupplies(this.db,
+                        { minTokenActionIndex: escrowFloorActionIndex });
+                else
+                    await balanceHelpers.recomputeTokenSupplies(this.db);
             } catch(e){
                 // errno 1146 (missing table) is the only benign schema gap; log the
                 // step and rethrow real faults so the outer catch rolls back.

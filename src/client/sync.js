@@ -289,6 +289,10 @@ function logDivergenceReason(client, blockIndex, mismatches){
         getLogger().error('cannot rewind to the new canonical base. HALTING (applying no further');
         getLogger().error('blocks). Operator must investigate, resnapshot/rewind, and clear before');
         getLogger().error('this validator can resume.');
+    } else if(client._halted.reason === 'rewind-below-bootstrap-floor'){
+        getLogger().error('block ' + blockIndex + ': the rewind target is at or below this replica\'s');
+        getLogger().error('truncation floor, where no local history exists. HALTING before any rows');
+        getLogger().error('change. Operator must resnapshot the truncated replica, then clear the halt.');
     } else if(client._halted.reason === 'no-source-quorum'){
         getLogger().error('block ' + blockIndex + ': the active sources split with NO majority reaching');
         getLogger().error('SOURCE_QUORUM (' + client.effectiveQuorum() + ' of ' + client.activeSourceCount() +
@@ -360,6 +364,21 @@ function shouldReconcileDispensersOnStatus(client){
         (client._dispenserReconcileAfterReorg === true || client._dispenserReconcilePending === true ||
          dispenserReorgRetryDue(client, Date.now()) ||
          client.dispenserReconcileIntervalDue(Date.now()));
+}
+
+function warnTruncatedRetroactiveWindow(client){
+    if(client._truncatedDepth < 1) return;
+    let capBlocks;
+    try {
+        capBlocks = retroactiveCapBlocks(client.coinTicker,
+            client.config['RETROACTIVE_REWIND_CAP_HOURS'] || 72);
+    } catch(e){ return; }
+    if(client._truncatedDepth > capBlocks) return;
+    getLogger().warn('SYNC_BOOTSTRAP_DEPTH for ' + client.chain + '/' + client.network +
+        ' is ' + client._truncatedDepth + ', within the quorum-backed retroactive rewind cap of ' +
+        capBlocks + ' blocks. A rewind at or below the held floor will HALT with reason ' +
+        'rewind-below-bootstrap-floor. Set the bootstrap depth above ' + capBlocks +
+        ' to keep every admitted rewind inside the held window.');
 }
 
 class ClientSync {
@@ -497,8 +516,9 @@ class ClientSync {
         // `base = tip - depth` is the deepest block the replica holds; a reorg that
         // rewinds further than `depth` blocks would need to roll back BELOW the floor,
         // which the replica cannot do (no pre-base history). MAX_ROLLBACK_DEPTH (default
-        // per chain, see config.resolveMaxRollbackDepth) is the deepest reorg the client will roll back, so a depth <=
-        // MAX_ROLLBACK_DEPTH lets an in-window reorg request a rollback past the floor.
+        // per chain, see config.resolveMaxRollbackDepth) is the deepest ordinary
+        // reorg the client will roll back, so a depth <= MAX_ROLLBACK_DEPTH lets an
+        // in-window reorg request a rollback past the floor.
         // Clamp the effective depth up to MAX_ROLLBACK_DEPTH + 1 and warn loudly so a
         // misconfigured small depth can't quietly strand the replica. (depth 0 = full-
         // history replica, not truncated, so it is exempt.)
@@ -515,6 +535,7 @@ class ClientSync {
                 this._truncatedDepth = clamped;
             }
         }
+        warnTruncatedRetroactiveWindow(this);
 
         // Pending blocks from secondary sources for cross-verification
         this.pendingHashes = new Map(); // blockHeight -> { sourceIndex: hashes }
@@ -5987,6 +6008,18 @@ class ClientSync {
         return Promise.resolve(this.haltForExcessiveRollback(event, depth)).then(() => true);
     }
 
+    async refuseRewindBelowBootstrapFloor(event, committedTip){
+        if(!ClientSync.prototype.isTruncated.call(this) || event.block_index > this._bootstrapBase) return false;
+        const depth = this.rollbackGuard
+            ? this.rollbackGuard.depthFor(committedTip, event.block_index) : null;
+        getLogger().error('Refusing rewind at block ' + event.block_index + ': truncation floor=' +
+            this._bootstrapBase + ', depth=' + depth);
+        await this.haltOnDivergence(event.block_index,
+            [{ field: 'rollback_target', target: event.block_index, base: this._bootstrapBase }],
+            this.sources.slice(0, 1), 'rewind-below-bootstrap-floor');
+        return true;
+    }
+
     async applyReorgRollbackUnderLock(event, expectedTip, retroactiveReports){
         if(this._halted){
             if(typeof this.refuseReorgWhileHalted === 'function') this.refuseReorgWhileHalted(event);
@@ -6011,6 +6044,8 @@ class ClientSync {
         const refusal = ClientSync.prototype.refuseExcessiveRollback.call(
             this, event, committedTip, retroactiveReports);
         if(refusal === true || (refusal && await refusal)) return false;
+        if(await ClientSync.prototype.refuseRewindBelowBootstrapFloor.call(this, event, committedTip))
+            return false;
         // Lower the verified marker before deleting rows so a failed write leaves them held.
         try {
             await this.beginRowRemoval(event.block_index - 1);

@@ -34,6 +34,7 @@ const { collectRedrivenValidatorRewards } = require('./recovery_rewards');
 const { collectDerivedAnchorRewards } = require('./derived_rewards');
 const { validatorRewardKey } = require('./reward_identity');
 const { SnapshotStreamWriter } = require('./snapshot_builder/stream_writer');
+const { collectUnrecordedSyncMetaRows, syncMetaKey } = require('./snapshot_builder/sync_meta_tail');
 const {
     OPERATOR_LOCAL_TABLES,
     SOURCE_UNSTREAMED_TABLES,
@@ -149,6 +150,11 @@ class SnapshotBuilder {
         // below the base window, since every row at or above it already streams.
         if(Array.isArray(selection)){
             let rows = selection;
+            if(dbType === 'indexer' && table === 'sync_meta'){
+                const extras = await collectUnrecordedSyncMetaRows(db, sinceBlock, lastBlock, conn);
+                const seen = new Set(rows.map(syncMetaKey));
+                for(const row of extras) if(!seen.has(syncMetaKey(row))) rows.push(row);
+            }
             if(dbType === 'indexer' && (table === 'credits' || table === 'escrows'))
                 rows = await this.mergeMaturedCooldownRows(db, table, rows, sinceBlock, lastBlock, conn);
             if(dbType === 'indexer' && table === 'validator_rewards')
@@ -163,6 +169,10 @@ class SnapshotBuilder {
         if(dbType === 'indexer' && table === 'validator_rewards'){
             selection.extras = await this.collectValidatorRewardRows(db, sinceBlock, lastBlock, conn);
             selection.dedupeKey = validatorRewardKey;
+        }
+        if(dbType === 'indexer' && table === 'sync_meta'){
+            selection.extras = await collectUnrecordedSyncMetaRows(db, sinceBlock, lastBlock, conn);
+            selection.dedupeKey = syncMetaKey;
         }
         return selection;
     }

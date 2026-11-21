@@ -140,8 +140,8 @@ module.exports = {
     },
 
     // The highest recorded block, one row carrying `tip`.
-    async getSyncMetaTip(){
-        return await this.doQuery("SELECT MAX(block_index) AS tip FROM sync_meta");
+    async getSyncMetaTip(conn){
+        return await this.doQuery("SELECT MAX(block_index) AS tip FROM sync_meta", null, conn);
     },
 
     // The three hashes recorded for one height, at most one row.

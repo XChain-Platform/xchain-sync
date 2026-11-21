@@ -112,6 +112,14 @@ function registerRecomputeUpdateTests(precisionDb) {
         assert.deepStrictEqual(updateArgs.sort(), [[0], [8]]);
     });
 
+    it('scopes updates to tokens whose first issuance is at or above the held floor', async function () {
+        const db = precisionDb([{ decimals: 8 }]);
+        await recomputeTokenSupplies(db, { minTokenActionIndex: 9000 });
+        const index = db.queries.findIndex(q => /^UPDATE tokens/i.test(q));
+        assert.match(db.queries[index], /WHERE tok\.decimals = \? AND tok\.action_index >= \?$/i);
+        assert.deepStrictEqual(db.argsLog[index], [8, 9000]);
+    });
+
     // Rows are summed EXACTLY (DECIMAL(60,18)) and the TOTAL is rounded once
     // to the token's own scale: per-ROW rounding agreed with the indexer only
     // while every amount sat on the token's grid, and inflates supply once
