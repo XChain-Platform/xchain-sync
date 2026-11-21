@@ -118,6 +118,11 @@ module.exports = {
             if(snapshotOpen) await db.rollbackReadSnapshot(conn);
             // A client abort mid-stream is not a server error (see streamFullSnapshot).
             if(e && e.aborted) return;
+            // A fault after the headers went out (a streamed table read cut off
+            // by the source, such as net_write_timeout behind a stalled reader)
+            // leaves a partial body. Destroying the response makes the follower
+            // fail at once instead of waiting on an open, silent transfer.
+            if(res.headersSent && typeof res.destroy === 'function') res.destroy();
             throw e;
         }
     },
@@ -205,46 +210,84 @@ module.exports = {
                 return first;
             }
 
-            let rows = await this.selectIncrementalRows(db, table, selectCtx);
-            if(rows === null) return first;
-
-            if(!rows || rows.length === 0) return first;
-
-            return await this.writeIncrementalTableRows(writer, table, rows, first);
+            const selection = await this.selectIncrementalRows(db, table, selectCtx);
+            if(selection === null) return first;
+            return await this.writeIncrementalTableRows(writer, table, selection, first);
         } catch(e){
-            this.tolerateIncrementalTableError(e, table);
+            this.tolerateIncrementalTableError(e, table, !!(e && e.incrementalTableStarted));
         }
         return first;
     },
 
-    async writeIncrementalTableRows(writer, table, rows, first){
-        if(!first) await writer.write(',');
-        await writer.write('"' + table + '":[');
+    async writeIncrementalTableRows(writer, table, selection, first){
+        if(Array.isArray(selection)) selection = { rows: selection };
+        const extras = selection.extras || [];
+        const stream = selection.open ? selection.open() : selection.stream;
+        const source = stream || selection.rows || [];
+        const dedupeKey = selection.dedupeKey;
+        const pendingExtraKeys = dedupeKey ? new Set(extras.map(dedupeKey)) : null;
+        let started = false;
+        let rowCount = 0;
 
-        for(let i = 0; i < rows.length; i++){
-            if(i > 0) await writer.write(',');
-            await writer.write(JSON.stringify(encodeRow(rows[i]), bigIntReplacer));
+        const writeRow = async (row) => {
+            if(!started){
+                if(!first) await writer.write(',');
+                await writer.write('"' + table + '":[');
+                started = true;
+            }
+            if(rowCount > 0) await writer.write(',');
+            await writer.write(JSON.stringify(encodeRow(row), bigIntReplacer));
+            rowCount++;
+        };
+
+        try {
+            try {
+                for await (const row of source){
+                    if(pendingExtraKeys) pendingExtraKeys.delete(dedupeKey(row));
+                    await writeRow(row);
+                }
+            } finally {
+                // The driver's destroy() leaves the socket paused, so the
+                // rollback queued behind an abandoned stream would never run;
+                // close() discards the remaining rows and resumes it first.
+                if(stream && typeof stream.close === 'function') stream.close();
+                if(stream && typeof stream.destroy === 'function') stream.destroy();
+            }
+
+            for(const row of extras){
+                if(pendingExtraKeys){
+                    const key = dedupeKey(row);
+                    if(!pendingExtraKeys.has(key)) continue;
+                    pendingExtraKeys.delete(key);
+                }
+                await writeRow(row);
+            }
+
+            if(!started) return first;
+            await writer.write(']');
+            return false;
+        } catch(e){
+            if(started && e) e.incrementalTableStarted = true;
+            throw e;
         }
-
-        await writer.write(']');
-        return false;
     },
 
-    tolerateIncrementalTableError(e, table){
+    tolerateIncrementalTableError(e, table, tableStarted){
         // A client-disconnect abort must break out of the whole stream, not
         // be swallowed as a per-table read error (which would keep writing to
         // a dead stream and pinning the read view).
         if(e && e.aborted) throw e;
         // The catch tolerates only a genuine schema gap (1146 missing table /
         // 1054 missing column) on an older source: log-and-continue leaves that
-        // table out of the payload harmlessly. Any other error is a transient/
-        // operational fault (deadlock 1213, lock-wait 1205, connection drop)
-        // that would otherwise ship a structurally-valid but silently INCOMPLETE
-        // catch-up (rows are fully fetched before any byte is written, so the
-        // table's window vanishes while the payload still parses). Re-throw so
-        // the stream aborts and the follower fails closed on truncated JSON,
-        // matching ClientRollback's errno discrimination.
-        if(!isSchemaGapError(e)) throw e;
+        // table out of the payload harmlessly, but only before its header has
+        // been written. Any error after that point must abort the response so a
+        // follower cannot accept truncated table contents. Any other error is a
+        // transient/operational fault (deadlock 1213, lock-wait 1205, connection
+        // drop) that would otherwise ship a structurally-valid but silently
+        // INCOMPLETE catch-up. Re-throw so the stream aborts and the follower
+        // fails closed on truncated JSON, matching ClientRollback's errno
+        // discrimination.
+        if(tableStarted || !isSchemaGapError(e)) throw e;
         logger.error(util.format('Error reading table ' + table + ' for incremental:', e));
     },
 

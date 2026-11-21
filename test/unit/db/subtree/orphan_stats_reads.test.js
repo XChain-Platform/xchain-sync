@@ -66,8 +66,11 @@ describe('orphan stats reads', function(){
         assert.deepStrictEqual(recorder.calls, [{
             sql: 'SELECT DISTINCT balances_root AS r FROM state_tree_roots WHERE chain=? AND network=? ' +
                 'UNION SELECT DISTINCT stakes_root AS r FROM state_tree_roots WHERE chain=? AND network=? ' +
-                'UNION SELECT DISTINCT contract_state_root AS r FROM state_tree_roots WHERE chain=? AND network=? AND contract_state_root IS NOT NULL',
-            params: ['chain-a', 'network-b', 'chain-a', 'network-b', 'chain-a', 'network-b'],
+                'UNION SELECT DISTINCT contract_state_root AS r FROM state_tree_roots WHERE chain=? AND network=? AND contract_state_root IS NOT NULL ' +
+                'UNION SELECT DISTINCT contract_state_root_shadow AS r FROM state_tree_roots WHERE chain=? AND network=? AND contract_state_root_shadow IS NOT NULL ' +
+                'UNION SELECT DISTINCT balances_root_escrow_shadow AS r FROM state_tree_roots WHERE chain=? AND network=? AND balances_root_escrow_shadow IS NOT NULL',
+            params: ['chain-a', 'network-b', 'chain-a', 'network-b', 'chain-a', 'network-b',
+                     'chain-a', 'network-b', 'chain-a', 'network-b'],
         }]);
     });
 

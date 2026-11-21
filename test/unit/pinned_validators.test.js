@@ -287,3 +287,26 @@ describe('pinnedValidators: assertPinnedEnvOverrides @regression', function(){
         } finally { delete process.env[VKEY]; }
     });
 });
+
+describe('pinnedValidators: seed override field shapes @regression', function(){
+    const seed = (patch) => ({ [SKEY]: JSON.stringify(Object.assign({}, goodSeed, patch)) });
+
+    it('refuses a typed seed override the seed comparison can never accept', function(){
+        assertRefuses(seed({ block_index: 1000.5 }), '`block_index`');
+        assertRefuses(seed({ snapshot_block: 994.25 }), '`snapshot_block`');
+        assertRefuses(seed({ block_index: 2 ** 60 }), '`block_index`');
+        assertRefuses(seed({ state_root: 'zz'.repeat(32) }), '`state_root`');
+        assertRefuses(seed({ state_root: 'ab'.repeat(31) }), '`state_root`');
+        assertRefuses(seed({ state_root: '0x' + 'ab'.repeat(32) }), '`state_root`');
+        assertRefuses(seed({ block_merkle_root: 'not-hex' }), '`block_merkle_root`');
+        assertRefuses(seed({ block_merkle_root: '' }), '`block_merkle_root`');
+        assertRefuses(seed({ block_merkle_root: 42 }), '`block_merkle_root`');
+    });
+
+    it('accepts a seed override with upper-case roots, no block_merkle_root, or zero heights', function(){
+        pinned.assertPinnedEnvOverrides(seed({ state_root: 'AB'.repeat(32), block_merkle_root: 'CD'.repeat(32) }));
+        pinned.assertPinnedEnvOverrides(seed({ block_merkle_root: undefined }));
+        pinned.assertPinnedEnvOverrides(seed({ block_merkle_root: null }));
+        pinned.assertPinnedEnvOverrides(seed({ block_index: 0, snapshot_block: 0 }));
+    });
+});

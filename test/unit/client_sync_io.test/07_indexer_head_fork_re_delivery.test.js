@@ -105,4 +105,49 @@ describe('ClientSync: indexer head-fork re-delivery', function(){
 
         assert.ok(sync.incrementalCatchUp.calledOnce, 'decoder fork detection unchanged');
     });
+
+    registerHeadRowCases();
 });
+
+const HEAD_HASHES = { ledger_hash: 'lh100', actions_hash: 'ah100', contract_hash: 'ch100' };
+
+async function redeliverHead(stored, incoming){
+    let { sync, applier } = makeSync();
+    sync.lastAppliedBlock = 100;
+    sync.lastHashes = Object.assign({}, HEAD_HASHES, stored);
+    sinon.stub(sync, 'incrementalCatchUp').resolves();
+    await sync.handleBlock(Object.assign({ type: 'block', block_index: 100 }, HEAD_HASHES, incoming), 0);
+    return { sync, applier };
+}
+
+function registerHeadRowCases(){
+    it('indexer: at-tip re-delivery with equal hashes but a different block_time is a fork @regression', async function(){
+        let { sync, applier } = await redeliverHead({ block_time: 1700000000 }, { block_time: 1700000600 });
+        assert.ok(sync.incrementalCatchUp.calledOnce, 'a same-hash replacement tip must be rewound');
+        assert.strictEqual(applier.applyBlock.called, false);
+    });
+
+    it('indexer: at-tip re-delivery with equal hashes but a different state_hash is a fork @regression', async function(){
+        let { sync } = await redeliverHead({ block_time: 1700000000, state_hash: 'sh-a' },
+            { block_time: 1700000000, state_hash: 'sh-b' });
+        assert.ok(sync.incrementalCatchUp.calledOnce);
+    });
+
+    it('indexer: a null state_hash or a string block_time of equal value stays a silent skip @regression', async function(){
+        let nullState = await redeliverHead({ block_time: 1700000000, state_hash: 'sh-a' },
+            { block_time: 1700000000, state_hash: null });
+        assert.strictEqual(nullState.sync.incrementalCatchUp.called, false, 'a null state_hash is no evidence');
+        let stringTime = await redeliverHead({ block_time: '1700000000' }, { block_time: 1700000000 });
+        assert.strictEqual(stringTime.sync.incrementalCatchUp.called, false, 'equal block_time across types');
+    });
+
+    it('indexer: a live apply caches block_time and state_hash for the next head check @regression', async function(){
+        let { sync } = makeSync();
+        sync.finishAppliedBlock(Object.assign({ block_index: 100, block_time: 1700000000, state_hash: 'sh-a' }, HEAD_HASHES));
+        assert.strictEqual(sync.lastHashes.block_time, 1700000000);
+        assert.strictEqual(sync.lastHashes.state_hash, 'sh-a');
+        sinon.stub(sync, 'incrementalCatchUp').resolves();
+        await sync.handleBlock(Object.assign({ type: 'block', block_index: 100, block_time: 1700000600 }, HEAD_HASHES), 0);
+        assert.ok(sync.incrementalCatchUp.calledOnce, 'the live-apply cache catches a same-hash replacement');
+    });
+}

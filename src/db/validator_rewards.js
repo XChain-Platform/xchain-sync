@@ -26,6 +26,15 @@
  *
  ********************************************************************/
 
+// An incremental snapshot passes its window's first block. Rows earned at or
+// above it already ride the block-scoped stream, so the snapshot asks only for
+// the backdated rows below it; with no bound no predicate is added.
+function belowEarnBlock(bound, args){
+    if(bound === null || bound === undefined) return "";
+    args.push(bound);
+    return " AND vr.block_index < ?";
+}
+
 module.exports = {
 
     /**
@@ -36,15 +45,18 @@ module.exports = {
      * @param {number} from first block of the window, inclusive
      * @param {number} to   last block of the window, inclusive
      * @param {object} [conn] a connection to read on, when the caller holds one
+     * @param {number} [beforeBlock] only rows whose block_index is below this
      * @returns {Promise<object[]>} the driver's row array
      */
-    async findDerivedValidatorRewards(from, to, conn){
+    async findDerivedValidatorRewards(from, to, conn, beforeBlock){
+        let args = [from, to];
         return await this.doQuery(
             "SELECT vr.* " +
             "FROM validator_rewards vr " +
             "WHERE vr.derive_block_index BETWEEN ? AND ? " +
-            "  AND vr.block_index < vr.derive_block_index",
-            [from, to], conn);
+            "  AND vr.block_index < vr.derive_block_index" +
+            belowEarnBlock(beforeBlock, args),
+            args, conn);
     },
 
     /**
@@ -56,9 +68,11 @@ module.exports = {
      * @param {number} from first applied block of the window, inclusive
      * @param {number} to   last applied block of the window, inclusive
      * @param {object} [conn] a connection to read on, when the caller holds one
+     * @param {number} [beforeBlock] only rows whose block_index is below this
      * @returns {Promise<object[]>} the driver's row array
      */
-    async findRedrivenValidatorRewards(from, to, conn){
+    async findRedrivenValidatorRewards(from, to, conn, beforeBlock){
+        let args = [from, to];
         return await this.doQuery(
             "SELECT vr.* " +
             "FROM validator_rewards vr " +
@@ -69,8 +83,9 @@ module.exports = {
             "JOIN index_pubkeys ip ON ip.id = vr.signing_pubkey_id AND ip.pubkey = rpr.validator_pubkey " +
             "WHERE rpr.applied = 1 AND rpr.applied_block IS NOT NULL " +
             "  AND rpr.applied_block BETWEEN ? AND ? " +
-            "  AND vr.block_index < rpr.applied_block",
-            [from, to], conn);
+            "  AND vr.block_index < rpr.applied_block" +
+            belowEarnBlock(beforeBlock, args),
+            args, conn);
     },
 
     /**

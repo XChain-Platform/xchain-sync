@@ -3249,14 +3249,25 @@ class ClientSync {
         }
     }
 
-    // Swap one table in a transaction under the apply lock. Height blocks ordinary
-    // advancement; generation blocks a rollback and re-apply to the same height.
+    // Swap one table in a transaction under the apply lock. The cursor lags the committed tip
+    // during post-commit checks and before a catch-up finalize, so the stored tip must equal the
+    // repair height with no live check pending; a halt or reorg during the reads stops the swap.
     replaceReplicaStreamTable(table, rows, expectedHeight, expectedGeneration){
-        return this.withApplyLock(async () => {
+        const refuseIfChanged = () => {
+            if(this._halted) throw new Error('replica halted during repair read');
             if(this._reorgGeneration !== expectedGeneration)
                 throw new Error('replica reorged during repair read');
+        };
+        return this.withApplyLock(async () => {
+            refuseIfChanged();
             if(Number(this.lastAppliedBlock) !== Number(expectedHeight))
                 throw new Error('replica advanced during repair read');
+            const storedTip = await this.db.getLastBlock(null, { rethrow: true });
+            refuseIfChanged();
+            if(storedTip === null || Number(storedTip) !== Number(expectedHeight))
+                throw new Error('replica committed tip ' + storedTip + ' is not the repair height ' + expectedHeight);
+            if(this.liveVerifyPendingAtOrBelow(storedTip))
+                throw new Error('a live block\'s post-commit checks are pending during repair');
             await this.db.beginTransaction();
             try {
                 await this.db.deleteAllRows(table);
@@ -4192,10 +4203,10 @@ class ClientSync {
 
         if(blockIndex !== this.lastAppliedBlock || !this.lastHashes) return null;
 
-        // Compare the three chain-of-state hashes because indexer events carry no
-        // block_hash. A mismatch identifies a one-block reorg across a socket drop.
-        // Keep null fields out of the comparison because they do not supply evidence.
-        if(!this.indexerBlockHashesMismatch(event, this.lastHashes)) return null;
+        // Indexer events carry no block_hash, so compare the block row (three hashes, block_time,
+        // state_hash): an action-free replacement hashes the same. A mismatch identifies a
+        // one-block reorg across a socket drop; null fields supply no evidence.
+        if(!this.indexerBlockRowMismatch(event, this.lastHashes)) return null;
 
         // Rewind before catch-up so the orphaned predecessor cannot enter local hash
         // recomputation. Matching duplicates remain silent skips.
@@ -4203,7 +4214,7 @@ class ClientSync {
         // A source's re-delivered forked head claims what its reorg report claims, so it
         // votes through the same gate; an internal re-delivery (no source) rewinds at once.
         getLogger().error('Chain continuity error (indexer): fork at head block ' + blockIndex +
-            '; stored ledger/actions/contract hash != incoming; rewinding the orphaned tip and catching up ' +
+            '; stored block row (hashes, block_time or state_hash) != incoming; rewinding the orphaned tip and catching up ' +
             'once the source quorum agrees');
         if(sourceIndex === undefined || sourceIndex === null) return this.rewindForkedHead(blockIndex);
         return this.handleSourceReorg({ type: 'reorg', block_index: blockIndex }, sourceIndex, true);
@@ -4221,8 +4232,8 @@ class ClientSync {
     }
 
     // A replacement block can carry the same three chained hashes yet differ in the
-    // block row itself, so a below-tip indexer comparison also checks the block time
-    // and the state hash. A null on either side is no evidence.
+    // block row itself, so the head and below-tip indexer comparisons also check the
+    // block time and the state hash. A null on either side is no evidence.
     indexerBlockRowMismatch(event, stored){
         if(this.indexerBlockHashesMismatch(event, stored)) return true;
         if(event.state_hash != null && stored.state_hash != null &&
@@ -5180,10 +5191,14 @@ class ClientSync {
         if(this.dbType === 'decoder'){
             this.lastHashes = { block_hash: event.block_hash };
         } else {
+            // Same row shape getBlockHashRow loads at startup, so the head-duplicate
+            // check sees block_time and state_hash after a live apply too.
             this.lastHashes = {
                 ledger_hash: event.ledger_hash,
                 actions_hash: event.actions_hash,
-                contract_hash: event.contract_hash
+                contract_hash: event.contract_hash,
+                block_time: event.block_time == null ? null : event.block_time,
+                state_hash: event.state_hash == null ? null : event.state_hash
             };
         }
     }
@@ -5212,6 +5227,11 @@ class ClientSync {
                 clearTimeout(timer);
                 this._applyTimers.delete(key);
             }
+        }
+        // A strict hold above the rolled-back tip guards a report from the orphaned branch;
+        // its quorum timer already fired, so nothing else would release it.
+        for(let key of [...this._strictConfirmPending]){
+            if(key > this.lastAppliedBlock) this._strictConfirmPending.delete(key);
         }
     }
 

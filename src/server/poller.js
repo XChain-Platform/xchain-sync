@@ -37,6 +37,7 @@ const { collectRedrivenValidatorRewards } = require('./recovery_rewards');
 const { collectDerivedAnchorRewards } = require('./derived_rewards');
 const { validatorRewardKey } = require('./reward_identity');
 const seedReorgWindow = require('./poller/reorg_window_seed');
+const reorgMarkerCursor = require('./poller/reorg_marker_cursor');
 const {
     rulesFromMarker,
     retroactiveFromRules,
@@ -368,9 +369,11 @@ class ServerPoller {
     }
 
     async initializeReorgMarkerCursor(){
-        if(this.dbType === 'decoder' || typeof this.db.getMaxRowId !== 'function') return;
-        this.lastEventId = await this.readLatestEventId();
-        this.reorgMarkerCursorInitialized = true;
+        await reorgMarkerCursor.initializeReorgMarkerCursor(this, logger);
+    }
+
+    async acknowledgeReorgMarkerCursor(eventId){
+        await reorgMarkerCursor.acknowledgeReorgMarkerCursor(this, eventId);
     }
 
     async readNewReorgMarkers(){
@@ -404,7 +407,7 @@ class ServerPoller {
     async handleReorgMarkers(){
         let { markers, newestEventId } = await this.readNewReorgMarkers();
         if(markers.length === 0){
-            this.lastEventId = newestEventId;
+            await this.acknowledgeReorgMarkerCursor(newestEventId);
             return false;
         }
 
@@ -418,7 +421,7 @@ class ServerPoller {
         }
 
         if(forkBlock > this.lastPolledBlock){
-            this.lastEventId = newestEventId;
+            await this.acknowledgeReorgMarkerCursor(newestEventId);
             return false;
         }
 
@@ -428,11 +431,11 @@ class ServerPoller {
             await this.transparencyLog.pruneFrom(forkBlock);
         this.broadcastReorg(forkBlock);
         this.lastPolledBlock = forkBlock - 1;
-        this.lastEventId = newestEventId;
         this.lastPolledBlockHash = this.recentBroadcastHashes.has(this.lastPolledBlock)
             ? this.recentBroadcastHashes.get(this.lastPolledBlock)
             : await this.sourceBlockHash(this.lastPolledBlock);
         await this.updateStatus();
+        await this.acknowledgeReorgMarkerCursor(newestEventId);
         return true;
     }
 

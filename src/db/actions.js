@@ -237,4 +237,16 @@ module.exports = {
             [sinceBlock], conn);
     },
 
+    streamEmissionRowsFromBlock(sinceBlock, conn){
+        return conn.queryStream(
+            "SELECT em.execution_index, em.emitted_action, em.action_index, em.position " +
+            "FROM `contract_emissions` em " +
+            "INNER JOIN contract_executions ce ON (ce.action_index = em.execution_index) " +
+            "INNER JOIN actions a ON (a.action_index = ce.action_index) " +
+            "WHERE a.block_index >= ? " +
+            "ORDER BY em.execution_index ASC, em.position ASC",
+            [sinceBlock]
+        );
+    },
+
 };

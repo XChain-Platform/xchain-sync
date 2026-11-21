@@ -292,4 +292,33 @@ describe('ClientSync: source reorgs need the block quorum @regression', function
     registerEvictionAndScopeCases();
     registerEvictedHeldCases();
     registerHaltAndInternalCases();
+    registerStrictHoldPruneCases();
 });
+
+function registerStrictHoldPruneCases(){
+    it('releases a strict hold above the tip when an agreed head rewind rolls back below it', async function(){
+        let { sync, rollback } = makeSync({ HASH_CONFIRM_STRICT: true });
+        await sync.handleBlock({ type: 'block', block_index: 101,
+            ledger_hash: 'lhN', actions_hash: 'ahN', contract_hash: 'chN' }, 0);
+        await pastTimeout(sync);
+        assert.strictEqual(sync._strictConfirmPending.has(101), true, 'a lone report at the timeout is held');
+        await sync.handleBlock(forkedBlockEvent(100), 0);
+        await sync.handleBlock(forkedBlockEvent(100), 1);
+        assert.strictEqual(rollback.rollback.calledOnceWith(100), true);
+        assert.strictEqual(sync.lastAppliedBlock, 99);
+        assert.strictEqual(sync._strictConfirmPending.has(101), false, 'the orphaned-branch hold is released');
+        assert.strictEqual(sync.incrementalCatchUpBlocked(100), false, 'the rewind catch-up is not refused');
+        assert.strictEqual(sync.incrementalCatchUp.calledOnceWith(100), true);
+    });
+
+    it('keeps a strict hold at or below the rolled-back tip', async function(){
+        let { sync, rollback } = makeSync({ HASH_CONFIRM_STRICT: true });
+        sync._strictConfirmPending.add(96);
+        sync._strictConfirmPending.add(101);
+        await sync.handleReorg(reorgEvent(97));
+        assert.strictEqual(rollback.rollback.calledOnceWith(97), true);
+        assert.strictEqual(sync.lastAppliedBlock, 96);
+        assert.deepStrictEqual([...sync._strictConfirmPending], [96]);
+        assert.strictEqual(sync.incrementalCatchUpBlocked(97), true, 'a hold at the tip still gates catch-up');
+    });
+}

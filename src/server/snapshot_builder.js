@@ -29,7 +29,7 @@ const { isSchemaGapError } = require('../db/tables/schema_gap');
 const envConfig = require('../config');
 const replicatedTables = require('../schema/replicated_tables');
 const tableLifecycle = require('../table_lifecycle');
-const { collectMaturedCooldownCredits, collectMaturedCooldownEscrows, mergeMaturedRows } = require('./cooldown_credits');
+const { collectMaturedCooldownCredits, collectMaturedCooldownEscrows, ledgerRowKey, mergeMaturedRows } = require('./cooldown_credits');
 const { collectRedrivenValidatorRewards } = require('./recovery_rewards');
 const { collectDerivedAnchorRewards } = require('./derived_rewards');
 const { validatorRewardKey } = require('./reward_identity');
@@ -136,26 +136,43 @@ class SnapshotBuilder {
     // scoping sets built by streamIncrementalSnapshotLocked.
     async selectIncrementalRows(db, table, ctx){
         const { dbType, sinceBlock, lastBlock, conn } = ctx;
-        let rows = (dbType === 'decoder')
+        const selection = (dbType === 'decoder')
             ? await this.selectDecoderRows(db, table, ctx)
             : await this.selectIndexerRows(db, table, ctx);
-        if(rows === null) return null;
+        if(selection === null) return null;
+
+        // Preserve the array result for direct callers. The snapshot path uses
+        // a {open|rows, extras, dedupeKey} selection instead: the side sets are
+        // read first and the base stream opens only when the writer consumes it,
+        // because a paused stream holds the snapshot connection and any query
+        // queued behind it would never return. Each side set asks only for rows
+        // below the base window, since every row at or above it already streams.
+        if(Array.isArray(selection)){
+            let rows = selection;
+            if(dbType === 'indexer' && (table === 'credits' || table === 'escrows'))
+                rows = await this.mergeMaturedCooldownRows(db, table, rows, sinceBlock, lastBlock, conn);
+            if(dbType === 'indexer' && table === 'validator_rewards')
+                rows = await this.mergeValidatorRewardRows(db, rows, sinceBlock, lastBlock, conn);
+            return rows;
+        }
 
         if(dbType === 'indexer' && (table === 'credits' || table === 'escrows')){
-            rows = await this.mergeMaturedCooldownRows(db, table, rows, sinceBlock, lastBlock, conn);
+            selection.extras = await this.collectMaturedCooldownRows(db, table, sinceBlock, lastBlock, conn, ctx.firstActionIndex);
+            selection.dedupeKey = ledgerRowKey;
         }
         if(dbType === 'indexer' && table === 'validator_rewards'){
-            rows = await this.mergeValidatorRewardRows(db, rows, sinceBlock, lastBlock, conn);
+            selection.extras = await this.collectValidatorRewardRows(db, sinceBlock, lastBlock, conn);
+            selection.dedupeKey = validatorRewardKey;
         }
-        return rows;
+        return selection;
     }
 
     async selectDecoderRows(db, table, ctx){
         const { sinceBlock, conn, skipLookups, lookupSet, decoderSkip, decoderBlockScoped,
                 decoderTxScoped, decoderFullDump } = ctx;
         if(decoderSkip.has(table)) return null;
-        if(decoderBlockScoped.has(table)) return db.findRowsFromBlockIndex(table, sinceBlock, conn);
-        if(decoderTxScoped.has(table)) return db.findTxScopedRowsFromBlock(table, sinceBlock, conn);
+        if(decoderBlockScoped.has(table)) return { open: () => db.streamRowsFromBlockIndex(table, sinceBlock, conn) };
+        if(decoderTxScoped.has(table)) return { open: () => db.streamTxScopedRowsFromBlock(table, sinceBlock, conn) };
         if(decoderFullDump.has(table)){
             if(skipLookups && lookupSet.has(table)) return null;
             return db.findAllRows(table, conn);
@@ -171,15 +188,15 @@ class SnapshotBuilder {
             // keyed by another column raises errno 1054, which this loop's
             // catch tolerates as an older source schema and skips forever.
             let key = tableLifecycle.blockKey(table);
-            return db.findRowsFromBlockKey(table, key, sinceBlock, conn);
+            return { open: () => db.streamRowsFromBlockKey(table, key, sinceBlock, conn) };
         }
         if(indexerFullDump.has(table)){
             if(skipLookups && lookupSet.has(table)) return null;
             return db.findAllRows(table, conn);
         }
         if(INDEXER_INCREMENTAL_SKIP.has(table)) return null;
-        if(table === 'contract_emissions') return this.selectEmissionRows(db, sinceBlock, conn);
-        if(firstActionIndex !== null) return this.selectActionScopedRows(db, table, firstActionIndex, conn);
+        if(table === 'contract_emissions') return { open: () => db.streamEmissionRowsFromBlock(sinceBlock, conn) };
+        if(firstActionIndex !== null) return { open: () => db.streamRowsFromActionIndex(table, firstActionIndex, conn) };
         if(table === 'credits' || table === 'escrows'){
             // firstActionIndex is null: a catch-up window with zero actions.
             // The action-scoped base query would be empty, but the matured-
@@ -191,7 +208,7 @@ class SnapshotBuilder {
             // ships the backdated refund credit and its escrow release; without
             // this the follower receives the updated_rows status flip but not
             // the ledger rows and its balances silently diverge over quiet windows.
-            return [];
+            return { rows: [] };
         }
         return null;
     }
@@ -213,32 +230,14 @@ class SnapshotBuilder {
     // stream never carries it, so the follower's sequence is already offset
     // from the source's), and shipping the source's id into a plain INSERT is
     // the ER_DUP_ENTRY freeze that ClientApplier.localSurrogateIdTables
-    // documents.
-    async selectEmissionRows(db, sinceBlock, conn){
-        try {
-            return await db.findEmissionRowsFromBlock(sinceBlock, conn);
-        } catch(e){
-            // Swallow ONLY a genuine schema gap on an older source (1146
-            // missing table / 1054 missing column), propagate anything transient.
-            if(!isSchemaGapError(e)) throw e;
-            return null;
-        }
-    }
-
-    async selectActionScopedRows(db, table, firstActionIndex, conn){
-        try {
-            return await db.findRowsFromActionIndex(table, firstActionIndex, conn);
-        } catch(e){
-            // Swallow ONLY a genuine schema gap (1146 missing table /
-            // 1054 missing action_index column on an older source);
-            // skip the table for incremental. A transient/operational
-            // error (deadlock 1213, lock-wait 1205, connection drop)
-            // must propagate so the stream aborts rather than silently
-            // omitting the table's window (matches ClientRollback).
-            if(!isSchemaGapError(e)) throw e;
-            return null;
-        }
-    }
+    // documents (db.streamEmissionRowsFromBlock).
+    //
+    // A schema gap on any streamed read (1146 missing table / 1054 missing
+    // column on an older source) surfaces as the stream's first error, before
+    // the table header is written, and tolerateIncrementalTableError skips the
+    // table. A transient fault (deadlock 1213, lock-wait 1205, connection
+    // drop) propagates so the response aborts rather than silently omitting
+    // the table's window (matches ClientRollback).
 
     // Cooldown-maturity refund credits reuse the unstake's earlier-block
     // action_index (and carry no block_index), so they sit below the
@@ -266,6 +265,17 @@ class SnapshotBuilder {
             // credits from the catch-up payload (mirrors ClientRollback).
             if(!isSchemaGapError(e)) throw e;
             return rows;
+        }
+    }
+
+    async collectMaturedCooldownRows(db, table, sinceBlock, lastBlock, conn, beforeActionIndex){
+        try {
+            return (table === 'credits')
+                ? await collectMaturedCooldownCredits(db, sinceBlock, lastBlock, conn, beforeActionIndex)
+                : await collectMaturedCooldownEscrows(db, sinceBlock, lastBlock, conn, beforeActionIndex);
+        } catch(e){
+            if(!isSchemaGapError(e)) throw e;
+            return [];
         }
     }
 
@@ -297,6 +307,22 @@ class SnapshotBuilder {
                     rows = rows || [];
                     appendNewRewardRows(rows, extra);
                 }
+            } catch(e){
+                if(!isSchemaGapError(e)) throw e;
+            }
+        }
+        return rows;
+    }
+
+    async collectValidatorRewardRows(db, sinceBlock, lastBlock, conn){
+        const rows = [];
+        const channels = [
+            () => collectRedrivenValidatorRewards(db, sinceBlock, lastBlock, conn, sinceBlock),
+            () => collectDerivedAnchorRewards(db, sinceBlock, lastBlock, conn, sinceBlock),
+        ];
+        for(const collect of channels){
+            try {
+                appendNewRewardRows(rows, await collect());
             } catch(e){
                 if(!isSchemaGapError(e)) throw e;
             }

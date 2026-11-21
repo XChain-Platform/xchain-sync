@@ -252,17 +252,19 @@ function seedEnvKey(chain, network) {
     return 'CHECKPOINT_SEED_' + String(chain).toUpperCase() + '_' + String(network).toUpperCase();
 }
 
-// Parse + lightly validate an env-supplied seed checkpoint into { seed, error }, the
-// same absent-versus-invalid split as parseValidatorSetEnv. state_root is the field
-// the forward walk anchors successor-set proofs to, so it is required and a string.
+// Parse an env seed checkpoint into { seed, error }, split like parseValidatorSetEnv. It is
+// matched by exact height against CHAR(64) hex roots, so a fractional height or non-hex root
+// is refused here, naming the typo at startup instead of an unanchored wait or quorum halt.
 function parseSeedEnv(raw) {
     let cp;
     try { cp = JSON.parse(raw); } catch (e) { return { seed: null, error: 'is not valid JSON (' + e.message + ')' }; }
     if (!cp || typeof cp !== 'object' || Array.isArray(cp)) return { seed: null, error: 'is not a JSON object' };
-    if (typeof cp.state_root !== 'string' || !cp.state_root) return { seed: null, error: 'has no non-empty string `state_root`' };
+    if (typeof cp.state_root !== 'string' || !HEX64.test(cp.state_root)) return { seed: null, error: 'has no 64-hex `state_root`' };
+    if (cp.block_merkle_root != null && (typeof cp.block_merkle_root !== 'string' || !HEX64.test(cp.block_merkle_root)))
+        return { seed: null, error: 'has a `block_merkle_root` that is not 64-hex' };
     for (const f of ['block_index', 'snapshot_block']) {
-        if (typeof cp[f] !== 'number' || !Number.isFinite(cp[f]) || cp[f] < 0)
-            return { seed: null, error: 'has no finite non-negative number `' + f + '`' };
+        if (!Number.isSafeInteger(cp[f]) || cp[f] < 0)
+            return { seed: null, error: 'has no non-negative integer `' + f + '`' };
     }
     return { seed: cp, error: null };
 }

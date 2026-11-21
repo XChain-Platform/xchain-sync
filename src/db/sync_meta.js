@@ -184,4 +184,15 @@ module.exports = {
         return await this.doQuery(query, [limit, offset]);
     },
 
+    // The lowest indexer REORG marker id stamped at or after the newest recorded
+    // block, or null. Strict, so a failed read is never taken for "no marker". Both
+    // DATETIME stamps are written by UTC-pinned sessions and compare column to column.
+    async findReorgMarkerSinceLastRecord(){
+        let rows = await this.doQueryStrict(
+            `SELECT MIN(e.id) AS id FROM events e
+             WHERE e.code = 'REORG' AND e.time >= (SELECT MAX(m.logged_at) FROM sync_meta m)`, []
+        );
+        return (rows && rows.length && rows[0].id != null) ? Number(rows[0].id) : null;
+    },
+
 };

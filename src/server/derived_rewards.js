@@ -70,7 +70,9 @@ const { validatorRewardKey } = require('./reward_identity');
 // (source_id, signing_pubkey_id, reward_type, round_reference, round_qualifier). `db` must be an
 // indexer-dbType Database (callers gate that), and passing `conn` lets a snapshot's
 // REPEATABLE READ view read these at the same height as the rest of its payload.
-async function collectDerivedAnchorRewards(db, fromBlock, toBlock, conn){
+// `beforeBlock`, when given, keeps only rows earned below it: a snapshot's
+// block-scoped stream already carries every row at or above its first block.
+async function collectDerivedAnchorRewards(db, fromBlock, toBlock, conn, beforeBlock){
     let from = Number(fromBlock);
     let to   = Number(toBlock);
 
@@ -91,7 +93,7 @@ async function collectDerivedAnchorRewards(db, fromBlock, toBlock, conn){
         // narrower projection drops `id`, the AUTO_INCREMENT PK, so a derived-only or
         // mixed batch would let the replica mint its own diverging id, invisible to the
         // count-only parity check and later swallowed by INSERT IGNORE on PK collision.
-        let rows = await db.findDerivedValidatorRewards(from, to, conn);
+        let rows = await db.findDerivedValidatorRewards(from, to, conn, beforeBlock);
         // round_qualifier closes the key. The archive leg's round_reference is
         // MATCH_BATCH_SEQ, a dense hub counter a rebase reissues, so two genuinely distinct
         // archive rewards can share the four older columns; on the four-column key the

@@ -54,6 +54,7 @@ function registerFakeReplica(){
         db.getTableCount = sinon.stub().callsFake(async (table) => (local[table] || []).length);
         db.setSyncState = sinon.stub().resolves();
         db.getSyncState = sinon.stub().resolves(null);
+        db.getLastBlock = sinon.stub().resolves(100);
         db.beginTransaction = sinon.stub().resolves();
         db.commitTransaction = sinon.stub().resolves(true);
         db.rollbackTransaction = sinon.stub().resolves();
@@ -150,6 +151,53 @@ function registerGuardTests(){
         assert.strictEqual(db.deleteAllRows.called, false);
         assert.strictEqual(local.mappings_actions.length, 1186);
         assert.match(lines(console.error), /Stream-table repair pass failed .*reorged during repair read/);
+    });
+}
+
+// Two sweeps reach the repair; the replica rows must survive and the refusal be logged.
+async function assertRepairRefused(pattern){
+    await sweep(sourceCounts());
+    await sweep(sourceCounts());
+    assert.strictEqual(db.deleteAllRows.called, false);
+    assert.strictEqual(local.mappings_actions.length, 1186);
+    assert.match(lines(console.error), pattern);
+}
+
+function registerCommittedTipGuardTests(){
+    it('refuses the replace when the stored tip is ahead of the lagging cursor @regression', async function(){
+        db.getLastBlock.resolves(101);
+        await assertRepairRefused(/Stream-table repair pass failed .*committed tip 101 is not the repair height 100/);
+    });
+
+    it('refuses the replace while a live block\'s post-commit checks are pending @regression', async function(){
+        sync.markLiveVerify(100, 1);
+        await assertRepairRefused(/Stream-table repair pass failed .*post-commit checks are pending/);
+        sync.markLiveVerify(100, -1);
+    });
+
+    it('refuses the replace when a halt lands during the repair download @regression', async function(){
+        sync.downloadRepairTable.callsFake(async () => {
+            sync._halted = { reason: 'test-halt', blockIndex: 100 };
+            return { block_height: 100, rows: SOURCE_ROWS.slice() };
+        });
+        try {
+            await assertRepairRefused(/Stream-table repair pass failed .*halted during repair read/);
+        } finally { sync._halted = null; }
+    });
+
+    it('refuses the replace when a halt lands during the in-lock tip read @regression', async function(){
+        db.getLastBlock.callsFake(async () => {
+            sync._halted = { reason: 'test-halt', blockIndex: 100 };
+            return 100;
+        });
+        try {
+            await assertRepairRefused(/Stream-table repair pass failed .*halted during repair read/);
+        } finally { sync._halted = null; }
+    });
+
+    it('refuses the replace when the stored tip cannot be read @regression', async function(){
+        db.getLastBlock.rejects(new Error('db down'));
+        await assertRepairRefused(/Stream-table repair pass failed .*db down/);
     });
 }
 
@@ -258,6 +306,7 @@ describe('ClientSync', function(){
         registerFakeReplica();
         registerRepairTests();
         registerGuardTests();
+        registerCommittedTipGuardTests();
         registerLegacySnapshotSchemaTests();
         registerRepairRouteTests();
         registerRegistryTests();
