@@ -25,12 +25,9 @@ function selectCtx(){
     };
 }
 
-describe('SnapshotBuilder incremental window streaming', function(){
-    let builder;
-    beforeEach(function(){ builder = new SnapshotBuilder(new Utility()); });
-    afterEach(function(){ sinon.restore(); });
-
+function registerIncrementalStreamTests(getBuilder){
     it('writes the first window row before the database stream finishes', async function(){
+        const builder = getBuilder();
         const release = deferred();
         const firstWritten = deferred();
         let sourceFinished = false;
@@ -53,6 +50,7 @@ describe('SnapshotBuilder incremental window streaming', function(){
     });
 
     it('keeps base order and appends only unseen merge rows', async function(){
+        const builder = getBuilder();
         const chunks = [];
         const writer = { write: async chunk => { chunks.push(chunk); } };
         const selection = {
@@ -64,8 +62,11 @@ describe('SnapshotBuilder incremental window streaming', function(){
         assert.strictEqual(await builder.writeIncrementalTableRows(writer, 'rows', selection, true), false);
         assert.deepStrictEqual(JSON.parse('{' + chunks.join('') + '}').rows, [{ id: 1 }, { id: 2 }, { id: 3 }]);
     });
+}
 
+function registerIncrementalGapTests(getBuilder){
     it('omits a schema-gap table when its stream fails before the first row', async function(){
+        const builder = getBuilder();
         const gap = Object.assign(new Error('missing table'), { errno: 1146 });
         const stream = Readable.from((async function*(){ throw gap; })());
         sinon.stub(builder, 'selectIncrementalRows').resolves({ stream });
@@ -79,6 +80,7 @@ describe('SnapshotBuilder incremental window streaming', function(){
     });
 
     it('rejects a schema-gap fault after the table header and first row', async function(){
+        const builder = getBuilder();
         const gap = Object.assign(new Error('missing column'), { errno: 1054 });
         const stream = Readable.from((async function*(){ yield { id: 1 }; throw gap; })());
         sinon.stub(builder, 'selectIncrementalRows').resolves({ stream });
@@ -92,6 +94,14 @@ describe('SnapshotBuilder incremental window streaming', function(){
         assert.ok(writer.write.calledWith('"actions":['), 'table header was written before failure');
         assert.strictEqual(writer.write.calledWith(']'), false, 'truncated table is never closed as valid JSON');
     });
+}
+
+describe('SnapshotBuilder incremental window streaming', function(){
+    let builder;
+    beforeEach(function(){ builder = new SnapshotBuilder(new Utility()); });
+    afterEach(function(){ sinon.restore(); });
+    registerIncrementalStreamTests(() => builder);
+    registerIncrementalGapTests(() => builder);
 });
 
 const vr = (block_index, source_id, round_reference) => ({
@@ -134,11 +144,9 @@ async function legacyTable(builder, fx, db, table, ctx){
     return rows && rows.length ? JSON.parse(JSON.stringify(rows)) : undefined;
 }
 
-describe('SnapshotBuilder incremental window side sets', function(){
-    let builder;
-    beforeEach(function(){ builder = new SnapshotBuilder(new Utility()); });
-
+function registerSideSetReadTests(getBuilder){
     it('reads every side set before opening the base stream on the snapshot connection', async function(){
+        const builder = getBuilder();
         for(const table of ['credits', 'escrows', 'validator_rewards']){
             const { db, conn, calls } = windowFakeDb(windowFixture());
             await streamedTable(builder, db, table, windowCtx(conn, 100, 10));
@@ -149,6 +157,7 @@ describe('SnapshotBuilder incremental window side sets', function(){
     });
 
     it('bounds every side-set read below the base window', async function(){
+        const builder = getBuilder();
         const { db, conn, calls } = windowFakeDb(windowFixture());
         await streamedTable(builder, db, 'credits', windowCtx(conn, 100, 10));
         await streamedTable(builder, db, 'validator_rewards', windowCtx(conn, 100, 10));
@@ -163,7 +172,9 @@ describe('SnapshotBuilder incremental window side sets', function(){
             assert.strictEqual(c.args[c.args.length - 1], 100);
         }
     });
+}
 
+function registerSideSetMergeTests(getBuilder){
     it('leaves the per-block collector SQL unbounded when no bound is passed', async function(){
         const { db, calls } = windowFakeDb(windowFixture());
         await collectMaturedCooldownCredits(db, 5, 5);
@@ -174,6 +185,7 @@ describe('SnapshotBuilder incremental window side sets', function(){
     });
 
     it('streams the same rows the legacy array merge produced', async function(){
+        const builder = getBuilder();
         const cases = [['credits', 10], ['escrows', 10], ['validator_rewards', 10], ['credits', null], ['escrows', null]];
         for(const [table, firstActionIndex] of cases){
             const fx = windowFixture();
@@ -186,6 +198,7 @@ describe('SnapshotBuilder incremental window side sets', function(){
     });
 
     it('frees the snapshot connection when the client aborts mid-table', async function(){
+        const builder = getBuilder();
         const { db, conn } = windowFakeDb(windowFixture());
         const selection = await builder.selectIncrementalRows(db, 'credits', windowCtx(conn, 100, 10));
         const abort = Object.assign(new Error('client gone'), { aborted: true });
@@ -196,8 +209,11 @@ describe('SnapshotBuilder incremental window side sets', function(){
         assert.strictEqual(conn.held(), false, 'abandoned stream released the connection');
         await db.doQuery('ROLLBACK', [], conn);
     });
+}
 
+function registerResidentWindowTest(getBuilder){
     async function maxResident(rowCount){
+        const builder = getBuilder();
         let yielded = 0;
         let written = 0;
         let peak = 0;
@@ -220,4 +236,12 @@ describe('SnapshotBuilder incremental window side sets', function(){
         assert.ok(small <= 20, 'small window resident rows ' + small);
         assert.ok(large <= small + 1, 'large window resident rows ' + large + ' vs ' + small);
     });
+}
+
+describe('SnapshotBuilder incremental window side sets', function(){
+    let builder;
+    beforeEach(function(){ builder = new SnapshotBuilder(new Utility()); });
+    registerSideSetReadTests(() => builder);
+    registerSideSetMergeTests(() => builder);
+    registerResidentWindowTest(() => builder);
 });
