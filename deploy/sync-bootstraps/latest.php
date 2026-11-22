@@ -42,8 +42,8 @@ if (!preg_match('#^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$#', $dir)
 }
 
 // A quarantine directory holds archives an operator set aside on purpose; they
-// are not published, so no latest.tgz resolves inside one at any depth. The
-// browse page and the refresh-status check skip the same directories.
+// are not published, so neither the requested path nor its resolved target may
+// run through one. The browse page and refresh-status check use the same rule.
 if (in_array('quarantine', explode('/', $dir), true)) {
     http_response_code(404);
     header('Content-Type: text/plain');
@@ -54,6 +54,13 @@ $target = realpath($base . '/' . $dir);
 if ($target === false
     || strpos($target, $base . DIRECTORY_SEPARATOR) !== 0
     || !is_dir($target)) {
+    http_response_code(404);
+    header('Content-Type: text/plain');
+    exit("Not found\n");
+}
+
+$resolved_dir = substr($target, strlen($base . DIRECTORY_SEPARATOR));
+if (in_array('quarantine', explode(DIRECTORY_SEPARATOR, $resolved_dir), true)) {
     http_response_code(404);
     header('Content-Type: text/plain');
     exit("Not found\n");
