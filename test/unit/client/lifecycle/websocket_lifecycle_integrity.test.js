@@ -57,8 +57,13 @@ describe('ClientSync WebSocket lifecycle integrity @regression', function(){
         sync['_sourcesNeedingRecovery'].add(0);
         sinon.stub(sync, 'armStreamWatchdog');
         sinon.stub(sync, 'incrementalCatchUp').resolves();
+        sinon.stub(sync, 'handleEvent').resolves();
 
         sync.handleWebSocketOpen('http://a:3006', 0, ws);
+        sync.handleWebSocketMessage(
+            Buffer.from(JSON.stringify({ type: 'status', block_height: 10, source_block_height: 10 })),
+            'http://a:3006', 0, ws,
+        );
         await Promise.resolve();
         await Promise.resolve();
 

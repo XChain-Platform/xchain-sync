@@ -17,7 +17,7 @@
  * Two loops retry a sync source that has gone away: the WebSocket reconnect
  * after a close, and the status check behind a stream that stays open but
  * silent. Both back off (doubling to a 60 s cap, starting over once the source
- * answers) and log only when an outage starts, once per summary window while
+ * delivers a valid stream event) and log only when an outage starts, once per summary window while
  * it lasts, and when it ends. Pacing changes nothing about what is applied:
  * a reconnect still resumes after the committed tip.
  *
@@ -77,7 +77,7 @@ module.exports = {
         return delay;
     },
 
-    // A connect landed: the reconnect backoff starts over and an outage gets its closing line.
+    // A valid stream event landed: the backoff starts over and the outage gets its closing line.
     sourceReconnected(sourceIndex){
         const state = this.sourceRetry(sourceIndex);
         state.reconnects = 0;

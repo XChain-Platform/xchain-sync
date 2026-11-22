@@ -75,6 +75,10 @@ const FINDERS = {
     credits: { capability: 'findMaturedCapabilityCooldownCredits', contract: 'findMaturedContractCooldownCredits' },
     escrows: { capability: 'findMaturedCapabilityCooldownEscrows', contract: 'findMaturedContractCooldownEscrows' },
 };
+const DEFERRED_FINDERS = {
+    credits: { capability: 'findDeferredCapabilityCooldownCredits', contract: 'findDeferredContractCooldownCredits' },
+    escrows: { capability: 'findDeferredCapabilityCooldownEscrows', contract: 'findDeferredContractCooldownEscrows' },
+};
 
 // The logical identity of a backdated ledger row (credits and escrows have no
 // unique key, so every dedup here is explicit and keys on this triple).
@@ -156,6 +160,34 @@ async function collectMaturedCooldownEscrows(db, fromBlock, toBlock, conn, befor
     return await collectMatured('escrows', db, fromBlock, toBlock, conn, beforeActionIndex);
 }
 
+async function collectDeferredCooldownRows(kind, db, blockIndex, conn){
+    const finders = DEFERRED_FINDERS[kind];
+    const completedStatusId = await db.getStatusId('completed', { rethrow: true });
+    if(completedStatusId === null || completedStatusId === undefined) return [];
+    const acc = new Map();
+    const add = rows => (rows || []).forEach(row => acc.set(ledgerRowKey(row), row));
+    const gasTick = gasTickSymbol();
+    if(gasTick){
+        try {
+            add(await db[finders.capability](gasTick, completedStatusId, blockIndex, conn));
+        } catch(e){
+            if(!isSchemaGapError(e)) throw e;
+        }
+    }
+    try {
+        add(await db[finders.contract](completedStatusId, blockIndex, conn));
+    } catch(e){
+        if(!isSchemaGapError(e)) throw e;
+    }
+    return Array.from(acc.values());
+}
+
+function stripDeferredRows(rows, deferred){
+    if(!rows || rows.length === 0 || !deferred || deferred.length === 0) return rows;
+    const stripped = new Set(deferred.map(ledgerRowKey));
+    return rows.filter(row => !stripped.has(ledgerRowKey(row)));
+}
+
 // Append `matured` rows to a payload's `rows` for the same table, skipping any
 // identity already there; returns `rows` unchanged when there is nothing to add,
 // so a payload never gains an empty table entry it did not have.
@@ -170,4 +202,11 @@ function mergeMaturedRows(rows, matured){
     return out;
 }
 
-module.exports = { collectMaturedCooldownCredits, collectMaturedCooldownEscrows, ledgerRowKey, mergeMaturedRows };
+module.exports = {
+    collectMaturedCooldownCredits,
+    collectMaturedCooldownEscrows,
+    collectDeferredCooldownRows,
+    stripDeferredRows,
+    ledgerRowKey,
+    mergeMaturedRows
+};

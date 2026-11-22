@@ -39,6 +39,46 @@ function belowActionIndex(alias, bound, args){
 
 module.exports = {
 
+    async findDeferredCapabilityCooldownCredits(gasTick, completedStatusId, blockIndex, conn){
+        return await this.doQuery(
+            "SELECT c.* FROM credits c " +
+            "JOIN unstakes u ON u.action_index = c.action_index AND u.source_id = c.address_id " +
+            "JOIN actions a ON a.action_index = u.action_index " +
+            "JOIN index_tickers g ON g.id = c.tick_id AND g.tick = ? " +
+            "WHERE u.status_id = ? AND a.block_index = ? AND u.cooldown_end_block > ?",
+            [gasTick, completedStatusId, blockIndex, blockIndex], conn);
+    },
+
+    async findDeferredContractCooldownCredits(completedStatusId, blockIndex, conn){
+        return await this.doQuery(
+            "SELECT c.* FROM credits c " +
+            "JOIN contract_unstakes cu ON cu.action_index = c.action_index AND cu.source_id = c.address_id AND cu.tick_id = c.tick_id " +
+            "JOIN actions a ON a.action_index = cu.action_index " +
+            "WHERE cu.status_id = ? AND a.block_index = ? AND cu.cooldown_end_block > ?",
+            [completedStatusId, blockIndex, blockIndex], conn);
+    },
+
+    async findDeferredCapabilityCooldownEscrows(gasTick, completedStatusId, blockIndex, conn){
+        return await this.doQuery(
+            "SELECT e.* FROM escrows e " +
+            "JOIN unstakes u ON u.action_index = e.action_index AND u.source_id = e.address_id " +
+            "JOIN actions a ON a.action_index = u.action_index " +
+            "JOIN index_tickers g ON g.id = e.tick_id AND g.tick = ? " +
+            "WHERE u.status_id = ? AND a.block_index = ? AND u.cooldown_end_block > ? " +
+            "AND CAST(e.amount AS DECIMAL(60,18)) < 0",
+            [gasTick, completedStatusId, blockIndex, blockIndex], conn);
+    },
+
+    async findDeferredContractCooldownEscrows(completedStatusId, blockIndex, conn){
+        return await this.doQuery(
+            "SELECT e.* FROM escrows e " +
+            "JOIN contract_unstakes cu ON cu.action_index = e.action_index AND cu.source_id = e.address_id AND cu.tick_id = e.tick_id " +
+            "JOIN actions a ON a.action_index = cu.action_index " +
+            "WHERE cu.status_id = ? AND a.block_index = ? AND cu.cooldown_end_block > ? " +
+            "AND CAST(e.amount AS DECIMAL(60,18)) < 0",
+            [completedStatusId, blockIndex, blockIndex], conn);
+    },
+
     /**
      * Refund credits for capability unstakes whose cooldown matured in this
      * window. A capability refund is paid in GAS, so the tick is matched by

@@ -35,14 +35,16 @@ function refusal(){
 // A fake origin: while down, every new socket errors and closes once its
 // handlers are on (a microtask, so the refusal takes no fake-clock time).
 function loadClientSync(get){
-    const origin = { up: true, sockets: [] };
+    const origin = { up: true, acceptThenClose: false, sockets: [] };
     function FakeWebSocket(){
         const ws = new EventEmitter();
         ws.close = sinon.stub();
         ws.terminate = sinon.stub();
         ws.createdAt = Date.now();
         origin.sockets.push(ws);
-        if(!origin.up){
+        if(origin.acceptThenClose){
+            Promise.resolve().then(() => { ws.emit('open'); ws.emit('close'); });
+        } else if(!origin.up){
             Promise.resolve().then(() => { ws.emit('error', refusal()); ws.emit('close'); });
         }
         return ws;
@@ -120,8 +122,10 @@ async function reconnectsWithBackoff(clock){
     assert.strictEqual(origin.sockets.length, before + 1);
     const live = origin.sockets[origin.sockets.length - 1];
     live.emit('open');
+    sendStatus(live, 10);
     await clock.tickAsync(0);
-    assert.ok(sync.incrementalCatchUp.calledOnceWithExactly(11));
+    assert.strictEqual(sync.incrementalCatchUp.callCount, 1, JSON.stringify(sync.incrementalCatchUp.args));
+    assert.deepStrictEqual(sync.incrementalCatchUp.firstCall.args, [11]);
     assert.ok(logLines().some(l => l.includes('available again')), 'the recovery is logged once');
 
     origin.up = false;
@@ -165,6 +169,7 @@ async function staleChecksBackOffWhileUnreachable(clock){
     const next = origin.sockets[origin.sockets.length - 1];
     assert.notStrictEqual(next, ws);
     next.emit('open');
+    sendStatus(next, 10);
     await clock.tickAsync(0);
     assert.ok(sync.incrementalCatchUp.calledOnceWithExactly(11));
     sync.stop();
@@ -200,6 +205,31 @@ async function staleChecksBackOffWhileTipIsFlat(clock){
     sync.stop();
 }
 
+async function acceptedSocketsStillBackOff(clock){
+    const { ClientSync, origin } = loadClientSync(sinon.stub());
+    const sync = makeSync(ClientSync);
+    origin.acceptThenClose = true;
+    sync.connectWebSocket(SOURCE, 0);
+    await clock.tickAsync(TEN_MINUTES);
+
+    const attempts = origin.sockets.map(ws => ws.createdAt);
+    const delays = gaps(attempts);
+    assert.deepStrictEqual(delays.slice(0, EXPECTED_GAPS.length), EXPECTED_GAPS);
+    assert.ok(delays.slice(EXPECTED_GAPS.length).every(delay => delay === 60000));
+    assert.strictEqual(sync.incrementalCatchUp.called, false);
+    assert.strictEqual(sync['_sourcesNeedingRecovery'].has(0), true);
+    assert.strictEqual(logLines().some(line => line.includes('available again')), false);
+
+    origin.acceptThenClose = false;
+    await clock.tickAsync(60000);
+    const live = origin.sockets[origin.sockets.length - 1];
+    live.emit('open');
+    sendStatus(live, 10);
+    await clock.tickAsync(0);
+    assert.ok(sync.incrementalCatchUp.calledOnceWithExactly(11));
+    sync.stop();
+}
+
 describe('ClientSync source outage backoff @regression', function(){
     let clock;
     beforeEach(function(){
@@ -209,6 +239,7 @@ describe('ClientSync source outage backoff @regression', function(){
     afterEach(function(){ clock.restore(); sinon.restore(); });
 
     it('reconnects to a closed origin on a doubling delay capped at 60s, with bounded logs', function(){ return reconnectsWithBackoff(clock); });
+    it('backs off when sockets open and close before a valid event', function(){ return acceptedSocketsStillBackOff(clock); });
     it('re-checks a silent stream against an unreachable origin with backoff, not every millisecond', function(){ return staleChecksBackOffWhileUnreachable(clock); });
     it('re-checks a reachable origin whose tip has not moved with backoff and no log lines', function(){ return staleChecksBackOffWhileTipIsFlat(clock); });
 });

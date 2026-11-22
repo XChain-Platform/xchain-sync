@@ -462,6 +462,7 @@ class ClientSync {
         this._sourceLastWsEventAt = new Map();
         this._sourceLastReportedTip = new Map();
         this._sourcesNeedingRecovery = new Set();
+        this._provenWsSources = new Set();
         this.lastAppliedBlock     = null;
         this.lastHashes           = null;
         this.lastKnownServerBlock = null;
@@ -925,6 +926,7 @@ class ClientSync {
         this.cancelReconnect(sourceIndex);
         this.forgetSourceRetry(sourceIndex);
         this._sourcesNeedingRecovery.delete(sourceIndex);
+        if(this._provenWsSources) this._provenWsSources.delete(sourceIndex);
         this._sourceStrikes.delete(sourceIndex);
         this.clearStreamWatchdog(sourceIndex);
         let ws = this.wsConns[sourceIndex];
@@ -1158,6 +1160,7 @@ class ClientSync {
         this._sourceLastWsEventAt.clear();
         this._sourceLastReportedTip.clear();
         this._sourcesNeedingRecovery.clear();
+        if(this._provenWsSources) this._provenWsSources.clear();
         if(this._hbTimer){
             clearTimeout(this._hbTimer);
             this._hbTimer = null;
@@ -3874,21 +3877,13 @@ class ClientSync {
 
     handleWebSocketOpen(source, sourceIndex, ws){
         if(ws && this.wsConns[sourceIndex] !== ws) return;
-        getLogger().info('WebSocket connected to ' + source + ' for ' + this.chain + '/' + this.network);
+        if(!this.isSourceReconnecting(sourceIndex))
+            getLogger().info('WebSocket connected to ' + source + ' for ' + this.chain + '/' + this.network);
         this.cancelReconnect(sourceIndex);
-        this.sourceReconnected(sourceIndex);
+        this._provenWsSources.delete(sourceIndex);
         this.resetStaleChecks(sourceIndex);
         this._sourceLastWsEventAt.set(sourceIndex, Date.now());
         this.armStreamWatchdog(source, sourceIndex, ws);
-
-        if(this._sourcesNeedingRecovery.delete(sourceIndex) && this.running && this.lastAppliedBlock !== null){
-            const since = this.lastAppliedBlock + 1;
-            getLogger().info('WebSocket restored from ' + source + '; re-verifying any unverified tail of ' +
-                this.chain + '/' + this.network + '/' + this.dbType +
-                ' and resuming from committed block ' + since);
-            const recovery = Promise.resolve().then(() => this.incrementalCatchUp(since));
-            this.trackInFlight(recovery).catch(e => this.handleWsChainError(e));
-        }
     }
 
     handleWebSocketMessage(data, source, sourceIndex, ws){
@@ -3908,6 +3903,18 @@ class ClientSync {
         } catch(e){
             getLogger().error(util.format('Error parsing WebSocket message:', e));
             return;
+        }
+        if(!this._provenWsSources.has(sourceIndex)){
+            this._provenWsSources.add(sourceIndex);
+            this.sourceReconnected(sourceIndex);
+            if(this._sourcesNeedingRecovery.delete(sourceIndex) && this.running && this.lastAppliedBlock !== null){
+                const since = this.lastAppliedBlock + 1;
+                getLogger().info('WebSocket restored from ' + source + '; re-verifying any unverified tail of ' +
+                    this.chain + '/' + this.network + '/' + this.dbType +
+                    ' and resuming from committed block ' + since);
+                const recovery = Promise.resolve().then(() => this.incrementalCatchUp(since));
+                this.trackInFlight(recovery).catch(e => this.handleWsChainError(e));
+            }
         }
         // Stamp liveness on receipt so freshness reflects when the server last speaks,
         // not when apply work finishes. Every valid event type counts.
@@ -3934,6 +3941,7 @@ class ClientSync {
         if(!ws || this.wsConns[sourceIndex] === ws) this.wsConns[sourceIndex] = null;
         this.clearStreamWatchdog(sourceIndex);
         this._sourceLastWsEventAt.delete(sourceIndex);
+        this._provenWsSources.delete(sourceIndex);
         if(this.running) this.markSourceNeedsRecovery(sourceIndex);
         // A disconnected source provides no evidence about upstream freshness, so its
         // last verdict cannot continue certifying that source.
@@ -5919,12 +5927,15 @@ class ClientSync {
         if(checkpointVerifier.tryCanonicalCheckpoint(next) === null)
             return { verdict: 'wait', reason: 'range checkpoint ' + next.block_index +
                 ' has a malformed signed form' };
-        // The set that signs `next` is the oracle_publish set at next.snapshot_block;
-        // trust it only once that height is attested by the current trust root.
-        if(typeof next.snapshot_block !== 'number' || next.snapshot_block > trusted.block_index)
-            return { verdict: 'wait', reason: 'signer set at snapshot ' + next.snapshot_block + ' not yet attested' };
         // The wire carries the raw height; the signer buried it once when it resolved its set.
-        let lookupBlock = buriedSnapshotBlock(next.snapshot_block, this.network);
+        if(!Number.isSafeInteger(next.snapshot_block) || next.snapshot_block < 0)
+            return { verdict: 'wait', reason: 'signer set at snapshot ' + next.snapshot_block + ' not yet attested' };
+        const lookupBlock = buriedSnapshotBlock(next.snapshot_block, this.network);
+        // The trust root vouches for replica state through its frontier, so gate
+        // the buried signer-set height rather than the later declared height.
+        if(lookupBlock > trusted.block_index)
+            return { verdict: 'wait', reason: 'signer set at declared snapshot ' + next.snapshot_block +
+                ' (buried height ' + lookupBlock + ') not yet attested' };
         let vset = await this.oraclePublishSetAt(lookupBlock);
         // A set past the stake-weight cap under-counts S: never attest on it, but a cap
         // overflow is not proof of divergence, so wait rather than halt.

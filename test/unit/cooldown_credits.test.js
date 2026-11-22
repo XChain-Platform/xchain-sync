@@ -162,6 +162,38 @@ describe('mergeMaturedRows', function () {
     });
 });
 
+describe('deferred cooldown creation-block rows @regression', function () {
+    const {
+        collectDeferredCooldownRows,
+        stripDeferredRows,
+    } = require('../../src/server/cooldown_credits.js');
+
+    it('collects completed rows created here whose maturity is later', async function () {
+        const refund = { action_index: 10, address_id: 5, tick_id: 1, amount: '3' };
+        const db = Object.assign(mockDb({ queries: [[refund], []] }), CREDITS_MIXIN);
+
+        const rows = await collectDeferredCooldownRows('credits', db, 100);
+
+        assert.deepStrictEqual(rows, [refund]);
+    });
+
+    it('strips only matching logical identities', function () {
+        const refund = { action_index: 10, address_id: 5, tick_id: 1, amount: '3' };
+        const other = { action_index: 11, address_id: 5, tick_id: 1, amount: '4' };
+        assert.deepStrictEqual(stripDeferredRows([refund, other], [Object.assign({}, refund)]), [other]);
+    });
+
+    it('re-throws transient lookup failures and skips schema gaps', async function () {
+        const deadlock = Object.assign(new Error('deadlock'), { errno: 1213 });
+        const gap = Object.assign(new Error('unknown column'), { errno: 1054 });
+        const fatalDb = Object.assign(mockDb({ queries: [deadlock] }), CREDITS_MIXIN);
+        const gapDb = Object.assign(mockDb({ queries: [gap, gap] }), CREDITS_MIXIN);
+
+        await assert.rejects(() => collectDeferredCooldownRows('credits', fatalDb, 100), /deadlock/);
+        assert.deepStrictEqual(await collectDeferredCooldownRows('credits', gapDb, 100), []);
+    });
+});
+
 // Only a schema gap (errno 1146/1054) may be skipped. An error with no numeric errno
 // (a closed pool, a code-only timeout, a TypeError) must reach the caller's strict gate
 // so the block is retried, never broadcast short of its matured refund or escrow rows.

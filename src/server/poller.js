@@ -32,7 +32,13 @@
 const replicatedTables = require('../schema/replicated_tables');
 const lifecycle = require('../table_lifecycle');
 const { collectUpdatedRows } = require('./updated_rows');
-const { collectMaturedCooldownCredits, collectMaturedCooldownEscrows, mergeMaturedRows } = require('./cooldown_credits');
+const {
+    collectMaturedCooldownCredits,
+    collectMaturedCooldownEscrows,
+    collectDeferredCooldownRows,
+    stripDeferredRows,
+    mergeMaturedRows
+} = require('./cooldown_credits');
 const { collectRedrivenValidatorRewards } = require('./recovery_rewards');
 const { collectDerivedAnchorRewards } = require('./derived_rewards');
 const { validatorRewardKey } = require('./reward_identity');
@@ -1029,18 +1035,26 @@ class ServerPoller {
     // short by every matured refund. Select them by maturity block
     // (cooldown_end_block = this block), the forward mirror of
     // ClientRollback's reverse delete, and merge into the credits payload;
-    // ClientApplier then upserts them and rebuilds balances like any other
-    // credit. Disjoint from the action-scoped credits (those carry an action
-    // in THIS block; a refund's action is in an earlier block), but dedup the
-    // union defensively on the credit's logical identity. The escrow release
+    // ClientApplier then inserts them and rebuilds balances like any other
+    // credit. During catch-up the final source state also exposes a legacy
+    // refund through its creation-block action, so strip later-maturing rows
+    // there before adding them at maturity. The escrow release
     // written beside each refund shares its backdated action_index, so it
     // rides the same way into the escrows payload. After activation both rows
     // sit under a synthetic UNSTAKE action in THIS block, so the action-scoped
     // read carries them and these collectors correctly return nothing.
     async addCooldownPayloadRows(payload, block_index, conn){
         try {
-            let refunds  = await collectMaturedCooldownCredits(this.db, block_index, block_index, conn);
-            let releases = await collectMaturedCooldownEscrows(this.db, block_index, block_index, conn);
+            for(const kind of ['credits', 'escrows']){
+                const rows = payload.data[kind];
+                if(!rows || rows.length === 0) continue;
+                const deferred = await collectDeferredCooldownRows(kind, this.db, block_index, conn);
+                const filtered = stripDeferredRows(rows, deferred);
+                if(filtered.length > 0) payload.data[kind] = filtered;
+                else delete payload.data[kind];
+            }
+            const refunds  = await collectMaturedCooldownCredits(this.db, block_index, block_index, conn);
+            const releases = await collectMaturedCooldownEscrows(this.db, block_index, block_index, conn);
             if(refunds.length > 0) payload.data['credits'] = mergeMaturedRows(payload.data['credits'], refunds);
             if(releases.length > 0) payload.data['escrows'] = mergeMaturedRows(payload.data['escrows'], releases);
         } catch(e){
