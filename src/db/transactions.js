@@ -19,7 +19,7 @@
  *
  ********************************************************************/
 
-
+const { assertValidIdentifier } = require('./shared.js');
 
 module.exports = {
 
@@ -48,6 +48,16 @@ module.exports = {
             "WHERE tx.block_index >= ? ORDER BY t.tx_index",
             [sinceBlock],
             conn
+        );
+    },
+
+    streamTxScopedRowsFromBlock(table, sinceBlock, conn){
+        assertValidIdentifier(table);
+        return conn.queryStream(
+            "SELECT t.* FROM `" + table + "` t " +
+            "INNER JOIN transactions tx ON (tx.tx_index = t.tx_index) " +
+            "WHERE tx.block_index >= ? ORDER BY t.tx_index",
+            [sinceBlock]
         );
     },
 

@@ -11,6 +11,7 @@
 // Covers shared armed source setup. One part of armed_source_handshake.test.js.
 const assert     = require('assert');
 const http       = require('http');
+const { EventEmitter } = require('events');
 const express    = require('express');
 const WebSocket  = require('ws');
 const sinon      = require('sinon');
@@ -155,19 +156,27 @@ async function listenRealApi(app){
     };
 }
 
-function makeUpgradeReq(headers){
-    return { headers: headers || {}, url: '/subscribe/indexer/bitcoin/mainnet' };
+// A real IncomingMessage over the fake socket: the handler first spends the
+// app's backstop limiter, which resolves req.ip from the socket's address.
+function makeUpgradeReq(socket, headers){
+    let req = new http.IncomingMessage(socket);
+    req.method  = 'GET';
+    req.url     = '/subscribe/indexer/bitcoin/mainnet';
+    req.headers = Object.assign({ connection: 'Upgrade', upgrade: 'websocket' }, headers || {});
+    return req;
 }
 
 // Enough of a raw net.Socket for the guard's rejection path: it only ever
-// writes the 401 status line and destroys the connection.
+// writes the 401 status line and destroys the connection. The handler also
+// listens for an early socket error while the limiter runs.
 function makeSocket(){
-    return {
-        written:   [],
-        destroyed: false,
-        write(chunk){ this.written.push(String(chunk)); },
-        destroy(){ this.destroyed = true; }
-    };
+    let socket = new EventEmitter();
+    socket.remoteAddress = '127.0.0.1';
+    socket.written   = [];
+    socket.destroyed = false;
+    socket.write   = (chunk) => { socket.written.push(String(chunk)); return true; };
+    socket.destroy = () => { socket.destroyed = true; };
+    return socket;
 }
 
 describe('Security: /halt/clear and the WebSocket upgrade guard, against the REAL api.js', function(){
@@ -221,7 +230,7 @@ describe('Security: /halt/clear and the WebSocket upgrade guard, against the REA
             let { upgradeHandler } = await bootRealApi({ SYNC_API_KEY: 'test-ws-key' });
             let socket = makeSocket();
 
-            upgradeHandler(makeUpgradeReq(), socket, Buffer.alloc(0));
+            await upgradeHandler(makeUpgradeReq(socket), socket, Buffer.alloc(0));
 
             assert.strictEqual(socket.destroyed, true);
             assert.ok(socket.written.join('').includes('401'));
@@ -231,7 +240,7 @@ describe('Security: /halt/clear and the WebSocket upgrade guard, against the REA
             let { upgradeHandler } = await bootRealApi({ SYNC_API_KEY: 'test-ws-key' });
             let socket = makeSocket();
 
-            upgradeHandler(makeUpgradeReq({ authorization: 'Bearer nope' }), socket, Buffer.alloc(0));
+            await upgradeHandler(makeUpgradeReq(socket, { authorization: 'Bearer nope' }), socket, Buffer.alloc(0));
 
             assert.strictEqual(socket.destroyed, true);
             assert.ok(socket.written.join('').includes('401'));
@@ -241,7 +250,7 @@ describe('Security: /halt/clear and the WebSocket upgrade guard, against the REA
             let { upgradeHandler, wss } = await bootRealApi({ SYNC_API_KEY: 'test-ws-key' });
             let socket = makeSocket();
 
-            upgradeHandler(makeUpgradeReq({ authorization: 'Bearer test-ws-key' }), socket, Buffer.alloc(0));
+            await upgradeHandler(makeUpgradeReq(socket, { authorization: 'Bearer test-ws-key' }), socket, Buffer.alloc(0));
 
             assert.strictEqual(socket.written.length, 0, 'no 401 status line should be written on a valid key');
             assert.ok(wss.handleUpgrade.called);

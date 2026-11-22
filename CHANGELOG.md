@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-11-22
+
+### Added
+- Replicated multipart FILE manifests, parts and completion rows while keeping decoder-local cursor state out of snapshots.
+
+### Changed
+- Advanced the replicated indexer schema version from 21 to 24, so replica clients must update together with their origins; the decoder stays at 5.
+- Kept the decoder's transaction index end cursor table operator-local so it never enters snapshots.
+
+### Fixed
+- Filtered served checkpoints by chain and network and preserved only transparency leaves supplied by the source.
+- Hardened API paging, heartbeats, WebSocket frame limits, shutdown draining and shared rate-limit accounting.
+- Backed off replica retry loops during source outages and reduced repeated logs to bounded outage summaries.
+- Made bootstrap resolution skip future-stamped archives and pick only real archives as the latest.
+- Required batched balance reads to run without MariaDB subquery caching so collation-equivalent keys cannot share sums.
+
+### Security
+- Updated vulnerable dependencies, including axios, express, express-rate-limit, ws, zod, qs, serialize-javascript, ip-address, minimatch and glob.
+
 ## [0.27.1] - 2026-11-01
 
 ### Fixed

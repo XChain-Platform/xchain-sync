@@ -58,7 +58,7 @@ async function streamBody(run){
 function httpRouteTests(){
     it('encodes a Buffer column on the id-cursor lookup page route', async function(){
         let db = createMockDb();
-        db.doQuery.resolves([{ id: 11, raw: SRC }]);
+        db.doQueryStrict.resolves([{ id: 11, raw: SRC }]);
         let body = await streamBody(res => builder.streamTableRowsById(db, 'index_transactions', 10, 50000, res));
         assertBinaryWire(body, JSON.parse(body).rows[0].raw);
     });

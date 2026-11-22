@@ -459,7 +459,7 @@ describe('Rollback coverage guard @regression', function(){
         const guard = src.lastIndexOf('if(!truncatedReplica){', call);
         assert.ok(guard > -1 && call - guard < 400,
             'the bridged re-derive call must sit inside a !truncatedReplica guard');
-        const escrow = src.indexOf('await rederiveEscrowGate(this.db)');
+        const escrow = src.indexOf('await rederiveEscrowGate(this.db,');
         const coinpay = src.indexOf('await rederiveCoinpayMatchStatus(this.db)');
         assert.ok(escrow > -1 && escrow < call && call < coinpay,
             'the bridged re-derive must run after the escrow re-derive and before the COINPay re-derive, as the source does');
@@ -624,7 +624,7 @@ describe('Rollback coverage guard @regression', function(){
         const indexerPath = indexerFile(INDEXER_ROLLBACK_ENTRY);
         if(!requireSibling(this, indexerPath)) return;
         const SWEEP_RES = {
-            icons:   /DELETE FROM icons WHERE (?:token_id > \? AND )?token_id NOT IN \(SELECT id FROM tokens\)/,
+            icons:   /DELETE FROM icons WHERE token_id > \? AND token_id NOT IN \(SELECT id FROM tokens\)/,
             // The `<> ?` clauses exempt the native-coin sentinel (markets stores 0 for a
             // side that has no ticker); without them the sweep deletes live markets.
             // The `> ?` surviving-MAX(id) bound is required on both sides: without it a
@@ -899,7 +899,8 @@ describe('Rollback coverage guard @regression', function(){
             // like 'invalid_archive' normalizes to a bare ` invalid_archive ` -- match that form.
             { name: 'anchor invalid_archive parent join',   re: /JOIN index_statuses ps ON ps\.id = p\.status_id AND ps\.status = invalid_archive/ },
             { name: 'anchor orphaned v2 chunk join',        re: /JOIN anchor_actions c ON c\.version = 2 AND c\.match_batch_seq = p\.match_batch_seq/ },
-            { name: 'anchor journal restore and clear',     re: /JOIN index_statuses us ON us\.status = unverified SET p\.status_id = COALESCE\(p\.pre_archive_status_id, us\.id\), p\.pre_archive_status_id = NULL/ },
+            { name: 'anchor journal restore and clear',     re: /LEFT JOIN index_statuses us ON us\.status = unverified SET p\.status_id = COALESCE\(p\.pre_archive_status_id, us\.id\), p\.pre_archive_status_id = NULL/ },
+            { name: 'anchor restore non-null guard',        re: /COALESCE\(p\.pre_archive_status_id, us\.id\) IS NOT NULL/ },
             // The parent predicate must select every head the forward chunk path can pick
             // and stamp (v1, plus a v3 fold row above the DOGE fold floor) via the shared
             // archiveHeadPickPredicate, on both sides, rather than a hardcoded literal that
@@ -914,7 +915,7 @@ describe('Rollback coverage guard @regression', function(){
             // sides, between the chunk-status join and the reset join. A side that drops it
             // resets under a different batch key than its twin the moment the flag day arms.
             { name: 'publisher author-scope splice',
-              re: /cs\.status = valid (\$\{)?authorScope\}? JOIN index_statuses us/ },
+              re: /cs\.status = valid (\$\{)?authorScope\}? LEFT JOIN index_statuses us/ },
         ];
         for(const [label, p] of [['xchain-sync src/client/rollback.js (replica)', syncPath], ['xchain-indexer src/rollback/ + src/db/rollback/ (source)', indexerPath]]){
             const src = norm(readSourceText(p));
@@ -1579,12 +1580,12 @@ describe('Rollback coverage guard @regression', function(){
         }
     });
 
-    it('F-5: OPERATOR_LOCAL_TABLES equals the registry-derived exclusion set plus the three permitted non-registry names', function(){
+    it('F-5: OPERATOR_LOCAL_TABLES equals the registry-derived exclusion set plus the five permitted non-registry names', function(){
         // Both directions. Forward: every registry table whose
         // replication mode is local / hub-mirror / follower-derived must be
         // snapshot-excluded (a new local table that rode consensus snapshots
         // would ship divergent per-node state to every follower). Reverse:
-        // OPERATOR_LOCAL_TABLES may contain NOTHING else beyond the three
+        // OPERATOR_LOCAL_TABLES may contain NOTHING else beyond the five
         // sanctioned non-registry names, so over-exclusion (silently dropping
         // a consensus table from snapshots) fails just as loudly. Uses the
         // exported Set, not a source-text scrape, so it pins the value the
@@ -1592,10 +1593,10 @@ describe('Rollback coverage guard @regression', function(){
         const { OPERATOR_LOCAL_TABLES } = require('../../src/server/snapshot_builder');
         const derived = lifecycleTwin.tablesWhere(t =>
             ['local', 'hub-mirror', 'follower-derived'].includes(t.replication));
-        // The ONLY permitted members with no registry entry: mempool_transactions and
-        // dispenser_extension_undo are decoder-DB tables (registry covers the indexer DB); sync_halt / sync_state are
+        // The ONLY permitted members with no registry entry: mempool_transactions,
+        // dispenser_extension_undo and block_tx_index_end are decoder-DB tables (registry covers the indexer DB); sync_halt / sync_state are
         // replica-created control tables the full-snapshot clear loop must never wipe.
-        const NON_REGISTRY = ['mempool_transactions', 'dispenser_extension_undo', 'sync_halt', 'sync_state'];
+        const NON_REGISTRY = ['mempool_transactions', 'dispenser_extension_undo', 'block_tx_index_end', 'sync_halt', 'sync_state'];
         const expected = new Set([...derived, ...NON_REGISTRY]);
 
         for(const t of expected){

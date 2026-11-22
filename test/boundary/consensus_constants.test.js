@@ -1,3 +1,14 @@
+/*********************************************************************
+ *
+ * Copyright © 2025-2026 Dankest, LLC
+ * Based on XChain Platform by Dankest, LLC - https://dankest.llc
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ *
+ * This file is part of XChain Platform. Licensed under the GNU Affero
+ * General Public License v3.0 or later; see LICENSE.md.
+ *
+ **********************************************************************/
 //  doctrine test-coverage program: boundary coverage for
 // src/consensus-constants.js. A thin replica must agree with the source indexer
 // on every value that gates block-hashed state; these are derived from the

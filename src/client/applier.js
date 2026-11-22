@@ -40,15 +40,19 @@ const logger = getLogger();
 // to a full recompute anyway); fall back to the unscoped rebuild.
 const MAX_SCOPED_REBUILD_IDS = 1000;
 
+// Snapshot DELETE preserves this table's allocator, but rollback can mint local
+// ids that must stay at or below the source allocator carried by later rows.
+const POST_SNAPSHOT_AUTO_INCREMENT_TABLES = Object.freeze(['validator_rewards']);
+
 // Tables whose presence in a block/catch-up payload can change a token's
 // ownership-escrow gate (a GIVE_OWNERSHIP offer opening or its status moving to a
 // closed state). When any appears, re-derive tokens.escrow_action_index from the
 // already-replicated offer/status tables (the forward-apply counterpart to the
-// reorg re-derive in ClientRollback). The gate ALSO rides the wire via the
-// updated_rows tokens class (full-row carry, all-column upsert), so this derive
-// is the corrective pass over a convergent carried value, not the gate's sole
-// writer. Checked against the payload's data/tables map only; updated_rows keys
-// do not trigger it. See maybeRederiveEscrow.
+// reorg re-derive in ClientRollback). The gate also rides the wire for tokens
+// that are ledger-touched or ISSUE-edited, but an ownership-offer transition
+// alone does not resend that token row. On a truncated replica the derive keeps
+// a pre-floor gate unless a local later status proves the offer closed. Checked
+// against the payload's data/tables map only; updated_rows keys do not trigger it.
 const ESCROW_TRIGGER_TABLES = new Set([
     'orders', 'order_statuses', 'swaps', 'swap_statuses',
     'dispensers', 'dispenser_statuses', 'tokens'
@@ -96,7 +100,15 @@ function initializeIgnoreTables(applier) {
         'sync_meta',
         // Merkle epochs are full-dumped and carry a unique epoch.
         'merkle_epochs',
-        // Reward windows can overlap the live and incremental snapshot channels.
+        // Reward windows can overlap the live and incremental snapshot channels. Rows keep
+        // their carried id, so a carried id that lands on a locally minted one is dropped on
+        // the PRIMARY KEY. The one place the replica mints an id is the RB-ANCHOR restore,
+        // which is safe only because the source runs the identical restore over the same
+        // replicated log rows. Full snapshots reset the replica allocator to MAX(id)+1,
+        // keeping its counter at or below the source's even after replacing older data. The table is
+        // not in localSurrogateIdOnlyTables because round_reference is nullable and a UNIQUE
+        // key does not dedupe NULLs, and not in idKeyedIgnoreTables because that check treats
+        // PRIMARY duplicates as benign. validator_rewards_restore_id_invariant.test.js pins it.
         'validator_rewards',
         // Rollcall rows can overlap the bootstrap dump and close-block stream.
         'rollcalls',
@@ -187,28 +199,45 @@ class ClientApplier {
     /**
      * Apply a single block payload from a WebSocket event.
      *
-     * Runs the whole block inside one transaction: a duplicate or malformed payload
-     * returns before anything is written, and any failure rolls the block back so
-     * ClientSync retries it rather than committing part of it.
+     * Runs the whole block inside one transaction: a duplicate returns before
+     * anything is written, a malformed payload throws before anything is written,
+     * and any failure rolls the block back so ClientSync retries it rather than
+     * committing part of it.
      *
      * @param {object} payload the server's block event: block_index, data (a
      *                         { table: [rows] } map) and any updated_rows
+     * @returns {boolean} true when committed, false when already present
+     * @throws {Error} when the payload has no block_index or no data map
      */
     async applyBlock(payload){
         // Clear computed roots before every attempt so early returns cannot expose
         // roots from an earlier block to ClientSync.
         this._lastComputedRoots = null;
-        // A null check keeps the genesis block_index 0 valid.
-        if(!payload || !payload.data || payload.block_index == null) return;
+        this.assertBlockPayloadShape(payload);
 
         this.assertBlockSchemaVersion(payload);
         let existing = await this.db.getBlockHashRow(payload.block_index, null, { rethrow: true });
         if(existing){
             logger.info('Block ' + payload.block_index + ' already exists, skipping');
-            return;
+            return false;
         }
 
         await this.applyBlockTransaction(payload);
+        return true;
+    }
+
+    // A payload with nothing to write must never read as an applied block: the caller
+    // advances its cursor past anything that does not throw. The null check keeps the
+    // genesis block_index 0 valid; an array is not a { table: [rows] } map.
+    assertBlockPayloadShape(payload){
+        if(!payload || typeof payload !== 'object')
+            throw new Error('Malformed live block payload: not an object');
+        if(payload.block_index == null)
+            throw new Error('Malformed live block payload: block_index missing');
+        let data = payload.data;
+        if(!data || typeof data !== 'object' || Array.isArray(data))
+            throw new Error('Malformed live block payload at block ' + payload.block_index +
+                ': data is not a table map');
     }
 
     // Fail closed like the snapshot and page gates: every current server stamps the
@@ -311,9 +340,13 @@ class ClientApplier {
     // set, which captures EXACT pairs at its ledger choke point. Collects pairs
     // (not the address x tick cross-product) from the applied credits/debits/escrows
     // rows (the source has already merged backdated cooldown-refund credits into
-    // data.credits), skips native-coin rows with a NULL address_id/tick_id (matching
-    // the indexer guard `address != null && tick != null && tick !== ''`), and
-    // resolves the surrogate ids to canonical strings. NO cap: every touched pair
+    // data.credits), skips native-coin rows with a NULL address_id/tick_id, and
+    // resolves the surrogate ids to canonical strings. The skip keeps exactly the
+    // pairs the indexer's ledgerKeysForBlock keeps (`address != null && tick != null
+    // && tick !== ''`), the reference its touch guard checks _smtTouched against. The
+    // _smtTouched choke point also drops an empty canonical address, which is the one
+    // pair the two rules can disagree on; createAddress returns null for an empty
+    // address before interning anything. NO cap: every touched pair
     // must be recomputed (unlike the balance-cache rebuild, which can fall back to a
     // full recompute). Runs inside the apply txn so freshly-inserted index rows resolve.
     async collectSmtTouchedKeys(data){
@@ -410,9 +443,17 @@ class ClientApplier {
         }
     }
 
+    // The caller moves its cursor to the snapshot height once the apply returns, so a
+    // payload with no table map must throw instead of returning as if it were applied.
+    assertSnapshotTables(snapshotData, kind){
+        let tables = snapshotData && snapshotData.tables;
+        if(!tables || typeof tables !== 'object' || Array.isArray(tables))
+            throw new Error('Malformed ' + kind + ' snapshot: tables is not a table map');
+    }
+
     // Apply a full snapshot after confirming that its schema matches this replica.
     async applyFullSnapshot(snapshotData){
-        if(!snapshotData || !snapshotData.tables) return;
+        this.assertSnapshotTables(snapshotData, 'full');
 
         let dbType = (this.db && this.db.dbType) || 'indexer';
         this.assertSnapshotSchemaVersion(snapshotData, dbType);
@@ -449,9 +490,10 @@ class ClientApplier {
                 this.logLargeTableInsert(table, rows);
             }
 
-            // Drops orphaned state_tree_roots at or above the snapshot height, keyed by ticker.
+            // The snapshot replaces every table these follower-derived roots describe.
+            // Keep only the root seeded below; older heights must read as not recomputed.
             try {
-                await this.db.deleteStateTreeRootsFromBlock(this.coinTicker, this.network, snapshotData.block_height);
+                await this.db.deleteStateTreeRootsForChain(this.coinTicker, this.network);
             } catch(e){
                 this.ignoreSchemaGap(e);
             }
@@ -461,12 +503,19 @@ class ClientApplier {
 
             if((await this.db.commitTransaction()) === false)
                 throw new Error('full snapshot: no open transaction at commit; nothing was committed');
+            await this.resetPostSnapshotAutoIncrement();
             logger.info('Full snapshot applied (' + this.util.getTimer(timer) + ')');
         } catch(e){
             await rollbackPreservingError(this.db, e, 'Full snapshot apply');
             logger.error(util.format('Error applying full snapshot:', e));
             throw e;
         }
+    }
+
+    // Repair allocators after commit because ALTER TABLE commits implicitly.
+    async resetPostSnapshotAutoIncrement(){
+        for(const table of POST_SNAPSHOT_AUTO_INCREMENT_TABLES)
+            await this.db.resetAutoIncrementToMax(table);
     }
 
     /**
@@ -480,7 +529,7 @@ class ClientApplier {
      * @param {object} [opts]
      */
     async applyIncrementalSnapshot(snapshotData, opts){
-        if(!snapshotData || !snapshotData.tables) return;
+        this.assertSnapshotTables(snapshotData, 'incremental');
 
         let dbType = (this.db && this.db.dbType) || 'indexer';
         let expectedVersion = SCHEMA_VERSION[dbType];
@@ -1028,14 +1077,21 @@ class ClientApplier {
         }
     }
 
-    // Re-derive tokens.escrow_action_index from the already-replicated offer/status
-    // tables when this payload moved any escrow-relevant row. The gate is fully
-    // replica-derivable, and it ALSO arrives on the wire via the updated_rows
-    // tokens full-row carry (the source's own authoritative value, so the carry
-    // converges rather than forks); this forward-apply pass runs the SAME
-    // re-derive ClientRollback runs on reorg, keeping source and replica
-    // byte-identical. `tables` is the payload's table map (live block `data` or
-    // incremental `tables`); updated_rows does not trigger it.
+    async escrowFloorActionIndex(){
+        if(!this.db || typeof this.db.getSyncState !== 'function') return null;
+        let key = 'bootstrap_base:' + ((this.db && this.db.dbType) || 'indexer');
+        let base = await this.db.getSyncState(key, { rethrow: true });
+        if(base === null || base === undefined || parseInt(base, 10) <= 0) return null;
+        if(typeof this.db.getFirstActionIndex !== 'function') return Number.MAX_SAFE_INTEGER;
+        let floor = await this.db.getFirstActionIndex(parseInt(base, 10), null, { rethrow: true });
+        return floor === null || floor === undefined ? Number.MAX_SAFE_INTEGER : floor;
+    }
+
+    // Re-derive tokens.escrow_action_index from the replicated offer/status tables
+    // when this payload moved an escrow-relevant row. Full-history replicas derive
+    // every gate. Truncated replicas protect a carried pre-floor gate until a local
+    // later status proves that offer closed. `tables` is the live or incremental
+    // table map; updated_rows alone does not trigger this pass.
     async maybeRederiveEscrow(tables){
         if(!tables) return;
         let touched = false;
@@ -1043,8 +1099,12 @@ class ClientApplier {
             if(ESCROW_TRIGGER_TABLES.has(t)){ touched = true; break; }
         }
         if(!touched) return;
+        // The floor read sits outside the schema-gap catch: a failed sync-state or
+        // first-action read, whatever its errno, must abort the apply rather than
+        // read as "not truncated" or skip the derive.
+        let floorActionIndex = await this.escrowFloorActionIndex();
         try {
-            await rederiveEscrowGate(this.db);
+            await rederiveEscrowGate(this.db, { floorActionIndex });
         } catch(e){
             // Only a genuine schema gap (missing table/column on an older/thin replica)
             // is safe to skip. Any other error (deadlock, lock-wait timeout, connection

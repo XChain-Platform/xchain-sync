@@ -29,13 +29,13 @@ const { createRequire } = require('module');
 
 const ROOT = path.join(__dirname, '../../../..');
 const COMPLETENESS = 'test/unit/consensus/armed_map/completeness.test.js';
-const runnerRequire = createRequire(require.main.filename);
+const runnerRequire = createRequire(__filename);
 const NODE_MODULES = path.dirname(path.dirname(runnerRequire.resolve('mocha/package.json')));
 const VENUE_ENV = { XC_ROLLCALL_REGTEST_ACTIVATION: 'armed', XC_ROLLCALL_GATES_REGTEST_ACTIVATION: 'armed' };
 const SHARED_ROW_FILES = ['shared_rows.js', 'shared_rows_1.js', 'shared_rows_2.js',
     'shared_rows_3.js', 'shared_rows_4.js', 'shared_rows_5.js'];
 const INDEXER_CANONICAL_BLOBS = {
-    'shared_rows.js':   '164ddb9b107c64fd302896ab67825554a3d650f7',
+    'shared_rows.js':   'e4a16bc6e121ae1aa14a52788ecb836fd4c4cce6',
     'shared_rows_1.js': '088d556015fc3ec95322b4f551a2b0efb191f7e4',
     'shared_rows_2.js': 'f7906c1f870cf12039e04b7ae4b66a3327d3ba85',
     'shared_rows_3.js': '160f4098d17d7a0d20b339f0f34a95bf8b43c429',
@@ -43,7 +43,7 @@ const INDEXER_CANONICAL_BLOBS = {
     'shared_rows_5.js': '9362dcc1b09d427fa555f5bfa7b9921c95ec01ee',
 };
 const INDEXER_CANONICAL_SHA256 = {
-    'shared_rows.js':   '419b9e23ceaea3c8dfefd0798ed49204040137935e890fec8dc731829d13a7d4',
+    'shared_rows.js':   'a834741de0cc8e04350fcc0ecd1b8376ede2cc5c730a486ee56ce9067d573f71',
     'shared_rows_1.js': '141975560c1646036d08d86b1e8c55ead2afefc94900153ef08b9715cac50a91',
     'shared_rows_2.js': 'f11392f3802e0274f6a771b5e1b2a795a4997d90914d8bb2a284af4d643f2d7a',
     'shared_rows_3.js': 'd1de4a20c02fa2338ee10e70c5d262a498ebaf915074aa518355b5e3ac22bc44',

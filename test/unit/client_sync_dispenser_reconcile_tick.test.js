@@ -81,6 +81,7 @@ function tickCtx(over){
         lastKnownServerBlock: 500,
         lastAppliedBlock: 500,
         _halted: null,
+        _evictedSources: new Set(),
         _lastDispenserReconcileAt: 1000,
         _catchUpCount: 3,
         _dispenserReconcileInFlight: false,
@@ -229,7 +230,7 @@ describe('ClientSync.dispenserReconcileIntervalDue without a successful reconcil
         let ctx = {
             dbType: 'decoder', config: { DISPENSERS_RECONCILE_MAX_INTERVAL_MS: '60000' },
             sources: ['http://source1:3006'], lastKnownServerBlock: 500, lastAppliedBlock: 500,
-            _halted: null, _lastDispenserReconcileAt: null, _dispenserClockArmedAt: 1000,
+            _halted: null, _evictedSources: new Set(), _lastDispenserReconcileAt: null, _dispenserClockArmedAt: 1000,
             _dispenserReconcileInFlight: false,
             recordUpstreamStatus: sinon.stub(), logGap: sinon.stub(),
             incrementalCatchUp: sinon.stub().resolves(), maybeVerifyCompleteness: sinon.stub().resolves(),
@@ -272,6 +273,7 @@ describe('ClientSync.reconcileDispensers attempt stamp and request', function(){
         finally { clock.restore(); }
         assert.strictEqual(ctx._lastDispenserReconcileAttemptAt, 42000);
         assert.strictEqual(ctx._lastDispenserReconcileAt, undefined);
+        assert.strictEqual(ctx._dispenserReorgRetryAt, undefined);
         assert.strictEqual(ctx.applier.applyDispensersReplace.called, false, 'local table left intact');
     });
 

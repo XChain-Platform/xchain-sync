@@ -12,7 +12,8 @@
  *
  * The FOLLOWER twin of the escrow arming-block full build.
  *
- * The source twin's gate lives in xchain-indexer/src/stateCommitment.js and is
+ * The source twin's gate lives in xchain-indexer/src/state_commitment/index.js
+ * (balancesRootForBlock and writeEscrowJournalForBlock) and is
  * pinned by its own vectors in that repo's test/unit/state_commitment/state_commitment.test.js. This
  * file exists because fixing only the source RELOCATES the divergence instead of
  * removing it: the arming replay writes no journal row for a key whose locked total
@@ -23,7 +24,8 @@
  * nodes disagreeing on a root is a false halt.
  *
  * BTC:regtest is the only chain the escrow leaf is armed on
- * (state_subtree_activation.js, block 11200), so the boundary is 11200.
+ * (the state_subtree_activation.ESCROW_LOCKED_LEAF_ACTIVATION row in
+ * src/consensus/gate_registry/shared_rows_4.js, block 11200), so the boundary is 11200.
  *
  ********************************************************************/
 

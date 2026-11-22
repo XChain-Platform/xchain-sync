@@ -22,6 +22,7 @@ const zlib = require('zlib');
 const { SCHEMA_VERSION } = require('../../schema/version');
 const { encodeRow, bigIntReplacer } = require('../../util/wire_codec');
 const replicatedTables = require('../../schema/replicated_tables');
+const tableLifecycle = require('../../table_lifecycle');
 const { SnapshotStreamWriter } = require('./stream_writer');
 
 // Default + ceiling page sizes for streamTableRowsById. The ceiling bounds the
@@ -31,17 +32,92 @@ const ROWS_PAGE_DEFAULT = 50000;
 const ROWS_PAGE_MAX = 100000;
 
 const REISSUING_LOOKUPS = new Set(['index_addresses', 'index_tickers']);
+const REPAIR_REPLACE_TABLES = new Set(tableLifecycle.tablesWhere(t =>
+    t.replication === 'stream:action' && t.replicaRepair === 'replace'));
 
 // The optional max_block query bound: ids in these tables are minted in block order
 // and reissued on a reorg, so a page never carries a row from above the caller's tip.
+// Absent means "no bound". Anything present must be a plain non-negative decimal
+// integer; a malformed bound returns NaN so the caller rejects it rather than
+// silently serving rows above the caller's tip.
 function parseMaxBlock(res){
     let raw = res && res.req && res.req.query ? res.req.query.max_block : undefined;
-    if(raw === undefined || raw === null || raw === '') return null;
-    let n = parseInt(raw, 10);
-    return Number.isInteger(n) && n >= 0 ? n : null;
+    if(raw === undefined) return null;
+    if(typeof raw === 'number') return Number.isSafeInteger(raw) && raw >= 0 ? raw : NaN;
+    if(typeof raw !== 'string' || !/^[0-9]{1,15}$/.test(raw)) return NaN;
+    return Number(raw);
 }
 
 const methods = {
+
+    // Stream one registry-approved replace-repair table from one read snapshot.
+    // The allowlist is also the SQL-identifier guard. A single response preserves
+    // statement consistency while avoiding the unrelated tables in /since/0.
+    async streamRepairTable(db, table, res){
+        let dbType = (db && db.dbType) || 'indexer';
+        if(dbType !== 'indexer' || !REPAIR_REPLACE_TABLES.has(table)){
+            return res.status(400).json({
+                error: 'Table not replace-repairable: ' + table,
+                code: 'REPAIR_TABLE_NOT_ALLOWED'
+            });
+        }
+        if(!this.acquireSnapshotSlot(db, res)) return;
+        try {
+            await this.streamRepairTableLocked(db, table, res);
+        } finally {
+            this.releaseSnapshotSlot(db);
+        }
+    },
+
+    async streamRepairTableLocked(db, table, res){
+        let conn = await db.beginReadSnapshot();
+        let snapshotOpen = true;
+        let writer = null;
+        try {
+            let lastBlock = await db.getLastBlock(conn);
+            if(lastBlock === null){
+                await db.commitReadSnapshot(conn);
+                snapshotOpen = false;
+                res.status(404).json({ error: 'No blocks in database', code: 'NO_DATA' });
+                return;
+            }
+            let schemaVersion = SCHEMA_VERSION.indexer;
+            res.setHeader('Content-Type', 'application/json');
+            res.setHeader('Content-Encoding', 'gzip');
+            res.setHeader('X-Block-Height', lastBlock);
+            res.setHeader('X-Snapshot-Schema-Version', schemaVersion);
+            let gzip = zlib.createGzip();
+            gzip.pipe(res);
+            writer = new SnapshotStreamWriter(gzip, res);
+            await writer.write('{"schema_version":' + schemaVersion + ',"block_height":' +
+                lastBlock + ',"table":"' + table + '","rows":[');
+            await this.streamRepairTableRows(db, table, conn, writer);
+            await writer.write(']}');
+            await db.commitReadSnapshot(conn);
+            snapshotOpen = false;
+            writer.finish();
+        } catch(e){
+            if(writer) writer.dispose();
+            if(snapshotOpen) await db.rollbackReadSnapshot(conn);
+            if(e && e.aborted) return;
+            if(res.headersSent && typeof res.destroy === 'function') res.destroy();
+            throw e;
+        }
+    },
+
+    async streamRepairTableRows(db, table, conn, writer){
+        let first = true;
+        let rowStream = db.streamTableRows(table, conn);
+        try {
+            for await (let row of rowStream){
+                if(!first) await writer.write(',');
+                first = false;
+                await writer.write(JSON.stringify(encodeRow(row), bigIntReplacer));
+            }
+        } finally {
+            rowStream.destroy();
+        }
+    },
 
     // Stream one append-only id-PK lookup table into the snapshot body by id cursor
     // in pageSize batches, so a multi-million-row table never lands in the driver
@@ -96,6 +172,9 @@ const methods = {
             // only these hardcoded names are ever interpolated into the query).
             return res.status(400).json({ error: 'Table not pageable: ' + table });
         }
+        let maxBlock = parseMaxBlock(res);
+        if(Number.isNaN(maxBlock))
+            return res.status(400).json({ error: 'Invalid max_block', code: 'BAD_REQUEST' });
         let after = Number.isFinite(afterId) ? Math.max(0, Math.floor(afterId)) : 0;
         let lim   = Number.isFinite(limit) ? Math.floor(limit) : ROWS_PAGE_DEFAULT;
         lim = Math.max(1, Math.min(ROWS_PAGE_MAX, lim));
@@ -106,8 +185,7 @@ const methods = {
         let col = replicatedTables.lookupCursorColumn(table);
         let rows = await db.findLookupPageAfter(table, col, after, lim);
         let hasMore = rows.length === lim;
-        let maxBlock = REISSUING_LOOKUPS.has(table) ? parseMaxBlock(res) : null;
-        if(maxBlock != null){
+        if(maxBlock != null && REISSUING_LOOKUPS.has(table)){
             let cut = rows.findIndex(r => r.block_index != null && Number(r.block_index) > maxBlock);
             if(cut !== -1){
                 rows = rows.slice(0, cut);

@@ -23,18 +23,18 @@ const { SCHEMA_VERSION } = require('../../schema/version');
 const { encodeRow, bigIntReplacer } = require('../../util/wire_codec');
 const { getLogger } = require('../../observability');
 const { SnapshotStreamWriter } = require('./stream_writer');
+const { setHashHeaders } = require('./hash_headers');
+const { collectUnrecordedSyncMetaRows } = require('./sync_meta_tail');
 const logger = getLogger();
 
 module.exports = {
 
     // Stream a full snapshot to an HTTP response.
     //
-    // The block-height anchor, the hash headers, and every paginated table read
-    // run inside a single REPEATABLE READ snapshot (opened before getLastBlock).
-    // This keeps the advertised hashes and the streamed rows consistent to one
-    // block height even if the source commits new blocks mid-stream; without it
-    // a busy source produces mixed-block payloads that fail validator hash
-    // verification on bootstrap.
+    // The block-height anchor and every table read run inside one REPEATABLE READ
+    // snapshot opened before getLastBlock. This keeps the body at one height so
+    // it can pass the client's /status cross-check and independent hash recompute.
+    // The X-*-Hash response headers are informational; clients do not verify them.
     async streamFullSnapshot(db, res){
         // Concurrency gate: reject with 503 instead of pinning yet
         // another pool connection when the per-Database stream cap is reached.
@@ -46,16 +46,12 @@ module.exports = {
         }
     },
 
-    setFullSnapshotHeaders(res, lastBlock, schemaVersion, hashRow){
+    setFullSnapshotHeaders(res, dbType, lastBlock, schemaVersion, hashRow){
         res.setHeader('Content-Type', 'application/json');
         res.setHeader('Content-Encoding', 'gzip');
         res.setHeader('X-Block-Height', lastBlock);
         res.setHeader('X-Snapshot-Schema-Version', schemaVersion);
-        if(hashRow){
-            res.setHeader('X-Ledger-Hash', hashRow.ledger_hash || '');
-            res.setHeader('X-Actions-Hash', hashRow.actions_hash || '');
-            res.setHeader('X-Contract-Hash', hashRow.contract_hash || '');
-        }
+        setHashHeaders(res, dbType, hashRow);
     },
 
     createFullSnapshotWriter(res){
@@ -64,14 +60,17 @@ module.exports = {
         return new SnapshotStreamWriter(gzip, res);
     },
 
-    async streamFullSnapshotTables(db, conn, writer){
+    async streamFullSnapshotTables(db, conn, writer, lastBlock){
         let tableOrder = await this.getOrderedTables(db, conn);
         let first = true;
         let totalRows = 0;
         // Any table read error aborts the snapshot before its closing frame.
         for(let table of tableOrder){
+            const extras = table === 'sync_meta'
+                ? await collectUnrecordedSyncMetaRows(db, 0, lastBlock, conn)
+                : [];
             let count = await db.getTableCount(table, conn);
-            if(count === 0) continue;
+            if(count === 0 && extras.length === 0) continue;
 
             if(!first) await writer.write(',');
             first = false;
@@ -89,6 +88,13 @@ module.exports = {
             } finally {
                 // An abort stops the driver from buffering unread rows.
                 rowStream.destroy();
+            }
+
+            for(const row of extras){
+                if(!firstRow) await writer.write(',');
+                firstRow = false;
+                await writer.write(JSON.stringify(encodeRow(row), bigIntReplacer));
+                totalRows++;
             }
 
             await writer.write(']');
@@ -126,11 +132,11 @@ module.exports = {
             let schemaVersion = SCHEMA_VERSION[dbType];
             let hashRow = await db.getBlockHashRow(lastBlock, conn);
 
-            this.setFullSnapshotHeaders(res, lastBlock, schemaVersion, hashRow);
+            this.setFullSnapshotHeaders(res, dbType, lastBlock, schemaVersion, hashRow);
             writer = this.createFullSnapshotWriter(res);
 
             await writer.write('{"schema_version":' + schemaVersion + ',"block_height":' + lastBlock + ',"tables":{');
-            let totalRows = await this.streamFullSnapshotTables(db, conn, writer);
+            let totalRows = await this.streamFullSnapshotTables(db, conn, writer, lastBlock);
 
             // Release the read view only after the final page is read. The data
             // is already buffered into gzip, so committing before gzip.end()

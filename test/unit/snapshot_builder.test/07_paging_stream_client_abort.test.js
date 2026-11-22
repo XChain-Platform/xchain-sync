@@ -53,7 +53,7 @@ function fakeBackpressuredGzip(){
 function pagingStreamAbortTests(){
     it('streamTableRowsById: swallows the abort and destroys gzip on client disconnect', async function(){
         let db = createMockDb();
-        db.doQuery.resolves([{ id: 1 }, { id: 2 }]);
+        db.doQueryStrict.resolves([{ id: 1 }, { id: 2 }]);
         let fake = fakeBackpressuredGzip();
         sinon.stub(zlib, 'createGzip').returns(fake);
         let res = new PassThrough(); res.setHeader = sinon.stub(); res.on('data', () => {});

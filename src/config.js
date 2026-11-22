@@ -49,6 +49,23 @@ function parseIntAtLeast(val, min, defaultVal){
     return parsed < min ? defaultVal : parsed;
 }
 
+// TRUST_PROXY is a switch: on means express believes exactly one forwarded hop
+// (api.js trustProxyHops). 'true' and '1' turn it on; unset, empty, 'false' and
+// '0' leave it off. Any other value also leaves it off, but says so loudly: a
+// typo here silently keys every caller behind the proxy on the proxy's own
+// address, so one client's rejected requests drain the budget all of them share.
+const TRUST_PROXY_ON = new Set(['true', '1']);
+const TRUST_PROXY_OFF = new Set(['', 'false', '0']);
+function parseTrustProxy(raw){
+    const value = String(raw === undefined || raw === null ? '' : raw).trim().toLowerCase();
+    if(TRUST_PROXY_ON.has(value)) return true;
+    if(!TRUST_PROXY_OFF.has(value)){
+        logger.warn('WARNING: TRUST_PROXY=' + JSON.stringify(String(raw)) + ' is not recognized (use true or false);' +
+            ' X-Forwarded-For is ignored and every caller behind a reverse proxy shares one rate-limit bucket.');
+    }
+    return false;
+}
+
 // A comma-separated list as trimmed, de-duplicated, non-empty entries; unset -> [].
 function parseCsvSet(val){
     return [...new Set((val || '').split(',').map(s => s.trim()).filter(s => s.length > 0))];
@@ -193,8 +210,8 @@ module.exports = {
     /** process.env[key] as it is NOW, for a read a running process re-takes on every call (the state-tree metric cap, shared with the indexer twin). */
     readEnvNow: (key) => process.env[key],
 
-    /** The raw state-tree metric interval, NaN when unset; the caller applies its default. */
-    stateTreeMetricIntervalMsFromEnv: () => parseInt(process.env.STATE_TREE_METRIC_INTERVAL_MS, 10),
+    /** The state-tree metric interval text; the caller validates the timer bounds. */
+    stateTreeMetricIntervalMsFromEnv: () => process.env.STATE_TREE_METRIC_INTERVAL_MS,
 
     /** The raw action-scoped query metric interval, NaN when unset; the caller applies its default. */
     syncQueryMetricIntervalMsFromEnv: () => parseInt(process.env.SYNC_QUERY_METRIC_INTERVAL_MS, 10),
@@ -400,7 +417,7 @@ function addWebSocketAndAccessConfig(config){
     config['HUB_PROTOCOL'] = (process.env.HUB_PROTOCOL || '').toLowerCase() === 'https' ? 'https' : 'http';
 
     // Security: Trust x-forwarded-for header (only enable behind a reverse proxy)
-    config['TRUST_PROXY'] = (process.env.TRUST_PROXY || '').toLowerCase() === 'true';
+    config['TRUST_PROXY'] = parseTrustProxy(process.env.TRUST_PROXY);
 
     // Security: Maximum rollback depth from a single source (blocks)
     config['MAX_ROLLBACK_DEPTH'] = parseIntMin1(process.env.MAX_ROLLBACK_DEPTH, 100);
@@ -492,8 +509,8 @@ function addReplicaVerificationConfig(config){
     // VERIFY_STATE_COMMITMENT: apply-time recompute of the per-block light-client
     // SMT roots (SPV spec sec.4-5) over the replica, HALTing on divergence. Default
     // ON; NULL roots (blocks before the flag-day) are skipped (additive + fail-soft).
-    // Phase 1 verifies balances_root + block_merkle_root only (stakes_root/state_root
-    // are deferred until the BTC stake-weight query is ported). Set
+    // Verifies balances_root + block_merkle_root + state_root; state_root folds the
+    // BTC-only stakes_root recomputed from the ported stake-weight query. Set
     // VERIFY_STATE_COMMITMENT=false on truncated / incremental-bootstrapped replicas
     // (their balances history is incomplete, so the SMT full-build would be wrong)
     // and on throwaway mirrors.
@@ -514,6 +531,9 @@ function addReplicaVerificationConfig(config){
     // DISPENSERS_RECONCILE_MAX_INTERVAL_MS: wall-clock bound (ms) on that reconcile,
     // sampled on catch-ups and on the live status tick. 0 disables the bound.
     config['DISPENSERS_RECONCILE_MAX_INTERVAL_MS'] = parseIntAtLeast(process.env.DISPENSERS_RECONCILE_MAX_INTERVAL_MS, 0, 1800000);
+
+    // Post-reorg failures retry on this backoff even when the periodic bound is 0.
+    config['DISPENSERS_RECONCILE_REORG_RETRY_MS'] = parseIntAtLeast(process.env.DISPENSERS_RECONCILE_REORG_RETRY_MS, 0, 300000);
 
     // LOOKUP_PAGE_SIZE: rows per page when a client pages the append-only lookup
     // tables by id cursor (>= 1); the client clamps it to 100000.

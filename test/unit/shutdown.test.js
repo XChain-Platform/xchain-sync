@@ -44,6 +44,25 @@ function makeDb(order, name){
     return { closed: false, async close(){ this.closed = true; order.push('close:' + name); } };
 }
 
+// A real http server whose handler sends headers and one chunk and never ends the
+// response, standing in for a snapshot stream longer than the drain budget.
+async function startHungServer(){
+    const http = require('http');
+    const server = http.createServer((req, res) => { res.writeHead(200); res.write('x'); });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const state = { server, client: null };
+    await new Promise((resolve) => {
+        const req = http.get({ host: '127.0.0.1', port: server.address().port, path: '/' }, (res) => {
+            state.client = res.socket;
+            res.on('error', () => {});
+            res.on('data', () => {});
+            resolve();
+        });
+        req.on('error', () => {});
+    });
+    return state;
+}
+
 describe('graceful shutdown', function(){
 
     describe('createShutdown', function(){
@@ -150,6 +169,35 @@ describe('graceful shutdown', function(){
             await closeServer(null);
             await closeServer({});
         });
+
+        it('destroys a response still streaming after the grace so close() completes', async function(){
+            const { server, client } = await startHungServer();
+            const t0 = Date.now();
+            await Promise.race([
+                closeServer(server, { graceMs: 50 }),
+                new Promise((_, rej) => setTimeout(() => rej(new Error('closeServer never resolved')), 2000))
+            ]);
+            assert.ok(Date.now() - t0 < 1500);
+            await waitFor(() => client.destroyed || client.ended, 1000);
+        });
+    });
+
+    describe('createSyncDrain with an in-flight response', function(){
+        it('still stops the service and exits 0 before the hard-exit timer', async function(){
+            const { server } = await startHungServer();
+            let stopped = false;
+            const svc = { async stop(){ stopped = true; } };
+            const errors = [];
+            const codes = [];
+            const log = { log(){}, warn(){}, error(m){ errors.push(String(m)); } };
+            const drain = createSyncDrain({ syncService: svc, server, log, serverGraceMs: 50 });
+            const shutdown = createShutdown({ drain, timeoutMs: 1500, exit: (c) => codes.push(c), log });
+            shutdown('SIGTERM');
+            await waitFor(() => codes.length === 1, 3000);
+            assert.strictEqual(stopped, true, 'SyncService.stop must run');
+            assert.deepStrictEqual(codes, [0]);
+            assert.ok(!errors.some((m) => m.includes('exiting hard')));
+        });
     });
 });
 
@@ -241,10 +289,12 @@ describe('graceful shutdown', function(){
         it('clears entry-point timers, closes sockets, drains the server, then stops the service', async function(){
             const order = [];
             const server = makeServer(order);
+            const closes = [];
             let terminated = 0;
+            const mk = () => ({ close(code, reason){ closes.push([code, reason]); order.push('client.close'); }, terminate(){ terminated++; } });
             const wss = {
                 closed: false,
-                clients: new Set([{ terminate(){ terminated++; } }, { terminate(){ terminated++; } }]),
+                clients: new Set([mk(), mk()]),
                 close(){ this.closed = true; order.push('wss.close'); }
             };
             const svc = makeSyncService({ databases: [makeDb(order, 'db0')] });
@@ -257,7 +307,13 @@ describe('graceful shutdown', function(){
             await drain();
 
             assert.strictEqual(wss.closed, true);
-            assert.strictEqual(terminated, 2, 'subscriber sockets must be closed, not left to die with the process');
+            assert.strictEqual(closes.length, 2, 'subscriber sockets must get a close frame');
+            for(const [code, reason] of closes){
+                assert.strictEqual(code, 1001);
+                assert.ok(typeof reason === 'string' && reason.length > 0);
+            }
+            assert.strictEqual(terminated, 0, 'a client that closed is not terminated');
+            assert.ok(order.lastIndexOf('client.close') < order.indexOf('wss.close'), 'close frames go out before wss.close');
             assert.strictEqual(server.closed, true);
             assert.strictEqual(svc.ready, false);
             assert.ok(order.indexOf('wss.close') < order.indexOf('server.close'));
@@ -265,6 +321,48 @@ describe('graceful shutdown', function(){
                 'stop serving before the poll loops and pools go away');
             assert.ok(!order.includes('tick'), 'the entry-point intervals must be cleared first');
         });
+
+    });
+});
+
+describe('graceful shutdown', function(){
+    describe('createSyncDrain close frames', function(){
+
+        it('terminates a subscriber that never completes the close handshake', async function(){
+            let stuckTerminated = 0;
+            const stuck = { close(){}, terminate(){ stuckTerminated++; } };
+            const wss = { clients: new Set([stuck]), close(){} };
+            // The http server stays open until the stuck client is gone.
+            const server = {
+                close(cb){ this.cb = cb; },
+                closeIdleConnections(){}
+            };
+            const drain = createSyncDrain({ server, wss, log: silentLog, closeGraceMs: 20 });
+            const p = drain();
+            await waitFor(() => stuckTerminated === 1, 1000);
+            server.cb();
+            await p;
+            assert.strictEqual(stuckTerminated, 1);
+        });
+
+        it('a real ws subscriber sees close code 1001, not 1006', async function(){
+            const http = require('http');
+            const WebSocket = require('ws');
+            const server = http.createServer();
+            const wss = new WebSocket.Server({ server });
+            await new Promise((r) => server.listen(0, '127.0.0.1', r));
+            const client = new WebSocket('ws://127.0.0.1:' + server.address().port);
+            await new Promise((r) => client.on('open', r));
+            const closed = new Promise((r) => client.on('close', (code) => r(code)));
+            await createSyncDrain({ server, wss, log: silentLog })();
+            assert.strictEqual(await closed, 1001);
+        });
+
+    });
+});
+
+describe('graceful shutdown', function(){
+    describe('createSyncDrain partial', function(){
 
         it('drains a partially-built process without throwing', async function(){
             const drain = createSyncDrain({ log: silentLog });

@@ -71,7 +71,9 @@ function requireSibling(ctx){
 // schema comment forbids sharing raw values across nodes.
 // dispenser_extension_undo: local reorg bookkeeping for dispenser expiration extends,
 // not replicated state.
-const DECODER_EXCLUDED = new Set(['mempool_transactions', 'dispenser_extension_undo']);
+// block_tx_index_end: the decoder's own parse cursor at each block end; a replica
+// assigns no tx_index, so there is nothing for it to carry.
+const DECODER_EXCLUDED = new Set(['mempool_transactions', 'dispenser_extension_undo', 'block_tx_index_end']);
 
 const ADD_INSTRUCTIONS =
     '\n\nEither add it to TOPOLOGY.decoder in src/schema/replicated_tables.js (and update the ' +

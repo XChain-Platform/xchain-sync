@@ -23,7 +23,7 @@ function createMockDb(dbName){
     // Queries read through named Database methods. The real ones are installed for
     // any this fake does not stub, so they still reach doQuery below and every
     // doQuery call count these suites assert keeps counting them.
-    return withDbMixins({
+    const db = withDbMixins({
         dbName: dbName || 'test_db',
         doQuery: sinon.stub().resolves([]),
         // Always-throw twin of doQuery. The authoritative dump reads use it so a
@@ -39,10 +39,17 @@ function createMockDb(dbName){
         getTableCount: sinon.stub().resolves(0),
         // beginReadSnapshot returns a dedicated connection handle the builder
         // threads into every read and ends via commit/rollbackReadSnapshot.
-        beginReadSnapshot: sinon.stub().resolves({ _snapshotConn: true }),
+        beginReadSnapshot: sinon.stub(),
         commitReadSnapshot: sinon.stub().resolves(true),
         rollbackReadSnapshot: sinon.stub().resolves()
     });
+    db.beginReadSnapshot.callsFake(async () => ({
+        _snapshotConn: true,
+        queryStream: (sql, args) => Readable.from((async function*(){
+            for(const row of await db.doQuery(sql, args)) yield row;
+        })())
+    }));
+    return db;
 }
 
 function createMockRes(){

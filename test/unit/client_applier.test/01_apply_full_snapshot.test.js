@@ -45,11 +45,17 @@ function registerHooks(){
 
 function registerFullSnapshotCases1(){
     it('skips null snapshot', async function(){
-        await applier.applyFullSnapshot(null);
+        await assert.rejects(() => applier.applyFullSnapshot(null), /Malformed full snapshot/);
         assert.strictEqual(db.beginTransaction.called, false);
     });
     it('skips snapshot without tables', async function(){
-        await applier.applyFullSnapshot({ block_height: 10 });
+        await assert.rejects(() => applier.applyFullSnapshot({ block_height: 10 }), /Malformed full snapshot/);
+        assert.strictEqual(db.beginTransaction.called, false);
+    });
+    it('refuses a snapshot whose tables is an array', async function(){
+        await assert.rejects(
+            () => applier.applyFullSnapshot({ schema_version: SCHEMA_VERSION.indexer, block_height: 10, tables: [] }),
+            /Malformed full snapshot/);
         assert.strictEqual(db.beginTransaction.called, false);
     });
     it('clears tables in reverse order and inserts in forward order', async function(){
@@ -89,6 +95,32 @@ function registerFullSnapshotCases1(){
         // Union of payload + local snapshot-eligible tables, reverse dependency order.
         assert.deepStrictEqual(deletes, ['DELETE FROM `transactions`', 'DELETE FROM `blocks`']);
         assert.strictEqual(db.commitTransaction.calledOnce, true);
+    });
+}
+
+function registerFullSnapshotAllocatorCases(){
+    it('resets validator_rewards AUTO_INCREMENT only after the snapshot commits', async function(){
+        db.doQuery.withArgs(sinon.match(/^SELECT COALESCE\(MAX\(id\)/)).resolves([{ next_id: '3' }]);
+        await applier.applyFullSnapshot({
+            schema_version: SCHEMA_VERSION.indexer,
+            block_height: 10,
+            tables: { validator_rewards: [{ id: 1 }, { id: 2 }] }
+        });
+        const alter = db.doQuery.getCalls().find(c =>
+            c.args[0] === 'ALTER TABLE `validator_rewards` AUTO_INCREMENT = 3');
+        assert.ok(alter, 'the imported maximum must determine the next local reward id');
+        assert.ok(db.commitTransaction.firstCall.callId < alter.callId, 'ALTER TABLE must run after commit');
+    });
+    it('does not reset the allocator when snapshot insertion rolls back', async function(){
+        db.doQuery.withArgs(sinon.match(/^INSERT (?:IGNORE )?INTO `validator_rewards`/)).rejects(new Error('insert failed'));
+        await assert.rejects(() => applier.applyFullSnapshot({
+            schema_version: SCHEMA_VERSION.indexer,
+            block_height: 10,
+            tables: { validator_rewards: [{ id: 1 }] }
+        }), /insert failed/);
+        const alters = db.doQuery.getCalls().filter(c => /^ALTER TABLE `validator_rewards`/.test(c.args[0]));
+        assert.deepStrictEqual(alters, []);
+        assert.ok(db.rollbackTransaction.calledOnce);
     });
 }
 
@@ -133,13 +165,9 @@ function registerFullSnapshotCases2(){
         assert.deepStrictEqual(touched, [], 'sync_halt / sync_state must never be cleared by the snapshot apply');
     });
     it('scoped-clears state_tree_roots at/above the snapshot height before seeding @regression', async function(){
-        // state_tree_roots is clear-protected (OPERATOR_LOCAL / follower-derived), so the
-        // generic clear loop leaves it untouched while its backing state_tree_nodes store is
-        // wiped and re-imported. Without a scoped delete, future-dated orphaned-fork roots
-        // (heights above the snapshot after a deep reorg + oversized-incremental fallback)
-        // survive and the follower serves them as authoritative SPV commitments. Regression
-        // for the sync-snapshot-source-parity finding: the applier must delete
-        // block_index >= snapshot height, mirroring ClientRollback's predicate.
+        // state_tree_roots is follower-derived and excluded from the generic clear.
+        // Once the snapshot replaces its backing tables, no root from the prior
+        // history is justified, including rows below the snapshot height.
         let snapshot = {
             schema_version: SCHEMA_VERSION.indexer,
             block_height: 10,
@@ -147,10 +175,11 @@ function registerFullSnapshotCases2(){
         };
         await applier.applyFullSnapshot(snapshot);
         let scoped = db.doQuery.getCalls().find(c =>
-            /DELETE FROM state_tree_roots/.test(c.args[0]) && /block_index >= \?/.test(c.args[0]));
-        assert.ok(scoped, 'a scoped DELETE FROM state_tree_roots ... block_index >= ? must be issued');
-        assert.strictEqual(scoped.args[1][scoped.args[1].length - 1], 10,
-            'the delete must be bounded at the snapshot height');
+            /DELETE FROM state_tree_roots/.test(c.args[0]));
+        assert.ok(scoped, 'a chain and network scoped state_tree_roots delete must be issued');
+        assert.doesNotMatch(scoped.args[0], /block_index/,
+            'prior-history roots below the snapshot height must not survive');
+        assert.strictEqual(scoped.args[1].length, 2, 'the delete has no height bound');
         // It must NOT be swept up by the generic clear loop (that would prove it was not
         // clear-protected); the generic loop uses backtick-quoted whole-table deletes.
         let genericWipe = db.doQuery.getCalls()
@@ -181,8 +210,9 @@ function registerFullSnapshotCases3(){
         });
 
         let scoped = localDb.doQuery.getCalls().find(c =>
-            /DELETE FROM state_tree_roots/.test(c.args[0]) && /block_index >= \?/.test(c.args[0]));
+            /DELETE FROM state_tree_roots/.test(c.args[0]));
         assert.ok(scoped, 'the scoped delete must still be issued');
+        assert.deepStrictEqual(scoped.args[1], ['BTC', 'mainnet']);
         assert.strictEqual(scoped.args[1][0], 'BTC',
             'the chain predicate must bind the ticker the rows are written with');
         assert.notStrictEqual(scoped.args[1][0], 'bitcoin',
@@ -293,6 +323,7 @@ describe('ClientApplier', function(){
 
     describe('applyFullSnapshot', function(){
         registerFullSnapshotCases1();
+        registerFullSnapshotAllocatorCases();
         registerFullSnapshotRepairCase();
         registerFullSnapshotCases2();
         registerFullSnapshotCases3();

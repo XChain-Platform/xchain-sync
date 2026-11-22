@@ -51,7 +51,9 @@ const { validatorRewardKey } = require('./reward_identity');
 // `db` must be an
 // indexer-dbType Database (callers gate that), and passing `conn` lets a snapshot's
 // REPEATABLE READ view read these at the same height as the rest of its payload.
-async function collectRedrivenValidatorRewards(db, fromBlock, toBlock, conn){
+// `beforeBlock`, when given, keeps only rows earned below it: a snapshot's
+// block-scoped stream already carries every row at or above its first block.
+async function collectRedrivenValidatorRewards(db, fromBlock, toBlock, conn, beforeBlock){
     let from = Number(fromBlock);
     let to   = Number(toBlock);
 
@@ -73,7 +75,7 @@ async function collectRedrivenValidatorRewards(db, fromBlock, toBlock, conn){
         // narrower projection drops `id`, the AUTO_INCREMENT PK, so a redriven-only or
         // mixed batch would let the replica mint its own diverging id, invisible to the
         // count-only parity check and later swallowed by INSERT IGNORE on PK collision.
-        let rows = await db.findRedrivenValidatorRewards(from, to, conn);
+        let rows = await db.findRedrivenValidatorRewards(from, to, conn, beforeBlock);
         // round_qualifier closes the key, exactly as in derived_rewards.js: two distinct
         // archive rewards can share the four older columns after a hub rebase reissues
         // MATCH_BATCH_SEQ, and on the four-column key the second overwrites the first here

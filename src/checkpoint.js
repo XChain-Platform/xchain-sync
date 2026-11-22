@@ -26,6 +26,7 @@
  ********************************************************************/
 
 const crypto = require('crypto');
+const coins  = require('./coins');
 const eq     = require('./consensus/equivocation_header.js');
 const swq    = require('./consensus/stake_weighted_quorum.js');
 const supersede = require('./protocol/light_client/supersede_suffix.js');
@@ -45,8 +46,15 @@ function isCheckpointSupersedeActive(snapshotBlock, network){
 // the indexer's ed25519.js, so validator signatures verify identically here.
 const SPKI_ED25519_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 
-// The canonical signing string:
-//   XCHECKPOINT|CHAIN|NETWORK|BLOCK_INDEX|BLOCK_HASH|LEDGER_HASH|ACTIONS_HASH|CONTRACT_HASH|CHECKPOINT_SEQ|SNAPSHOT_BLOCK
+// The canonical signing grammar, in order:
+//   1. XCHECKPOINT|CHAIN|NETWORK|BLOCK_INDEX|BLOCK_HASH|LEDGER_HASH|ACTIONS_HASH|CONTRACT_HASH|CHECKPOINT_SEQ|SNAPSHOT_BLOCK
+//   2. At the commitment gate, when all four fields exist:
+//      |STATE_ROOT|STATE_ROOT_VERSION|BLOCK_MERKLE_ROOT|BLOCK_MERKLE_VERSION
+//   3. At the supersede gate: |SUPERSEDE|SUPERSEDES_FROM|RULES_DIGEST when both fields exist.
+//   4. For fold_archive: |MATCH_BATCH_SEQ|MATCH_COUNT|BATCH_CRC32|TOTAL_CHUNKS.
+//      Hub producers reject a fold archive carrying supersession fields.
+//   5. At the EQUIV gate, wrap as EQUIV|XCHECKPOINT|ROUND_ID|0||RAW, where ROUND_ID is
+//      CHAIN|NETWORK|BLOCK_INDEX|CHECKPOINT_SEQ plus |MATCH_BATCH_SEQ for fold_archive.
 // It MUST stay byte-identical to every other producer and verifier of it: the hub's
 // StateCheckpointEngine and StateAnchorPublisher, the indexer's ANCHOR verifier, recovery
 // wrapper and bridge-proof checkpoint_source.js, the SDK's checkpoint.js and the explorer's
@@ -66,8 +74,10 @@ function canonicalCheckpoint(cp){
        cp.state_root_version != null && cp.block_merkle_version != null)
         raw += '|' + [String(cp.state_root).toLowerCase(), String(cp.state_root_version),
                       String(cp.block_merkle_root).toLowerCase(), String(cp.block_merkle_version)].join('|');
-    if(isCheckpointSupersedeActive(cp.snapshot_block, cp.network) && supersede.hasSupersedeFields(cp))
-        raw += supersede.supersedeSuffix(cp);
+    const supersedeActive = isCheckpointSupersedeActive(cp.snapshot_block, cp.network);
+    if(!supersedeActive && supersede.hasSupersedeFields(cp))
+        throw new Error('checkpoint supersession fields are not active for snapshot_block ' + cp.snapshot_block);
+    if(supersedeActive) raw += supersede.supersedeSuffix(cp);
     // An ANCHOR v3 wrapper section is signed over its folded archive as well (the hub's
     // foldArchiveCanonical): the batch fields follow the roots and the round id gains the seq.
     const fold = cp.fold_archive;
@@ -226,17 +236,49 @@ function suppliedValidators(opts){
     return opts.validators;
 }
 
+const CHECKPOINT_COIN_PREFIX = Object.freeze({ mainnet: '', testnet: 'T', regtest: 'R' });
+
+function checkpointCoinPlane(code){
+    const upper = String(code || '').toUpperCase();
+    for (const chain of coins.ALLOWED_COINS)
+        for (const network of coins.NETWORKS)
+            if (CHECKPOINT_COIN_PREFIX[network] + chain === upper) return { chain, network };
+    return null;
+}
+
+function requestBindingMismatches(checkpoint, expected){
+    const mismatches = [];
+    const cp = checkpoint || {};
+    if (String(cp.block_index) !== String(expected.blockIndex))
+        mismatches.push({ field: 'block_index', requested: expected.blockIndex, served: cp.block_index });
+    const plane = checkpointCoinPlane(expected.coin);
+    if (!plane) {
+        mismatches.push({ field: 'coin', requested: expected.coin, served: null });
+        return mismatches;
+    }
+    if (String(cp.chain).toUpperCase() !== plane.chain)
+        mismatches.push({ field: 'chain', requested: plane.chain, served: cp.chain });
+    if (String(cp.network).toLowerCase() !== plane.network)
+        mismatches.push({ field: 'network', requested: plane.network, served: cp.network });
+    return mismatches.length ? mismatches : null;
+}
+
 // Judge a verify-endpoint body against the supplied set, else the served one.
 // Only a supplied set anchors the verdict: the served set comes from the same
 // response as the checkpoint, so it proves only that the served signers signed.
-function verifyServedCheckpoint(body, supplied){
+// When expected is present, the verdict is also bound to the requested coin and height.
+function verifyServedCheckpoint(body, supplied, expected){
     let set = supplied !== null ? supplied : (body.validators || []);
     let result = verifyCheckpoint(body.checkpoint, set);
-    return Object.assign({ checkpoint: body.checkpoint, snapshotAvailable: !!body.snapshot_available,
-        // The explorer's replay-window answer: false while a replay is open at or below
-        // this height. Only an explorer older than the field omits it; absent reads as true.
-        final: body.final === undefined ? true : body.final === true,
-        validatorSource: supplied !== null ? 'supplied' : 'explorer' }, result);
+    const bindingMismatches = expected ? requestBindingMismatches(body.checkpoint, expected) : null;
+    if (bindingMismatches) result.valid = false;
+    const served = { checkpoint: body.checkpoint, snapshotAvailable: !!body.snapshot_available,
+        // final and snapshotAvailable are explorer assertions, not locally verified.
+        // A missing or non-true final value proves no finality and reads as false.
+        final: body.final === true,
+        validatorSource: supplied !== null ? 'supplied' : 'explorer' };
+    if (expected) served.bindingMismatches = bindingMismatches;
+    return Object.assign(served, result);
 }
 
 // Convenience: fetch a checkpoint from an explorer's verify endpoint and
@@ -262,7 +304,7 @@ async function fetchAndVerifyCheckpoint(explorerUrl, coin, blockIndex, fetchImpl
     if (!res.ok) throw new Error('CheckpointVerifier: explorer returned HTTP ' + res.status);
     let body = await res.json();
     if (!body || !body.checkpoint) throw new Error('CheckpointVerifier: no checkpoint in response');
-    return verifyServedCheckpoint(body, supplied);
+    return verifyServedCheckpoint(body, supplied, { coin, blockIndex });
 }
 
 module.exports = {
@@ -278,6 +320,7 @@ module.exports = {
     commitmentActive,
     verifyCheckpoint,
     suppliedValidators,
+    requestBindingMismatches,
     verifyServedCheckpoint,
     fetchAndVerifyCheckpoint
 };

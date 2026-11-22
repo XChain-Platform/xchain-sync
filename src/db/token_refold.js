@@ -274,6 +274,16 @@ function compareTickIds(a, b){
     return left < right ? -1 : (left > right ? 1 : 0);
 }
 
+function unionTickIds(...groups){
+    const found = new Map();
+    for(const group of groups){
+        for(const id of (group || [])){
+            if(id !== null && id !== undefined) found.set(String(id), id);
+        }
+    }
+    return [...found.values()].sort(compareTickIds);
+}
+
 // Read before the generic deletes, as the source read phase does. Missing legacy
 // tables are skipped independently so one schema gap does not discard the other sets.
 async function collectRefoldTickIds(db, firstActionIndex, tables){
@@ -305,9 +315,9 @@ async function tokenAnchors(db, tickIds){
 }
 
 // Rewrite each collected tick's fold columns from its surviving valid issues. A tick
-// with no surviving valid issue is skipped, as the source skips it (getTokenInfo
-// returns false); its row, if it had one, went with the dataTables delete. UPDATE only:
-// the replica never mints a tokens id the source did not stream.
+// whose tokens row went with the dataTables delete is left alone, as the source leaves
+// it (getTokenInfo returns false). UPDATE only: the replica never mints a tokens id the
+// source did not stream.
 //
 // A tick is refolded only when its FIRST surviving valid issue is the row's own
 // first issuance (tokens.action_index). Otherwise this replica does not hold the
@@ -315,15 +325,21 @@ async function tokenAnchors(db, tickIds){
 // [base..tip] of issues), and a fold over the tail would write a row the source never
 // had. Those ticks are returned as skipped, left as they are, and reported by the
 // caller; TOKEN_FOLD_PARITY_CHECK is what then shows whether they diverged.
+//
+// The same holds for a tick with a surviving tokens row and no surviving valid issue
+// at all: tokens rolls back by action_index, so on a full-history replica a row that
+// outlived the delete always has its first issuance still present, and folding to
+// nothing means the history is not held here.
 async function refoldTokenRows(db, tickIds){
     let result = { refolded: 0, skipped: [] };
     if(!tickIds || tickIds.length === 0) return result;
     let folded = await foldTicks(db, tickIds);
-    let anchors = await tokenAnchors(db, [...folded.keys()]);
+    let anchors = await tokenAnchors(db, tickIds);
     let sets = FOLD_COLUMNS.map(c => c + '=?').join(', ');
-    for(let [tick, cols] of folded){
+    for(let id of tickIds){
+        let tick = String(id), cols = folded.get(tick);
         if(!anchors.has(tick)) continue;
-        if(anchors.get(tick) !== String(cols.first_action_index)){ result.skipped.push(tick); continue; }
+        if(!cols || anchors.get(tick) !== String(cols.first_action_index)){ result.skipped.push(tick); continue; }
         await db.doQuery("UPDATE tokens SET " + sets + " WHERE tick_id=?",
             FOLD_COLUMNS.map(c => cols[c]).concat([tick]), null, { rethrow: true });
         result.refolded++;
@@ -363,4 +379,5 @@ const RESTATED = Object.freeze({
     U64_MAX, MIN_TOKEN_DECIMALS, MAX_TOKEN_DECIMALS, FOLD_KEYS: Object.freeze(Object.keys(rowValues({}))),
 });
 
-module.exports = { FOLD_COLUMNS, RESTATED, foldIssueRows, collectRefoldTickIds, refoldTokenRows, tokenFoldRows };
+module.exports = { FOLD_COLUMNS, RESTATED, foldIssueRows, collectRefoldTickIds, unionTickIds,
+    refoldTokenRows, tokenFoldRows };

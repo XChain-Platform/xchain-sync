@@ -129,6 +129,8 @@ function streamIncrementalSnapshotDecoderTests(){
                 return [{ id: 1, code: 'x', data: 'y' }, { id: 2, code: 'z', data: 'w' }];
             return [];
         });
+        // Lookup pages read strictly; serve them from the same fake.
+        db.doQueryStrict = db.doQuery;
 
         let res = new PassThrough();
         let chunks = [];
@@ -170,6 +172,8 @@ function streamIncrementalSnapshotLookupTests(){
                 return [{ id: 1, address: 'a1' }, { id: 2, address: 'a2' }, { id: 3, address: 'a3' }];
             return [];
         });
+        // Lookup pages read strictly; serve them from the same fake.
+        db.doQueryStrict = db.doQuery;
 
         let res = new PassThrough();
         let chunks = [];
@@ -216,6 +220,8 @@ function streamIncrementalSnapshotEventTests(){
                 return [{ id: 1, event: 'REORG', data: 'x' }, { id: 2, event: 'REORG', data: 'y' }];
             return [];
         });
+        // Lookup pages read strictly; serve them from the same fake.
+        db.doQueryStrict = db.doQuery;
 
         let res = new PassThrough();
         let chunks = [];

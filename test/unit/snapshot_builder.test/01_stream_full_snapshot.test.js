@@ -69,6 +69,29 @@ function streamFullSnapshotStatusTests(){
     });
 }
 
+function streamFullSnapshotHashHeaderTests(){
+    it('sets only X-Block-Hash for a decoder full snapshot', async function(){
+        const db = createMockDb();
+        db.dbType = 'decoder';
+        db.getLastBlock.resolves(100);
+        db.getBlockHashRow.resolves({ block_hash: 'bh' });
+        db.doQuery.resolves([]);
+        const res = new PassThrough();
+        const setHeaderStub = sinon.stub();
+        res.setHeader = setHeaderStub;
+
+        await new Promise(resolve => {
+            res.on('finish', resolve);
+            builder.streamFullSnapshot(db, res);
+        });
+
+        assert.ok(setHeaderStub.calledWith('X-Block-Hash', 'bh'));
+        assert.strictEqual(setHeaderStub.calledWith('X-Ledger-Hash'), false);
+        assert.strictEqual(setHeaderStub.calledWith('X-Actions-Hash'), false);
+        assert.strictEqual(setHeaderStub.calledWith('X-Contract-Hash'), false);
+    });
+}
+
 function streamFullSnapshotPayloadTests(){
     it('streams valid gzip JSON for tables with data', async function(){
         let db = createMockDb();
@@ -165,6 +188,7 @@ function snapshotBuilderTests(){
     beforeEach(prepareSnapshotBuilder);
     afterEach(restoreSnapshotBuilder);
     describe('streamFullSnapshot', streamFullSnapshotStatusTests);
+    describe('streamFullSnapshot', streamFullSnapshotHashHeaderTests);
     describe('streamFullSnapshot', streamFullSnapshotPayloadTests);
     describe('streamFullSnapshot', streamFullSnapshotOrderingTests);
 }

@@ -204,6 +204,7 @@ class Store {
     async findStreamableTableNames(){ return Object.keys(this.tables).map(t => ({ table_name: t })); }
     async deleteAllRows(t){ this.tables[t] = []; }
     async deleteStateTreeRootsFromBlock(){ /* no state_tree_roots below the commitment gate */ }
+    async deleteStateTreeRootsForChain(){ /* no state_tree_roots below the commitment gate */ }
     async recordHalt(dbType, blockIndex, reason, mismatches, sources){
         if(this.faults.recordHaltThrow){ this.faults.recordHaltThrow = false; throw new Error('injected crash in recordHalt'); }
         let row = { id: this.halts.length + 1, db_type: dbType, block_index: blockIndex, reason,

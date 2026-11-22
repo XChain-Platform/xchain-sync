@@ -59,7 +59,7 @@ function registerHandleEventGroup1Tests(){
         it('does not trigger catch-up when no gap', async function(){
             sync.lastAppliedBlock = 50;
             sinon.stub(sync, 'incrementalCatchUp').resolves();
-            await sync.handleEvent({ type: 'status', block_height: 51 }, 0);
+            await sync.handleEvent({ type: 'status', block_height: 50 }, 0);
             assert.strictEqual(sync.incrementalCatchUp.called, false);
         });
 
@@ -82,6 +82,31 @@ function registerHandleEventGroup1Tests(){
 
             assert.strictEqual(sync.maybeVerifyCompleteness.calledOnce, true);
             assert.strictEqual(sync.maybeVerifyCompleteness.firstCall.args[0], 'http://source1:3006');
+        });
+    });
+}
+
+function registerStatusRecoveryTests(){
+    describe('handleEvent status recovery', function(){
+        it('retries a single missing block on each status tick @regression', async function(){
+            sync.lastAppliedBlock = 50;
+            sinon.stub(sync, 'incrementalCatchUp').resolves();
+
+            await sync.handleEvent({ type: 'status', block_height: 51 }, 0);
+            await sync.handleEvent({ type: 'status', block_height: 51 }, 0);
+
+            assert.strictEqual(sync.incrementalCatchUp.callCount, 2);
+            assert.deepStrictEqual(sync.incrementalCatchUp.args.map(args => args[0]), [51, 51]);
+        });
+
+        it('leaves an applied-plus-one block with the live quorum path @regression', async function(){
+            sync.lastAppliedBlock = 50;
+            sync.pendingHashes.set(51, { hashes: new Map() });
+            sinon.stub(sync, 'incrementalCatchUp').resolves();
+
+            await sync.handleEvent({ type: 'status', block_height: 51 }, 0);
+
+            assert.strictEqual(sync.incrementalCatchUp.called, false);
         });
     });
 }
@@ -155,6 +180,7 @@ function registerHandleEventGroup3Tests(){
 describe('ClientSync', function(){
     registerClientSyncHooks(assignState);
     registerHandleEventGroup1Tests();
+    registerStatusRecoveryTests();
     registerHandleEventGroup2Tests();
     registerHandleEventGroup3Tests();
 });

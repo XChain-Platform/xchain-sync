@@ -59,6 +59,8 @@ function streamIncrementalSnapshotLookupPagingTests(){
             }
             return [];
         });
+        // Lookup pages read strictly; serve them from the same fake.
+        db.doQueryStrict = db.doQuery;
 
         let res = new PassThrough();
         let chunks = [];

@@ -37,6 +37,7 @@ function rollbackCtx(dbType){
         rollback: { rollback: sinon.stub().resolves() },
         db: { getBlockHashRow: sinon.stub().resolves({ block_hash: 'aa' }) },
         beginRowRemoval: sinon.stub().resolves(), endRowRemoval: sinon.stub(),
+        haltForReorgRollbackFailure: sinon.stub().resolves(),
     };
 }
 
@@ -45,6 +46,7 @@ function tickCtx(over){
     return Object.assign({
         dbType: 'decoder', config: { DISPENSERS_RECONCILE_MAX_INTERVAL_MS: '0' },
         sources: [SOURCE], lastKnownServerBlock: 500, lastAppliedBlock: 500, _halted: null,
+        _evictedSources: new Set(),
         _lastDispenserReconcileAt: Date.now(), _catchUpCount: 3, _dispenserReconcileInFlight: false,
         recordUpstreamStatus: sinon.stub(), logGap: sinon.stub(),
         incrementalCatchUp: sinon.stub().resolves(), maybeVerifyCompleteness: sinon.stub().resolves(),
@@ -114,6 +116,17 @@ describe('ClientSync status tick after a reorg rollback', function(){
         await tick(ctx);
         assert.strictEqual(ctx.reconcileDispensers.called, false);
     });
+
+    it('retries a failed reorg reconcile after its backoff when the interval is disabled', async function(){
+        let ctx = tickCtx({ _dispenserReorgRetryAt: 301000 });
+        let clock = sinon.useFakeTimers({ now: 300999, toFake: ['Date'] });
+        await tick(ctx);
+        assert.strictEqual(ctx.reconcileDispensers.called, false);
+        clock.tick(1);
+        await tick(ctx);
+        assert.strictEqual(ctx.reconcileDispensers.calledOnceWith(SOURCE), true);
+        clock.restore();
+    });
 });
 
 describe('ClientSync catch-up after a reorg rollback', function(){
@@ -123,19 +136,23 @@ describe('ClientSync catch-up after a reorg rollback', function(){
         assert.strictEqual(ClientSync.prototype.shouldReconcileDispensers.call(ctx, 2000), true);
         ctx._dispenserReconcileAfterReorg = false;
         assert.strictEqual(ClientSync.prototype.shouldReconcileDispensers.call(ctx, 2000), false);
+        ctx._dispenserReorgRetryAt = 2500;
+        assert.strictEqual(ClientSync.prototype.shouldReconcileDispensers.call(ctx, 2499), false);
+        assert.strictEqual(ClientSync.prototype.shouldReconcileDispensers.call(ctx, 2500), true);
     });
 });
+
+// A decoder context with the post-reorg trigger armed and no prior reconcile.
+function decoderCtx(){
+    return { dbType: 'decoder', chain: 'bitcoin', network: 'mainnet', config: {},
+             _lastDispenserReconcileAt: null, _dispenserReconcileAfterReorg: true,
+             upstreamHeaders: () => ({}), withApplyLock: (fn) => fn(),
+             applier: { applyDispensersReplace: sinon.stub().resolves() } };
+}
 
 describe('ClientSync.reconcileDispensers clears the post-reorg trigger on attempt', function(){
     beforeEach(function(){ sinon.stub(console, 'log'); sinon.stub(console, 'error'); });
     afterEach(function(){ sinon.restore(); });
-
-    function decoderCtx(){
-        return { dbType: 'decoder', chain: 'bitcoin', network: 'mainnet', config: {},
-                 _lastDispenserReconcileAt: null, _dispenserReconcileAfterReorg: true,
-                 upstreamHeaders: () => ({}), withApplyLock: (fn) => fn(),
-                 applier: { applyDispensersReplace: sinon.stub().resolves() } };
-    }
 
     it('clears it when the reconcile succeeds', async function(){
         let ctx = decoderCtx();
@@ -147,10 +164,40 @@ describe('ClientSync.reconcileDispensers clears the post-reorg trigger on attemp
 
     it('clears it when the fetch fails, so a failing source is not re-fetched every tick', async function(){
         let ctx = decoderCtx();
+        ctx.config.DISPENSERS_RECONCILE_REORG_RETRY_MS = '300000';
         sinon.stub(axios, 'get').rejects(new Error('ECONNREFUSED'));
+        let clock = sinon.useFakeTimers({ now: 1000, toFake: ['Date'] });
         assert.strictEqual(await ClientSync.prototype.reconcileDispensers.call(ctx, SOURCE), false);
         assert.strictEqual(ctx._dispenserReconcileAfterReorg, false);
+        assert.strictEqual(ctx._dispenserReorgRetryAt, 301000);
+        clock.tick(300000);
+        assert.strictEqual(await ClientSync.prototype.reconcileDispensers.call(ctx, SOURCE), false);
+        assert.strictEqual(ctx._dispenserReorgRetryAt, 601000);
+        clock.restore();
         assert.strictEqual(ctx.applier.applyDispensersReplace.called, false);
+    });
+
+    it('keeps a new reorg arm that lands while the failed download is in flight', async function(){
+        let ctx = decoderCtx();
+        ctx._dispenserReconcileAfterReorg = false;
+        sinon.stub(axios, 'get').callsFake(async () => {
+            ctx._dispenserReconcileAfterReorg = true;
+            throw new Error('ECONNRESET');
+        });
+        assert.strictEqual(await ClientSync.prototype.reconcileDispensers.call(ctx, SOURCE), false);
+        assert.strictEqual(ctx._dispenserReconcileAfterReorg, true);
+        assert.strictEqual(ctx._dispenserReorgRetryAt, undefined);
+    });
+
+    it('backs off an HTTP 429 failure from a reorg-armed attempt', async function(){
+        let ctx = decoderCtx();
+        ctx.config.DISPENSERS_RECONCILE_REORG_RETRY_MS = '120000';
+        let limited = Object.assign(new Error('limited'), { response: { status: 429 } });
+        sinon.stub(axios, 'get').rejects(limited);
+        let clock = sinon.useFakeTimers({ now: 5000, toFake: ['Date'] });
+        assert.strictEqual(await ClientSync.prototype.reconcileDispensers.call(ctx, SOURCE), false);
+        clock.restore();
+        assert.strictEqual(ctx._dispenserReorgRetryAt, 125000);
     });
 
     it('leaves it armed when there is no source to attempt', async function(){

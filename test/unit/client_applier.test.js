@@ -49,15 +49,15 @@ function registerHooks(){
 
 function registerApplyBlockCases1(){
     it('skips null payload', async function(){
-        await applier.applyBlock(null);
+        await assert.rejects(() => applier.applyBlock(null), /Malformed live block payload/);
         assert.strictEqual(db.beginTransaction.called, false);
     });
     it('skips payload without data', async function(){
-        await applier.applyBlock({ block_index: 1 });
+        await assert.rejects(() => applier.applyBlock({ block_index: 1 }), /Malformed live block payload/);
         assert.strictEqual(db.beginTransaction.called, false);
     });
     it('skips payload without block_index', async function(){
-        await applier.applyBlock({ data: {} });
+        await assert.rejects(() => applier.applyBlock({ data: {} }), /Malformed live block payload/);
         assert.strictEqual(db.beginTransaction.called, false);
     });
     it('applies the genesis block (block_index 0) instead of silently dropping it', async function(){
@@ -71,7 +71,8 @@ function registerApplyBlockCases1(){
     });
     it('skips existing block (duplicate detection)', async function(){
         db.getBlockHashRow.resolves({ block_index: 1, ledger_hash: 'abc' });
-        await applier.applyBlock({ schema_version: liveVersion(), block_index: 1, data: { blocks: [{ block_index: 1 }] } });
+        let committed = await applier.applyBlock({ schema_version: liveVersion(), block_index: 1, data: { blocks: [{ block_index: 1 }] } });
+        assert.strictEqual(committed, false);
         assert.strictEqual(db.beginTransaction.called, false);
     });
     // A fail-soft read answers "block absent" for a DB blip too, and that answer
@@ -99,10 +100,28 @@ function registerApplyBlockCases1(){
                 transactions: [{ tx_index: 1, block_index: 5 }]
             }
         };
-        await applier.applyBlock(payload);
+        let committed = await applier.applyBlock(payload);
+        assert.strictEqual(committed, true);
         assert.strictEqual(db.beginTransaction.calledOnce, true);
         assert.strictEqual(db.commitTransaction.calledOnce, true);
         assert.ok(db.doQuery.called);
+    });
+}
+
+function registerMalformedBlockCases(){
+    it('refuses a payload whose data is an array or a scalar instead of a table map', async function(){
+        for(let data of [[], [{ block_index: 1 }], 'rows', 7, null]){
+            await assert.rejects(
+                () => applier.applyBlock({ schema_version: liveVersion(), block_index: 1, data }),
+                /Malformed live block payload at block 1/);
+        }
+        assert.strictEqual(db.beginTransaction.called, false);
+        assert.strictEqual(db.getBlockHashRow.called, false);
+    });
+    it('clears the previous roots when it refuses a malformed payload', async function(){
+        applier._lastComputedRoots = { stale: true };
+        await assert.rejects(() => applier.applyBlock({ block_index: 1 }), /Malformed live block payload/);
+        assert.strictEqual(applier._lastComputedRoots, null);
     });
 }
 
@@ -287,6 +306,7 @@ describe('ClientApplier', function(){
 
     describe('applyBlock', function(){
         registerApplyBlockCases1();
+        registerMalformedBlockCases();
         registerApplyBlockCases2();
         registerApplyBlockCases3();
         registerApplyBlockCases4();

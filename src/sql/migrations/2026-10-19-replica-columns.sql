@@ -32,8 +32,14 @@ ALTER TABLE `anchor_reward_reconcile_log` ADD COLUMN IF NOT EXISTS `round_qualif
 ALTER TABLE `anchor_reward_reconcile_log` ADD COLUMN `round_qualifier` BIGINT UNSIGNED NOT NULL DEFAULT 0 AFTER `round_reference`;
 -- migration-key: contract-emissions-action-index-nullable
 ALTER TABLE `contract_emissions` MODIFY COLUMN `action_index` BIGINT UNSIGNED NULL;
+-- migration-key: file-manifests-total-bytes-bigint-nullable
+ALTER TABLE `file_manifests` MODIFY COLUMN `total_bytes` BIGINT UNSIGNED NULL;
 -- migration-key: repair-auto-increment
 ALTER TABLE `{{table}}` MODIFY id BIGINT NOT NULL AUTO_INCREMENT;
+-- migration-key: repair-auto-increment-unsigned
+ALTER TABLE `{{table}}` MODIFY id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT;
+-- migration-key: reset-auto-increment
+ALTER TABLE `{{table}}` AUTO_INCREMENT = {{next_id}};
 -- migration-key: attests-request-status
 ALTER TABLE `attests` MODIFY COLUMN `request_status` ENUM('pending','fulfilled','expired','errored','rejected') NOT NULL DEFAULT 'pending';
 -- migration-key: utf8mb4-columns

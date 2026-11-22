@@ -63,7 +63,8 @@ describe('ClientRollback invalid_archive parent reset @regression', function(){
             assert.ok(sql.includes('c.version = 2'));
             assert.ok(sql.includes('c.action_index >= ?'));
             assert.ok(sql.includes("cs.status = 'valid'"));
-            assert.ok(sql.includes("us.status = 'unverified'"));
+            assert.ok(sql.includes("LEFT JOIN index_statuses us ON us.status = 'unverified'"));
+            assert.ok(sql.includes('COALESCE(p.pre_archive_status_id, us.id) IS NOT NULL'));
             assert.ok(sql.includes('p.action_index < ?'));
             assert.ok(sql.includes(archiveHeadPickPredicate('p')));
             assert.deepStrictEqual(resets[0].args[1], [500, foldArchiveHeadFloor(network, 'DOGE'), 500]);

@@ -1,3 +1,14 @@
+/*********************************************************************
+ *
+ * Copyright © 2025-2026 Dankest, LLC
+ * Based on XChain Platform by Dankest, LLC - https://dankest.llc
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ *
+ * This file is part of XChain Platform. Licensed under the GNU Affero
+ * General Public License v3.0 or later; see LICENSE.md.
+ *
+ **********************************************************************/
 'use strict';
 
 // The replica's schema changes live in dated files under src/sql/migrations/ and run through
@@ -82,6 +93,8 @@ describe('replica SQL migrations', function(){
         const db = fakeDb();
         await db.runSqlMigrationStatement('2026-10-19-replica-columns.sql', 'repair-auto-increment', { table: 'credits' });
         assert.strictEqual(db.calls[0].sql, 'ALTER TABLE `credits` MODIFY id BIGINT NOT NULL AUTO_INCREMENT');
+        await db.runSqlMigrationStatement('2026-10-19-replica-columns.sql', 'repair-auto-increment-unsigned', { table: 'credits' });
+        assert.strictEqual(db.calls[1].sql, 'ALTER TABLE `credits` MODIFY id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT');
         await assert.rejects(() => db.runSqlMigrationStatement('2026-10-19-replica-columns.sql', 'repair-auto-increment'),
             /Missing SQL migration replacement: table/);
     });

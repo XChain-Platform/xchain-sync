@@ -24,7 +24,7 @@ function makeKeypair() {
 
 // One validator signs a pre-commitment mainnet checkpoint, so the count regime
 // decides and a single signature is quorate.
-function signedBody(extra) {
+function signedBody(extra, checkpointOverrides) {
     let key = makeKeypair();
     let cp = {
         chain: 'BTC', network: 'mainnet', block_index: 900123,
@@ -32,6 +32,7 @@ function signedBody(extra) {
         actions_hash: 'ef'.repeat(32), contract_hash: '01'.repeat(32),
         checkpoint_seq: 417, snapshot_block: 900120
     };
+    Object.assign(cp, checkpointOverrides || {});
     let sig = crypto.sign(null, Buffer.from(Checkpoint.canonicalCheckpoint(cp), 'utf8'), key.privateKey).toString('hex');
     cp.validator_signatures = JSON.stringify([{ pubkey: key.pubkeyHex, sig: sig }]);
     return Object.assign({ checkpoint: cp, validators: [key.pubkeyHex], snapshot_available: true }, extra);
@@ -41,8 +42,7 @@ function stubFetch(body) {
     return async () => ({ ok: true, json: async () => body });
 }
 
-describe('served checkpoint final (sync twin)', function () {
-
+function registerFinalityCases() {
     it('passes final false through for a height inside an open replay window', function () {
         let result = Checkpoint.verifyServedCheckpoint(signedBody({ final: false }), null);
         assert.strictEqual(result.valid, true);
@@ -57,7 +57,8 @@ describe('served checkpoint final (sync twin)', function () {
 
     it('reads an absent final as true, the answer of an explorer that predates the field', function () {
         let result = Checkpoint.verifyServedCheckpoint(signedBody({}), null);
-        assert.strictEqual(result.final, true);
+        assert.strictEqual(result.valid, true);
+        assert.strictEqual(result.final, false);
     });
 
     it('reads any present value other than true as not final', function () {
@@ -73,7 +74,9 @@ describe('served checkpoint final (sync twin)', function () {
         assert.strictEqual(result.validatorSource, 'supplied');
         assert.strictEqual(result.final, false);
     });
+}
 
+function registerFetchAndBindingCase() {
     it('fetchAndVerifyCheckpoint reports final false inside the window and true once replayed', async function () {
         let open = await Checkpoint.fetchAndVerifyCheckpoint('https://explorer.xchain.io', 'BTC', 900123,
             stubFetch(signedBody({ final: false })));
@@ -82,5 +85,35 @@ describe('served checkpoint final (sync twin)', function () {
         let replayed = await Checkpoint.fetchAndVerifyCheckpoint('https://explorer.xchain.io', 'BTC', 900123,
             stubFetch(signedBody({ final: true })));
         assert.strictEqual(replayed.final, true);
+        let absent = await Checkpoint.fetchAndVerifyCheckpoint('https://explorer.xchain.io', 'BTC', 900123,
+            stubFetch(signedBody({})));
+        assert.strictEqual(absent.valid, true);
+        assert.strictEqual(absent.final, false);
+
+        const wrongHeight = await Checkpoint.fetchAndVerifyCheckpoint('', 'BTC', 900124,
+            stubFetch(signedBody({ final: true })));
+        assert.strictEqual(wrongHeight.validSigs, 1);
+        assert.strictEqual(wrongHeight.valid, false);
+        assert.deepStrictEqual(wrongHeight.bindingMismatches,
+            [{ field: 'block_index', requested: 900124, served: 900123 }]);
+        const wrongChain = await Checkpoint.fetchAndVerifyCheckpoint('', 'BTC', 900123,
+            stubFetch(signedBody({ final: true }, { chain: 'LTC' })));
+        assert.strictEqual(wrongChain.validSigs, 1);
+        assert.strictEqual(wrongChain.valid, false);
+        assert.deepStrictEqual(wrongChain.bindingMismatches.map(m => m.field), ['chain']);
+        assert.strictEqual(Checkpoint.requestBindingMismatches(
+            { chain: 'BTC', network: 'testnet', block_index: 900123 },
+            { coin: 'TBTC', blockIndex: '900123' }), null);
+        assert.deepStrictEqual(Checkpoint.requestBindingMismatches(
+            { chain: 'LTC', network: 'regtest', block_index: 900123 },
+            { coin: 'BTC', blockIndex: 900123 }).map(m => m.field), ['chain', 'network']);
+        assert.deepStrictEqual(Checkpoint.requestBindingMismatches(
+            { chain: 'BTC', network: 'mainnet', block_index: 900123 },
+            { coin: 'UNKNOWN', blockIndex: 900123 }).map(m => m.field), ['coin']);
     });
+}
+
+describe('served checkpoint final (sync twin)', function () {
+    registerFinalityCases();
+    registerFetchAndBindingCase();
 });

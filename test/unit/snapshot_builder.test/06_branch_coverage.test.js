@@ -147,7 +147,7 @@ function branchIncrementalSnapshotScopeTests(){
         db.dbType = 'decoder';
         db.getLastBlock.resolves(100);
         db.getBlockHashRow.resolves({ block_hash: 'BH' });
-        db.doQuery.callsFake(async (sql) => {
+        db.doQueryStrict = db.doQuery.callsFake(async (sql) => {
             if(/information_schema/.test(sql))
                 return [
                     { table_name: 'mempool_transactions' }, // decoderSkip
@@ -176,7 +176,7 @@ function branchIncrementalSnapshotScopeTests(){
         db.getLastBlock.resolves(100);
         db.getBlockHashRow.resolves({}); // missing fields → '' fallbacks
         db.getFirstActionIndex.resolves(500);
-        db.doQuery.callsFake(async (sql) => {
+        db.doQueryStrict = db.doQuery.callsFake(async (sql) => {
             if(/information_schema/.test(sql))
                 return [{ table_name: 'blocks' }, { table_name: 'index_actions' },
                         { table_name: 'sends' }, { table_name: 'no_action_col' }];

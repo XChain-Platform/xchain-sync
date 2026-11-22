@@ -192,3 +192,60 @@ describe('ClientRollback cooldown-maturity escrow-release transaction handling',
         assert.strictEqual(db.rollbackTransaction.calledOnce, true);
     });
 });
+
+describe('ClientRollback cooldown-maturity token refold population @regression', function(){
+    afterEach(function(){ sinon.restore(); });
+
+    function withMaturityTicks(firstActionIndex, capabilityRows, contractRows){
+        const db = createMockDb(firstActionIndex);
+        db.doQuery.callsFake(async sql => {
+            if(/^SELECT t\.id AS tick_id FROM index_tickers/.test(sql)) return capabilityRows;
+            if(/^SELECT DISTINCT tick_id FROM contract_unstakes/.test(sql)) return contractRows;
+            if(/^SELECT tick_id, action_index FROM tokens/.test(sql)) return [];
+            return [];
+        });
+        return db;
+    }
+
+    it('refolds contract and GAS ticks even when the rollback has no actions', async function(){
+        const db = withMaturityTicks(null, [{ tick_id: 9 }], [{ tick_id: 4 }]);
+        const rollback = new ClientRollback(db, new Utility(), undefined, 'regtest');
+        const refold = sinon.spy(require('../../../src/db/token_refold'), 'refoldTokenRows');
+
+        await rollback.rollback(100);
+
+        assert.ok(refold.calledOnce);
+        assert.deepStrictEqual(refold.firstCall.args[1], [4, 9]);
+    });
+
+    it('collects maturity ticks before completed statuses are reset', async function(){
+        const db = withMaturityTicks(null, [{ tick_id: 9 }], [{ tick_id: 4 }]);
+        const rollback = new ClientRollback(db, new Utility(), undefined, 'regtest');
+
+        await rollback.rollback(100);
+
+        const calls = db.doQuery.getCalls();
+        const capabilityRead = calls.find(c => /^SELECT t\.id AS tick_id FROM index_tickers/.test(c.args[0]));
+        const contractRead = calls.find(c => /^SELECT DISTINCT tick_id FROM contract_unstakes/.test(c.args[0]));
+        const firstReset = calls.find(c => /^UPDATE unstakes SET status_id/.test(c.args[0]));
+        assert.ok(calls.indexOf(capabilityRead) < calls.indexOf(firstReset));
+        assert.ok(calls.indexOf(contractRead) < calls.indexOf(firstReset));
+    });
+
+    it('dedupes and sorts action and maturity ticks together', async function(){
+        const db = withMaturityTicks(500, [{ tick_id: 9 }], [{ tick_id: 4 }]);
+        db.doQuery.callsFake(async sql => {
+            if(/^SELECT t\.id AS tick_id FROM index_tickers/.test(sql)) return [{ tick_id: 9 }];
+            if(/^SELECT DISTINCT tick_id FROM contract_unstakes/.test(sql)) return [{ tick_id: 4 }];
+            if(/^SELECT DISTINCT m\./.test(sql)) return [{ tick_id: 9 }, { tick_id: 2 }];
+            if(/^SELECT tick_id, action_index FROM tokens/.test(sql)) return [];
+            return [];
+        });
+        const rollback = new ClientRollback(db, new Utility(), undefined, 'regtest');
+        const refold = sinon.spy(require('../../../src/db/token_refold'), 'refoldTokenRows');
+
+        await rollback.rollback(100);
+
+        assert.deepStrictEqual(refold.firstCall.args[1], [2, 4, 9]);
+    });
+});

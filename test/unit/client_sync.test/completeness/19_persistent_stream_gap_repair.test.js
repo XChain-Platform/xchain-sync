@@ -21,6 +21,7 @@ const {
     assert, sinon, axios, ClientSync, registerClientSyncHooks
 } = require('../support');
 const tableLifecycle = require('../../../../src/table_lifecycle');
+const { SCHEMA_VERSION } = require('../../../../src/schema/version');
 
 const SOURCE = 'http://source1:3006';
 const SOURCE_ROWS = Array.from({ length: 1188 }, (_, i) => ({ action_index: i + 1 }));
@@ -48,15 +49,21 @@ function registerFakeReplica(){
         config.COMPLETENESS_CHECK_INTERVAL = 60000;
         sync.lastAppliedBlock = 100;
         local = { mappings_actions: SOURCE_ROWS.slice(0, 1186), mappings_files: [1, 2, 3, 4] };
-        snapshot = { block_height: 100, tables: { mappings_actions: SOURCE_ROWS.slice() } };
+        snapshot = { schema_version: SCHEMA_VERSION.indexer, block_height: 100,
+            tables: { mappings_actions: SOURCE_ROWS.slice() } };
         db.getTableCount = sinon.stub().callsFake(async (table) => (local[table] || []).length);
         db.setSyncState = sinon.stub().resolves();
         db.getSyncState = sinon.stub().resolves(null);
+        db.getLastBlock = sinon.stub().resolves(100);
         db.beginTransaction = sinon.stub().resolves();
         db.commitTransaction = sinon.stub().resolves(true);
         db.rollbackTransaction = sinon.stub().resolves();
         db.deleteAllRows = sinon.stub().callsFake(async (table) => { local[table] = []; });
         applier.insertRows = sinon.stub().callsFake(async (table, rows) => { local[table].push(...rows); });
+        sinon.stub(sync, 'downloadRepairTable').callsFake(async () => ({
+            block_height: snapshot.block_height,
+            rows: snapshot.tables.mappings_actions
+        }));
         sinon.stub(sync, 'downloadIncrementalCatchUp').callsFake(async () => ({ snapshotData: snapshot }));
         sinon.stub(axios, 'get');
         sinon.stub(console, 'warn');
@@ -66,11 +73,13 @@ function registerFakeReplica(){
 function registerRepairTests(){
     it('re-reads a persistent mappings_actions gap from the source, replaces it, and the gap closes', async function(){
         await sweep(sourceCounts());
-        assert.strictEqual(sync.downloadIncrementalCatchUp.called, false, 'a first sighting is never repaired');
+        assert.strictEqual(sync.downloadRepairTable.called, false, 'a first sighting is never repaired');
 
         await sweep(sourceCounts());
-        assert.strictEqual(sync.downloadIncrementalCatchUp.callCount, 1);
-        assert.deepStrictEqual(sync.downloadIncrementalCatchUp.firstCall.args, [SOURCE, 0]);
+        assert.strictEqual(sync.downloadRepairTable.callCount, 1);
+        assert.deepStrictEqual(sync.downloadRepairTable.firstCall.args, [SOURCE, 'mappings_actions']);
+        assert.strictEqual(sync.downloadIncrementalCatchUp.called, false,
+            'the bounded route avoids the full-history snapshot');
         assert.strictEqual(db.deleteAllRows.calledOnceWith('mappings_actions'), true);
         assert.strictEqual(local.mappings_actions.length, 1188, 'the replica now holds every source row');
         assert.strictEqual(db.commitTransaction.calledOnce, true);
@@ -78,7 +87,7 @@ function registerRepairTests(){
         await sweep(sourceCounts());
         assert.ok(!sync.getReplicaGaps().some(g => g.table === 'mappings_actions'), 'the gap closed');
         assert.match(lines(console.warn), /REPLICA_GAP_CLOSED: .* table mappings_actions now matches the source/);
-        assert.strictEqual(sync.downloadIncrementalCatchUp.callCount, 1, 'a closed gap is not repaired again');
+        assert.strictEqual(sync.downloadRepairTable.callCount, 1, 'a closed gap is not repaired again');
     });
 
     it('logs a one-sweep lag at warn and never at error', async function(){
@@ -89,14 +98,14 @@ function registerRepairTests(){
 
         assert.match(lines(console.warn), /TABLE_COUNT_MISMATCH at block 100/);
         assert.doesNotMatch(lines(console.error), /TABLE_COUNT_MISMATCH|REPLICA_GAP_PERSISTENT/);
-        assert.strictEqual(sync.downloadIncrementalCatchUp.called, false);
+        assert.strictEqual(sync.downloadRepairTable.called, false);
     });
 
     it('never replaces a stream table the registry does not mark repairable', async function(){
         local.mappings_actions = SOURCE_ROWS.slice();
         for(let i = 0; i < 3; i++) await sweep(sourceCounts());
 
-        assert.strictEqual(sync.downloadIncrementalCatchUp.called, false);
+        assert.strictEqual(sync.downloadRepairTable.called, false);
         assert.strictEqual(local.mappings_files.length, 4);
         assert.match(lines(console.error), /REPLICA_GAP_PERSISTENT: .*mappings_files short 1 row/);
     });
@@ -131,16 +140,150 @@ function registerGuardTests(){
         assert.strictEqual(db.commitTransaction.called, false);
     });
 
+    it('refuses the replace when a same-height reorg lands during the repair read @regression', async function(){
+        sync.downloadRepairTable.callsFake(async () => {
+            sync._reorgGeneration++;
+            return { block_height: 100, rows: SOURCE_ROWS.slice() };
+        });
+        await sweep(sourceCounts());
+        await sweep(sourceCounts());
+
+        assert.strictEqual(db.deleteAllRows.called, false);
+        assert.strictEqual(local.mappings_actions.length, 1186);
+        assert.match(lines(console.error), /Stream-table repair pass failed .*reorged during repair read/);
+    });
+}
+
+// Two sweeps reach the repair; the replica rows must survive and the refusal be logged.
+async function assertRepairRefused(pattern){
+    await sweep(sourceCounts());
+    await sweep(sourceCounts());
+    assert.strictEqual(db.deleteAllRows.called, false);
+    assert.strictEqual(local.mappings_actions.length, 1186);
+    assert.match(lines(console.error), pattern);
+}
+
+function registerCommittedTipGuardTests(){
+    it('refuses the replace when the stored tip is ahead of the lagging cursor @regression', async function(){
+        db.getLastBlock.resolves(101);
+        await assertRepairRefused(/Stream-table repair pass failed .*committed tip 101 is not the repair height 100/);
+    });
+
+    it('refuses the replace while a live block\'s post-commit checks are pending @regression', async function(){
+        sync.markLiveVerify(100, 1);
+        await assertRepairRefused(/Stream-table repair pass failed .*post-commit checks are pending/);
+        sync.markLiveVerify(100, -1);
+    });
+
+    it('refuses the replace when a halt lands during the repair download @regression', async function(){
+        sync.downloadRepairTable.callsFake(async () => {
+            sync._halted = { reason: 'test-halt', blockIndex: 100 };
+            return { block_height: 100, rows: SOURCE_ROWS.slice() };
+        });
+        try {
+            await assertRepairRefused(/Stream-table repair pass failed .*halted during repair read/);
+        } finally { sync._halted = null; }
+    });
+
+    it('refuses the replace when a halt lands during the in-lock tip read @regression', async function(){
+        db.getLastBlock.callsFake(async () => {
+            sync._halted = { reason: 'test-halt', blockIndex: 100 };
+            return 100;
+        });
+        try {
+            await assertRepairRefused(/Stream-table repair pass failed .*halted during repair read/);
+        } finally { sync._halted = null; }
+    });
+
+    it('refuses the replace when the stored tip cannot be read @regression', async function(){
+        db.getLastBlock.rejects(new Error('db down'));
+        await assertRepairRefused(/Stream-table repair pass failed .*db down/);
+    });
+}
+
+function registerLegacySnapshotSchemaTests(){
+    it('refuses a legacy snapshot with a mismatched schema before replacing rows @regression', async function(){
+        const missing = new Error('not found');
+        missing.response = { status: 404, data: { error: 'Not found', code: 'NOT_FOUND' } };
+        sync.downloadRepairTable.rejects(missing);
+        snapshot.schema_version = SCHEMA_VERSION.indexer + 1;
+        await sweep(sourceCounts());
+        await sweep(sourceCounts());
+
+        assert.strictEqual(sync.downloadIncrementalCatchUp.calledOnce, true);
+        assert.strictEqual(db.deleteAllRows.called, false);
+        assert.strictEqual(local.mappings_actions.length, 1186);
+        assert.match(lines(console.error), /Repair table schema mismatch for mappings_actions/);
+    });
+
+    it('refuses a legacy snapshot with no schema version before replacing rows @regression', async function(){
+        const missing = new Error('not found');
+        missing.response = { status: 404, data: { error: 'Not found', code: 'NOT_FOUND' } };
+        sync.downloadRepairTable.rejects(missing);
+        delete snapshot.schema_version;
+        await sweep(sourceCounts());
+        await sweep(sourceCounts());
+
+        assert.strictEqual(sync.downloadIncrementalCatchUp.calledOnce, true);
+        assert.strictEqual(db.deleteAllRows.called, false);
+        assert.strictEqual(local.mappings_actions.length, 1186);
+        assert.match(lines(console.error), /Repair table schema mismatch for mappings_actions/);
+    });
+}
+
+function registerRepairRouteTests(){
+    it('falls back to the legacy full snapshot only when the route is absent', async function(){
+        let missing = new Error('not found');
+        missing.response = { status: 404,
+            data: Buffer.from(JSON.stringify({ error: 'Not found', code: 'NOT_FOUND' })) };
+        sync.downloadRepairTable.rejects(missing);
+        await sweep(sourceCounts());
+        await sweep(sourceCounts());
+
+        assert.deepStrictEqual(sync.downloadIncrementalCatchUp.firstCall.args, [SOURCE, 0]);
+        assert.strictEqual(local.mappings_actions.length, 1188);
+        assert.match(lines(console.warn), /source lacks \/snapshot-table/);
+    });
+
+    it('does not treat a new-route database 404 as an older source', async function(){
+        let missing = new Error('chain not found');
+        missing.response = { status: 404,
+            data: Buffer.from(JSON.stringify({
+                error: 'Chain/network/dbType not found', code: 'NOT_FOUND'
+            })) };
+        sync.downloadRepairTable.rejects(missing);
+        await sweep(sourceCounts());
+        await sweep(sourceCounts());
+
+        assert.strictEqual(sync.downloadIncrementalCatchUp.called, false);
+        assert.strictEqual(db.deleteAllRows.called, false);
+        assert.match(lines(console.error), /Stream-table repair pass failed .*chain not found/);
+    });
+
+    it('parses a bounded repair-table response and checks its schema', async function(){
+        sync.downloadRepairTable.restore();
+        axios.get.resolves({ data: Buffer.from(JSON.stringify({
+            schema_version: SCHEMA_VERSION.indexer,
+            block_height: 100,
+            table: 'mappings_actions',
+            rows: [{ action_index: 7 }]
+        })) });
+
+        let result = await sync.downloadRepairTable(SOURCE, 'mappings_actions');
+        assert.deepStrictEqual(result, { block_height: 100, rows: [{ action_index: 7 }] });
+        assert.match(axios.get.firstCall.args[0], /\/snapshot-table\/indexer\/bitcoin\/mainnet\/mappings_actions$/);
+    });
+
     it('stops after three failed attempts at one gap', async function(){
         snapshot.block_height = 101;
         for(let i = 0; i < 6; i++) await sweep(sourceCounts());
-        assert.strictEqual(sync.downloadIncrementalCatchUp.callCount, 3);
+        assert.strictEqual(sync.downloadRepairTable.callCount, 3);
     });
 
     it('never repairs on a truncated replica, whose window cannot match the full-history count', async function(){
         sinon.stub(sync, 'isTruncated').returns(true);
         for(let i = 0; i < 3; i++) await sweep(sourceCounts());
-        assert.strictEqual(sync.downloadIncrementalCatchUp.called, false);
+        assert.strictEqual(sync.downloadRepairTable.called, false);
     });
 }
 
@@ -163,6 +306,9 @@ describe('ClientSync', function(){
         registerFakeReplica();
         registerRepairTests();
         registerGuardTests();
+        registerCommittedTipGuardTests();
+        registerLegacySnapshotSchemaTests();
+        registerRepairRouteTests();
         registerRegistryTests();
     });
 });

@@ -101,10 +101,14 @@ describe('Checkpoint supersession @regression', function(){
         const signer = makeSigner();
         const cp = checkpointAt({
             network: 'mainnet', block_index: 900123, checkpoint_seq: 417,
-            snapshot_block: 900120, supersedes_from: 900000, rules_digest: RULES_DIGEST,
+            snapshot_block: 900120,
         });
         sign(cp, signer);
+        cp.supersedes_from = 900000;
+        cp.rules_digest = RULES_DIGEST;
 
+        assert.throws(() => checkpoint.canonicalCheckpoint(cp), /not active/);
+        assert.strictEqual(checkpoint.tryCanonicalCheckpoint(cp), null);
         const result = checkpoint.verifyCheckpoint(cp, [signer.pubkey]);
         assert.strictEqual(result.valid, false);
         assert.strictEqual(result.validSigs, 0);

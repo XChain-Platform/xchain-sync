@@ -37,6 +37,7 @@ const { collectRedrivenValidatorRewards } = require('./recovery_rewards');
 const { collectDerivedAnchorRewards } = require('./derived_rewards');
 const { validatorRewardKey } = require('./reward_identity');
 const seedReorgWindow = require('./poller/reorg_window_seed');
+const reorgMarkerCursor = require('./poller/reorg_marker_cursor');
 const {
     rulesFromMarker,
     retroactiveFromRules,
@@ -48,6 +49,7 @@ const { activationDelayBlocks, coinTicker } = require('../consensus-constants');
 const { isStateCommitmentActive } = require('../consensus/gates/state_commitment_gate');
 const { SCHEMA_VERSION } = require('../schema/version');
 const util = require('node:util');
+const { SUMMARY_EVERY_MS } = require('../util/retry_backoff');
 const { getLogger } = require('../observability');
 const envConfig = require('../config');
 const logger = getLogger();
@@ -149,27 +151,14 @@ function initializeTableTopology(poller){
 }
 
 function initializeInfrastructureTables(poller){
-    if(poller.dbType === 'decoder'){
-        // Leave decoder without cross-chain infrastructure tables.
-        poller.infraTables = new Set();
-        return;
-    }
-
-    // Sync infrastructure tables regardless of subscriber mode.
-    // Provide cross-chain validator, reward, and price-query state.
-
-    // Send only these tables to infra-only subscribers for this chain.
-    // Keep the set identical for every indexer poller instance.
-    poller.infraTables = new Set([
-        'stakes', 'delegations', 'validator_rewards', 'prices', 'reward_claims',
-        'index_pubkeys', 'index_addresses', 'index_actions', 'index_statuses', 'index_fiats'
-    ]);
+    poller.infraTables = replicatedTables.getInfraTables(poller.dbType);
 }
 
 function initializePollerHealthState(poller){
     // Count consecutive poll failures for stale /health status.
     // Reset the count after a successful poll cycle.
     poller.pollErrorCount = 0;
+    poller.pollErrorLoggedAt = 0;
 
     // Throttle the action-scoped query-count metric.
     // Use zero so the first block publishes a baseline.
@@ -207,15 +196,18 @@ class ServerPoller {
         }
 
         await this.updateStatus();
+        await this.pollLoop();
+    }
 
+    async pollLoop(){
         while(this.running){
             let blocksProcessed = 0;
             try {
                 blocksProcessed = await this.poll() || 0;
-                this.pollErrorCount = 0;
+                this.notePollRecovered();
             } catch(e){
                 this.pollErrorCount++;
-                logger.error(util.format('ServerPoller error for ' + this.chain + '/' + this.network + '/' + this.dbType + ' (consecutive errors: ' + this.pollErrorCount + '):', e));
+                this.logPollError(e);
                 // Update status so the poll_error_count field is current even while
                 // lastPolledBlock is frozen at the last-good value.
                 await this.updateStatus().catch(() => {});
@@ -224,6 +216,26 @@ class ServerPoller {
             if(blocksProcessed < 100)
                 await this.util.sleep(this.config['BLOCK_POLL_INTERVAL']);
         }
+    }
+
+    // A run of poll failures is logged in full when it starts and then once per
+    // summary window, so a source database that stays down cannot flood the log.
+    logPollError(e){
+        const now = Date.now();
+        if(this.pollErrorCount > 1 && now - this.pollErrorLoggedAt < SUMMARY_EVERY_MS) return;
+        this.pollErrorLoggedAt = now;
+        logger.error(util.format('ServerPoller error for ' + this.chain + '/' + this.network + '/' + this.dbType +
+            ' (consecutive errors: ' + this.pollErrorCount + '; repeats are logged once per ' +
+            (SUMMARY_EVERY_MS / 60000) + ' min):', e));
+    }
+
+    // End a failure run with one line; the /health count resets either way.
+    notePollRecovered(){
+        if(this.pollErrorCount > 0){
+            logger.info('ServerPoller for ' + this.chain + '/' + this.network + '/' + this.dbType +
+                ' recovered after ' + this.pollErrorCount + ' consecutive error(s)');
+        }
+        this.pollErrorCount = 0;
     }
 
     // Seed the broadcast cursor for a (re)start. For the indexer, resume from the
@@ -357,9 +369,11 @@ class ServerPoller {
     }
 
     async initializeReorgMarkerCursor(){
-        if(this.dbType === 'decoder' || typeof this.db.getMaxRowId !== 'function') return;
-        this.lastEventId = await this.readLatestEventId();
-        this.reorgMarkerCursorInitialized = true;
+        await reorgMarkerCursor.initializeReorgMarkerCursor(this, logger);
+    }
+
+    async acknowledgeReorgMarkerCursor(eventId){
+        await reorgMarkerCursor.acknowledgeReorgMarkerCursor(this, eventId);
     }
 
     async readNewReorgMarkers(){
@@ -393,7 +407,7 @@ class ServerPoller {
     async handleReorgMarkers(){
         let { markers, newestEventId } = await this.readNewReorgMarkers();
         if(markers.length === 0){
-            this.lastEventId = newestEventId;
+            await this.acknowledgeReorgMarkerCursor(newestEventId);
             return false;
         }
 
@@ -407,7 +421,7 @@ class ServerPoller {
         }
 
         if(forkBlock > this.lastPolledBlock){
-            this.lastEventId = newestEventId;
+            await this.acknowledgeReorgMarkerCursor(newestEventId);
             return false;
         }
 
@@ -417,11 +431,11 @@ class ServerPoller {
             await this.transparencyLog.pruneFrom(forkBlock);
         this.broadcastReorg(forkBlock);
         this.lastPolledBlock = forkBlock - 1;
-        this.lastEventId = newestEventId;
         this.lastPolledBlockHash = this.recentBroadcastHashes.has(this.lastPolledBlock)
             ? this.recentBroadcastHashes.get(this.lastPolledBlock)
             : await this.sourceBlockHash(this.lastPolledBlock);
         await this.updateStatus();
+        await this.acknowledgeReorgMarkerCursor(newestEventId);
         return true;
     }
 
@@ -815,8 +829,8 @@ class ServerPoller {
     // state_tree_nodes/roots), NOT in sync_meta, NOT in any Merkle leaf. NULL
 
     // before the flag-day (the follower then skips the check). The follower
-    // verifies balances_root + block_merkle_root in Phase 1; state_root is carried
-    // for the later full-state_root verification (no wire change needed then).
+    // verifies balances_root + block_merkle_root + state_root; a NULL state_root
+    // during the catch-up burst described below is skipped.
 
     // state_root folds the BTC-only stakes_root, which the follower recomputes
     // every block from the live stakes/unstakes tables (stateCommitment

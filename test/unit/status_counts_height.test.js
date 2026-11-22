@@ -20,7 +20,7 @@ const replicatedTables = require('../../src/schema/replicated_tables');
 
 function loadApi(mode, env){
     let saved = {};
-    let vars = Object.assign({ SYNC_MODE: mode }, env || {});
+    let vars = Object.assign({ SYNC_MODE: mode, XCHAIN_LOG_PATCH: '0' }, env || {});
     for(let k of Object.keys(vars)){ saved[k] = process.env[k]; process.env[k] = vars[k]; }
     let api = proxyquire('../../src/api', {});
     for(let k of Object.keys(vars)){

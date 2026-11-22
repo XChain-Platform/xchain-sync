@@ -27,7 +27,7 @@ const path   = require('path');
 const ROLLBACK = path.join(__dirname, '../../../src/client/rollback.js');
 
 // The catches that deliberately skip only a missing table (1054 aborts there), each named by its comment.
-const MISSING_TABLE_ONLY_SITES = 4;
+const MISSING_TABLE_ONLY_SITES = 3;
 
 describe('ClientRollback schema-gap catches', function(){
     it('skip a schema gap only through isSchemaGapError, never an inline errno pair', function(){

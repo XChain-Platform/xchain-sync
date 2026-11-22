@@ -66,6 +66,8 @@ function pubkeysDb(queries){
         }
         return [];
     });
+    // Lookup pages read strictly; serve them from the same fake.
+    db.doQueryStrict = db.doQuery;
     return db;
 }
 

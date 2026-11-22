@@ -65,6 +65,7 @@ function registerHooks(){
         service = new SyncService(config);
         sinon.stub(console, 'log');
         sinon.stub(console, 'error');
+        sinon.stub(console, 'warn');
         // startPollerForChain / startClientSyncForChain run start() as an unawaited
         // background promise whose .catch calls process.exit(1) on crash (for container
         // restart). With mocked deps those promises reject after the test moves on; stub
@@ -100,6 +101,19 @@ describe("SyncService", function(){
             // Let the unawaited .catch run.
             await new Promise(r => setImmediate(r));
             assert.ok(process.exit.calledWith(1));
+        });
+
+        it('does not exit when startup rejects after the client starts stopping @regression', async function(){
+            sinon.stub(ClientSync.prototype, 'start').callsFake(function(){
+                this._stopping = true;
+                return Promise.reject(new Error('pool closed during stop'));
+            });
+
+            service.startClientSyncForChain('bitcoin:mainnet:indexer', { dbType: 'indexer' }, indexerCfg());
+            await new Promise(r => setImmediate(r));
+
+            assert.strictEqual(process.exit.called, false);
+            assert.strictEqual(console.warn.called, true);
         });
     });
 

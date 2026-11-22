@@ -252,17 +252,19 @@ function seedEnvKey(chain, network) {
     return 'CHECKPOINT_SEED_' + String(chain).toUpperCase() + '_' + String(network).toUpperCase();
 }
 
-// Parse + lightly validate an env-supplied seed checkpoint into { seed, error }, the
-// same absent-versus-invalid split as parseValidatorSetEnv. state_root is the field
-// the forward walk anchors successor-set proofs to, so it is required and a string.
+// Parse an env seed checkpoint into { seed, error }, split like parseValidatorSetEnv. It is
+// matched by exact height against CHAR(64) hex roots, so a fractional height or non-hex root
+// is refused here, naming the typo at startup instead of an unanchored wait or quorum halt.
 function parseSeedEnv(raw) {
     let cp;
     try { cp = JSON.parse(raw); } catch (e) { return { seed: null, error: 'is not valid JSON (' + e.message + ')' }; }
     if (!cp || typeof cp !== 'object' || Array.isArray(cp)) return { seed: null, error: 'is not a JSON object' };
-    if (typeof cp.state_root !== 'string' || !cp.state_root) return { seed: null, error: 'has no non-empty string `state_root`' };
+    if (typeof cp.state_root !== 'string' || !HEX64.test(cp.state_root)) return { seed: null, error: 'has no 64-hex `state_root`' };
+    if (cp.block_merkle_root != null && (typeof cp.block_merkle_root !== 'string' || !HEX64.test(cp.block_merkle_root)))
+        return { seed: null, error: 'has a `block_merkle_root` that is not 64-hex' };
     for (const f of ['block_index', 'snapshot_block']) {
-        if (typeof cp[f] !== 'number' || !Number.isFinite(cp[f]) || cp[f] < 0)
-            return { seed: null, error: 'has no finite non-negative number `' + f + '`' };
+        if (!Number.isSafeInteger(cp[f]) || cp[f] < 0)
+            return { seed: null, error: 'has no non-negative integer `' + f + '`' };
     }
     return { seed: cp, error: null };
 }
@@ -306,14 +308,10 @@ const _OVERRIDE_PREFIXES = [
     { prefix: 'CHECKPOINT_SEED_',       keyFn: seedEnvKey, pins: PINNED_CHECKPOINTS, parse: parseSeedEnv,         what: 'pinned seed checkpoint' },
 ];
 
-// A prefixed name with a CHAIN_NETWORK suffix, both halves non-empty. Mirrors config.js
-// bootstrapDepthEnvKey's shape rule, except that the prefix matches in any case, so a
-// mis-cased name reaches isReadOverrideName's upper-case check and is refused, not skipped.
-function isChainNetworkShaped(prefix, envKey) {
-    if (envKey.length < prefix.length || envKey.slice(0, prefix.length).toUpperCase() !== prefix) return false;
-    const rest = envKey.slice(prefix.length);
-    const sep  = rest.lastIndexOf('_');
-    return sep > 0 && sep < rest.length - 1;
+// Any case-insensitive prefix match is an override attempt. The name-shape and
+// getter-reachability checks below decide whether the getter can read it.
+function hasOverridePrefix(prefix, envKey) {
+    return envKey.length >= prefix.length && envKey.slice(0, prefix.length).toUpperCase() === prefix;
 }
 
 // Does a getter ever read this shaped name? Only when it is the upper-case name keyFn builds
@@ -328,8 +326,8 @@ function isReadOverrideName(family, name) {
 
 /**
  * REFUSE to start when an explicitly supplied CHECKPOINT_VALIDATORS_* or
- * CHECKPOINT_SEED_* value is present but unusable, or sits under a CHAIN_NETWORK name no
- * getter reads (an unknown chain or network, or a name not in upper case).
+ * CHECKPOINT_SEED_* value is present but unusable, or sits under a name no getter reads
+ * (a missing CHAIN_NETWORK suffix, unknown chain or network, or a name not in upper case).
  *
  * A malformed or misnamed override is not inert. The hot-path getters cannot throw;
  * they fall back to the baked-in pin or null. That would either ignore an intended
@@ -347,7 +345,7 @@ function assertPinnedEnvOverrides(env) {
     for (const envKey of Object.keys(source)) {
         for (const family of _OVERRIDE_PREFIXES) {
             const { prefix, parse, what } = family;
-            if (!isChainNetworkShaped(prefix, envKey)) continue;
+            if (!hasOverridePrefix(prefix, envKey)) continue;
             const raw = source[envKey];
             if (raw === undefined || raw === null || raw === '') break;   // absent: inert, not an error
             if (!isReadOverrideName(family, envKey)) {

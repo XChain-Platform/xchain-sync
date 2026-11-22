@@ -28,6 +28,15 @@
  *
  ********************************************************************/
 
+// An incremental snapshot passes the first action index its base window
+// streams. Rows at or above it already ride that stream, so the snapshot asks
+// only for the backdated rows below it; with no bound no predicate is added.
+function belowActionIndex(alias, bound, args){
+    if(bound === null || bound === undefined) return "";
+    args.push(bound);
+    return " AND " + alias + ".action_index < ?";
+}
+
 module.exports = {
 
     /**
@@ -41,15 +50,18 @@ module.exports = {
      * @param {number} from              first block of the window, inclusive
      * @param {number} to                last block of the window, inclusive
      * @param {object} [conn]            a connection to read on, when the caller holds one
+     * @param {number} [beforeActionIndex] only rows whose action_index is below this
      * @returns {Promise<object[]>} the driver's row array
      */
-    async findMaturedCapabilityCooldownCredits(gasTick, completedStatusId, from, to, conn){
+    async findMaturedCapabilityCooldownCredits(gasTick, completedStatusId, from, to, conn, beforeActionIndex){
+        let args = [gasTick, completedStatusId, from, to];
         return await this.doQuery(
             "SELECT c.* FROM credits c " +
             "JOIN unstakes u ON u.action_index = c.action_index AND u.source_id = c.address_id " +
             "JOIN index_tickers g ON g.id = c.tick_id AND g.tick = ? " +
-            "WHERE u.status_id = ? AND u.cooldown_end_block BETWEEN ? AND ?",
-            [gasTick, completedStatusId, from, to], conn);
+            "WHERE u.status_id = ? AND u.cooldown_end_block BETWEEN ? AND ?" +
+            belowActionIndex('c', beforeActionIndex, args),
+            args, conn);
     },
 
     /**
@@ -61,14 +73,17 @@ module.exports = {
      * @param {number} from              first block of the window, inclusive
      * @param {number} to                last block of the window, inclusive
      * @param {object} [conn]            a connection to read on, when the caller holds one
+     * @param {number} [beforeActionIndex] only rows whose action_index is below this
      * @returns {Promise<object[]>} the driver's row array
      */
-    async findMaturedContractCooldownCredits(completedStatusId, from, to, conn){
+    async findMaturedContractCooldownCredits(completedStatusId, from, to, conn, beforeActionIndex){
+        let args = [completedStatusId, from, to];
         return await this.doQuery(
             "SELECT c.* FROM credits c " +
             "JOIN contract_unstakes cu ON cu.action_index = c.action_index AND cu.source_id = c.address_id AND cu.tick_id = c.tick_id " +
-            "WHERE cu.status_id = ? AND cu.cooldown_end_block BETWEEN ? AND ?",
-            [completedStatusId, from, to], conn);
+            "WHERE cu.status_id = ? AND cu.cooldown_end_block BETWEEN ? AND ?" +
+            belowActionIndex('c', beforeActionIndex, args),
+            args, conn);
     },
 
     /**
@@ -82,15 +97,18 @@ module.exports = {
      * @param {number} from              first block of the window, inclusive
      * @param {number} to                last block of the window, inclusive
      * @param {object} [conn]            a connection to read on, when the caller holds one
+     * @param {number} [beforeActionIndex] only rows whose action_index is below this
      * @returns {Promise<object[]>} the driver's row array
      */
-    async findMaturedCapabilityCooldownEscrows(gasTick, completedStatusId, from, to, conn){
+    async findMaturedCapabilityCooldownEscrows(gasTick, completedStatusId, from, to, conn, beforeActionIndex){
+        let args = [gasTick, completedStatusId, from, to];
         return await this.doQuery(
             "SELECT e.* FROM escrows e " +
             "JOIN unstakes u ON u.action_index = e.action_index AND u.source_id = e.address_id " +
             "JOIN index_tickers g ON g.id = e.tick_id AND g.tick = ? " +
-            "WHERE u.status_id = ? AND u.cooldown_end_block BETWEEN ? AND ?",
-            [gasTick, completedStatusId, from, to], conn);
+            "WHERE u.status_id = ? AND u.cooldown_end_block BETWEEN ? AND ?" +
+            belowActionIndex('e', beforeActionIndex, args),
+            args, conn);
     },
 
     /**
@@ -101,14 +119,17 @@ module.exports = {
      * @param {number} from              first block of the window, inclusive
      * @param {number} to                last block of the window, inclusive
      * @param {object} [conn]            a connection to read on, when the caller holds one
+     * @param {number} [beforeActionIndex] only rows whose action_index is below this
      * @returns {Promise<object[]>} the driver's row array
      */
-    async findMaturedContractCooldownEscrows(completedStatusId, from, to, conn){
+    async findMaturedContractCooldownEscrows(completedStatusId, from, to, conn, beforeActionIndex){
+        let args = [completedStatusId, from, to];
         return await this.doQuery(
             "SELECT e.* FROM escrows e " +
             "JOIN contract_unstakes cu ON cu.action_index = e.action_index AND cu.source_id = e.address_id AND cu.tick_id = e.tick_id " +
-            "WHERE cu.status_id = ? AND cu.cooldown_end_block BETWEEN ? AND ?",
-            [completedStatusId, from, to], conn);
+            "WHERE cu.status_id = ? AND cu.cooldown_end_block BETWEEN ? AND ?" +
+            belowActionIndex('e', beforeActionIndex, args),
+            args, conn);
     },
 
     /**

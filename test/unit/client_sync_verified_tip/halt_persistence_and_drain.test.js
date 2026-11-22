@@ -94,3 +94,60 @@ describe('ClientSync: stop() drains in-flight work @regression', function(){
         assert.deepStrictEqual(order, ['sync.stop', 'drained', 'close']);
     });
 });
+
+function queueWs(sync, ev){
+    sync.handleWebSocketMessage(Buffer.from(JSON.stringify(ev)), 'http://a:3006', 0);
+}
+
+function held(){
+    const h = {};
+    h.promise = new Promise(r => { h.release = r; });
+    return h;
+}
+
+describe('ClientSync: stop() drains WS events already on the event chain @regression', function(){
+    quiet();
+
+    it('drops a reorg and a block queued behind a running catch-up', async function(){
+        const { sync, applier, rollback } = buildClient({ tip: 200 });
+        sync.lastAppliedBlock = 200;
+        sync.lastHashes = hashesAt(200);
+        const catchUp = held();
+        sinon.stub(sync, 'incrementalCatchUp').callsFake(() => catchUp.promise);
+        const completeness = sinon.stub(sync, 'maybeVerifyCompleteness').resolves();
+        const reorgs = sinon.spy(sync, 'handleSourceReorg');
+        const blocks = sinon.spy(sync, 'handleBlock');
+        queueWs(sync, { type: 'status', block_height: 205 });
+        queueWs(sync, { type: 'reorg', block_index: 198 });
+        queueWs(sync, Object.assign({ type: 'block', block_index: 201, block_time: 1 }, hashesAt(201)));
+        await new Promise(r => setImmediate(r));
+        assert.strictEqual(sync.incrementalCatchUp.calledOnce, true, 'the status event did not reach its catch-up');
+        const stopping = sync.stop();
+        catchUp.release();
+        await stopping;
+        await sync._wsEventChain;
+        assert.strictEqual(reorgs.called, false, 'a reorg queued before stop() still ran');
+        assert.strictEqual(blocks.called, false, 'a block queued before stop() still ran');
+        assert.strictEqual(rollback.rollback.called, false);
+        assert.strictEqual(applier.applyBlock.called, false);
+        assert.strictEqual(completeness.called, false, 'the status event kept working after stop()');
+        assert.strictEqual(sync.isHalted(), false);
+    });
+
+    it('the stop promise settles only after the event the chain is running', async function(){
+        const { sync } = buildClient({ tip: 200 });
+        sync.lastAppliedBlock = 200;
+        const sweep = held();
+        sinon.stub(sync, 'maybeVerifyCompleteness').callsFake(() => sweep.promise);
+        queueWs(sync, { type: 'status', block_height: 200 });
+        await new Promise(r => setImmediate(r));
+        assert.strictEqual(sync.maybeVerifyCompleteness.calledOnce, true, 'the status event did not reach its sweep');
+        let stopped = false;
+        const stopping = sync.stop().then(() => { stopped = true; });
+        await new Promise(r => setImmediate(r));
+        assert.strictEqual(stopped, false, 'stop settled while a WS event was mid-run');
+        sweep.release();
+        await stopping;
+        assert.strictEqual(stopped, true);
+    });
+});

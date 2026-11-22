@@ -43,9 +43,9 @@ const { getLogger } = require('../observability');
 const logger = getLogger();
 // ATTEST batch-rail versions and the completion stamp, shared with the forward carry in
 // src/server/updated_rows.js (class 5b) so the reverse reset below cannot drift from what it delivers.
-// updated_rows.js requires only src/consensus/state_hash.js, so this introduces no cycle.
+// Import the dependency-free leaf that defines them, avoiding the server carry's dependency graph.
 const { ATTEST_BATCH_HEAD_VERSION, ATTEST_BATCH_CONTINUATION_VERSION,
-        ATTEST_BATCH_COMPLETION_STAMP } = require('../server/updated_rows');
+        ATTEST_BATCH_COMPLETION_STAMP } = require('../server/updated_rows/table_specs.js');
 
 // What markets.tick1_id / tick2_id hold for a side that is the chain's native coin
 // rather than a token: the coin has no index_tickers row, and NULL is distinct inside
@@ -229,12 +229,23 @@ async function reverseCooldownMaturities(db, blockIndex, network, coin){
     try {
         let completedStatusId = await db.getStatusId('completed');
         let validStatusId = await db.getStatusId('valid');
-        if(completedStatusId === null || validStatusId === null) return;
+        if(completedStatusId === null || validStatusId === null) return [];
         let gasTick = gasTickSymbol();
         let deleteReleases = gateRegistry.activeAt(MATURITY_ESCROW_REVERSAL_KEY, network, coin, Number(blockIndex), null);
+        const tickIds = [];
         if(gasTick){
+            const rows = await db.doQuery(
+                "SELECT t.id AS tick_id FROM index_tickers t WHERE t.tick = ? AND EXISTS (" +
+                "SELECT 1 FROM unstakes u WHERE u.status_id = ? AND u.cooldown_end_block >= ? AND u.block_index < ?)",
+                [gasTick, completedStatusId, blockIndex, blockIndex], null, { rethrow: true });
+            tickIds.push(...(rows || []).map(row => row.tick_id));
             await deleteCapabilityMaturityLedgerRows(db, gasTick, completedStatusId, blockIndex, deleteReleases);
         }
+        const contractRows = await db.doQuery(
+            "SELECT DISTINCT tick_id FROM contract_unstakes " +
+            "WHERE status_id = ? AND cooldown_end_block >= ? AND block_index < ?",
+            [completedStatusId, blockIndex, blockIndex], null, { rethrow: true });
+        tickIds.push(...(contractRows || []).map(row => row.tick_id));
         await deleteContractMaturityLedgerRows(db, completedStatusId, blockIndex, deleteReleases);
         await db.doQuery(
             "UPDATE unstakes SET status_id = ? WHERE status_id = ? AND cooldown_end_block >= ? AND block_index < ?",
@@ -242,8 +253,10 @@ async function reverseCooldownMaturities(db, blockIndex, network, coin){
         await db.doQuery(
             "UPDATE contract_unstakes SET status_id = ? WHERE status_id = ? AND cooldown_end_block >= ? AND block_index < ?",
             [validStatusId, completedStatusId, blockIndex, blockIndex]);
+        return tokenRefold.unionTickIds(tickIds);
     } catch(e){
         if(!isSchemaGapError(e)) throw e;
+        return [];
     }
 }
 
@@ -302,9 +315,19 @@ class ClientRollback {
         // rethrow, as the first-action read above: a fault read as "unset" would run the
         // COINPay re-derive and the market sweep on a truncated replica's partial history.
         let truncatedReplica = false;
+        let bootstrapBase = null;
         if(this.db && typeof this.db.getSyncState === 'function'){
-            let base = await this.db.getSyncState('bootstrap_base:' + ((this.db && this.db.dbType) || 'indexer'), { rethrow: true });
-            truncatedReplica = (base !== null && base !== undefined && parseInt(base, 10) > 0);
+            bootstrapBase = await this.db.getSyncState(
+                'bootstrap_base:' + ((this.db && this.db.dbType) || 'indexer'), { rethrow: true });
+            truncatedReplica = (bootstrapBase !== null && bootstrapBase !== undefined &&
+                parseInt(bootstrapBase, 10) > 0);
+        }
+        let escrowFloorActionIndex = null;
+        if(truncatedReplica){
+            let floor = await this.db.getFirstActionIndex(
+                parseInt(bootstrapBase, 10), null, { rethrow: true });
+            escrowFloorActionIndex = floor === null || floor === undefined
+                ? Number.MAX_SAFE_INTEGER : floor;
         }
 
         // Pairs whose orders/matches this rollback is about to orphan, collected BEFORE
@@ -810,9 +833,10 @@ class ClientRollback {
             // re-maturity sweep skips forever, diverging from the source (which now reverses it on
             // every rollback). Predicates key only on cooldown_end_block/block_index; the GAS tick
             // (capability refund) is the frozen consensus constant, never a hub poll. rebuildBalances
-            // below recomputes wholesale from the surviving credits, so no per-row seeding is needed.
+            // below recomputes wholesale, while the affected ticks feed the metadata refold set.
             // Runs BEFORE the dataTables delete.
-            await reverseCooldownMaturities(this.db, block_index, this.network, this.coin);
+            const cooldownRefoldTickIds = await reverseCooldownMaturities(
+                this.db, block_index, this.network, this.coin);
 
             // Restore the surviving archive head (v1, or a v3 fold row) stamped by an orphaned final chunk.
             // Journaled heads recover their prior status; legacy heads become unverified.
@@ -823,16 +847,35 @@ class ClientRollback {
                     // the source indexer's term. Rationale and the arming precondition live in
                     // src/consensus/gates/archive_rollback_author_scope_gate.js.
                     let authorScope = archiveAuthorScopeJoin(block_index, this.network);
+                    const unverifiedStatusId = await this.db.getStatusId('unverified', { rethrow: true });
+                    if(unverifiedStatusId === null){
+                        const stuckHeads = await this.db.doQuery(
+                            "SELECT p.action_index FROM anchor_actions p " +
+                            "JOIN index_statuses ps ON ps.id = p.status_id AND ps.status = 'invalid_archive' " +
+                            "JOIN anchor_actions c ON c.version = 2 AND c.match_batch_seq = p.match_batch_seq AND c.action_index >= ? " +
+                            "JOIN index_statuses cs ON cs.id = c.status_id AND cs.status = 'valid' " +
+                            authorScope +
+                            "WHERE " + archiveHeadPickPredicate('p') +
+                            " AND p.action_index < ? AND " + archiveHeadPredicate('p') +
+                            " AND p.pre_archive_status_id IS NULL",
+                            [firstActionIndex, foldArchiveHeadFloor(this.network, 'DOGE'), firstActionIndex]);
+                        if(stuckHeads.length){
+                            logger.error('rollback: archive heads ' + stuckHeads.map(row => row.action_index).join(', ') +
+                                " remain invalid_archive because this replica lacks the source's unverified status row; " +
+                                'a snapshot re-sync is required to converge');
+                        }
+                    }
                     await this.db.doQuery(
                         "UPDATE anchor_actions p " +
                         "JOIN index_statuses ps ON ps.id = p.status_id AND ps.status = 'invalid_archive' " +
                         "JOIN anchor_actions c ON c.version = 2 AND c.match_batch_seq = p.match_batch_seq AND c.action_index >= ? " +
                         "JOIN index_statuses cs ON cs.id = c.status_id AND cs.status = 'valid' " +
                         authorScope +
-                        "JOIN index_statuses us ON us.status = 'unverified' " +
+                        "LEFT JOIN index_statuses us ON us.status = 'unverified' " +
                         "SET p.status_id = COALESCE(p.pre_archive_status_id, us.id), p.pre_archive_status_id = NULL " +
                         "WHERE " + archiveHeadPickPredicate('p') +
-                        " AND p.action_index < ? AND " + archiveHeadPredicate('p'),
+                        " AND p.action_index < ? AND " + archiveHeadPredicate('p') +
+                        " AND COALESCE(p.pre_archive_status_id, us.id) IS NOT NULL",
                         // Bind in SQL order: the chunk join, the pick predicate's fold floor, then the parent bound.
                         [firstActionIndex, foldArchiveHeadFloor(this.network, 'DOGE'), firstActionIndex]);
                 } catch(e){
@@ -876,7 +919,7 @@ class ClientRollback {
             // encoding can never revive a head whose own completing chunk survives.
             //
             // Runs BEFORE the dataTables delete, while both rows are still present. The three
-            // version/stamp constants are imported from updated_rows.js so the forward carry and
+            // version/stamp constants are imported from updated_rows/table_specs.js so the forward carry and
             // this reverse reset cannot drift apart; the twin to change in lockstep is
             // xchain-indexer/src/db/rollback/batch_heads.js.
             if(firstActionIndex !== null){
@@ -913,6 +956,7 @@ class ClientRollback {
                     if(!isSchemaGapError(e)) throw e;
                 }
             }
+            refoldTickIds = tokenRefold.unionTickIds(refoldTickIds, cooldownRefoldTickIds);
 
             if(firstActionIndex !== null){
                 for(let table of this.dataTables){
@@ -931,6 +975,16 @@ class ClientRollback {
                     }
                 }
 
+                // Mirror the source's sweepOrphanedIcons after token rows are
+                // deleted. The surviving MAX(id) bound preserves icons whose
+                // token lookup is missing below the replica's retained floor.
+                try {
+                    let tokenMax = await this.readSurvivingMaxId('tokens');
+                    await this.db.doQuery('DELETE FROM icons WHERE token_id > ? AND token_id NOT IN (SELECT id FROM tokens)', [tokenMax]);
+                } catch(e){
+                    if(!isSchemaGapError(e)) throw e;
+                }
+
                 // Re-derive tokens.escrow_action_index AFTER the dataTables delete (mirror of
                 // xchain-indexer/src/rollback/rederive.js). Orphaned offers + their append-only status rows
                 // (order_statuses/swap_statuses/dispenser_statuses) are now gone, so a surviving
@@ -945,7 +999,7 @@ class ClientRollback {
                     // Shared with the forward-apply path (ClientApplier) so source +
                     // replica derive byte-identical escrow gates. The marker SQL lives
                     // in rederiveEscrowGate() below (cross-repo drift guard reads it there).
-                    await rederiveEscrowGate(this.db);
+                    await rederiveEscrowGate(this.db, { floorActionIndex: escrowFloorActionIndex });
                 } catch(e){
                     // Schema-gap errors (missing table/column on older replicas) are safe to skip.
                     // All other errors (deadlock, lock-wait, connection drop) must abort the reorg-reset.
@@ -979,20 +1033,6 @@ class ClientRollback {
                         if(!isSchemaGapError(e)) throw e;
                     }
                 }
-            }
-
-            // Sweep orphan icon rows after the dataTables delete has removed any
-            // reorged token rows. icons is keyed by token_id (FK to tokens), so
-            // icons for reorged tokens become orphans. icons is operator-local and never
-            // shipped in a snapshot, so this sweep is the replica's only cleanup.
-            // Mirrors xchain-indexer/src/rollback/rederive.js.
-            try {
-                await this.db.doQuery('DELETE FROM icons WHERE token_id NOT IN (SELECT id FROM tokens)', []);
-            } catch(e){
-                // Only errno 1146 (table missing on older schemas) is a benign skip;
-                // a transient/operational fault must abort so the outer catch rolls
-                // back and retries rather than committing a partial rollback.
-                if(e.errno !== 1146) throw e;
             }
 
             for(let table of this.blockTables){
@@ -1346,7 +1386,8 @@ class ClientRollback {
                 const refold = await tokenRefold.refoldTokenRows(this.db, refoldTickIds);
                 if(refold.skipped.length)
                     logger.warn('ClientRollback: tokens refold skipped ' + refold.skipped.length + ' tick(s) whose first ' +
-                        'issuance is not held locally (truncated replica?); tick_ids ' + refold.skipped.slice(0, 20).join(','));
+                        'issuance is not held locally (truncated replica?); their supply keeps the source value until ' +
+                        'a forward window touches the tick; tick_ids ' + refold.skipped.slice(0, 20).join(','));
             } catch(e){
                 if(!isSchemaGapError(e)){ logger.error(util.format('refoldTokenRows after rollback failed:', e)); throw e; }
             }
@@ -1356,9 +1397,15 @@ class ClientRollback {
             // IN PLACE (no new row), so it survives the block-scoped deletes with the
             // inflated value; the source indexer's rollback recomputes it (updateTokens),
             // so without this the replica serves an over-inflated supply until the next
-            // full snapshot. Mirrors xchain-indexer getTokenSupply (see balance-helpers).
+            // full snapshot. A truncated replica scopes this to tokens whose first
+            // issuance is held, because a pre-floor token has only a partial ledger.
+            // Mirrors xchain-indexer getTokenSupply (see balance-helpers).
             try {
-                await balanceHelpers.recomputeTokenSupplies(this.db);
+                if(truncatedReplica)
+                    await balanceHelpers.recomputeTokenSupplies(this.db,
+                        { minTokenActionIndex: escrowFloorActionIndex });
+                else
+                    await balanceHelpers.recomputeTokenSupplies(this.db);
             } catch(e){
                 // errno 1146 (missing table) is the only benign schema gap; log the
                 // step and rethrow real faults so the outer catch rolls back.
@@ -1445,7 +1492,18 @@ class ClientRollback {
 // whatever transaction the caller already opened.
 // Affected set = currently-escrowed tokens (Class A) UNION tokens with a
 // surviving still-escrowed GIVE_OWNERSHIP offer (Class B).
-async function rederiveEscrowGate(db){
+function actionIndexBelowFloor(actionIndex, floorActionIndex){
+    if(actionIndex === null || actionIndex === undefined ||
+       floorActionIndex === null || floorActionIndex === undefined) return false;
+    try {
+        return BigInt(actionIndex) < BigInt(floorActionIndex);
+    } catch(e){
+        let action = Number(actionIndex), floor = Number(floorActionIndex);
+        return Number.isFinite(action) && Number.isFinite(floor) && action < floor;
+    }
+}
+
+async function rederiveEscrowGate(db, { floorActionIndex } = {}){
     //<ESCROW-REDERIVE-SQL>
     const escrowAffectedTickersSql =
         `SELECT DISTINCT tk.tick FROM tokens t INNER JOIN index_tickers tk ON tk.id=t.tick_id WHERE t.escrow_action_index IS NOT NULL
@@ -1455,19 +1513,41 @@ async function rederiveEscrowGate(db){
              UNION ALL
              SELECT s.give_tick_id FROM swaps s INNER JOIN swap_statuses st ON st.swap_action_index=s.action_index INNER JOIN index_statuses si ON si.id=st.status_id WHERE s.give_ownership=1 AND st.action_index=(SELECT MAX(x.action_index) FROM swap_statuses x WHERE x.swap_action_index=s.action_index) AND si.status IN ('open','cancelling','expiring')
              UNION ALL
-             SELECT d.give_tick_id FROM dispensers d INNER JOIN dispenser_statuses st ON st.dispenser_action_index=d.action_index INNER JOIN index_statuses si ON si.id=st.status_id WHERE d.give_ownership=1 AND st.action_index=(SELECT MAX(x.action_index) FROM dispenser_statuses x WHERE x.dispenser_action_index=d.action_index) AND si.status IN ('open','cancelling','expiring')
+             SELECT d.give_tick_id FROM dispensers d INNER JOIN dispenser_statuses st ON st.dispenser_action_index=d.action_index INNER JOIN index_statuses si ON si.id=st.status_id WHERE d.give_ownership=1 AND st.action_index=(SELECT MAX(x.action_index) FROM dispenser_statuses x WHERE x.dispenser_action_index=d.action_index) AND si.status IN ('open','cancelling')
          )`;
     const escrowOpenOfferSql =
         `SELECT o.action_index FROM orders o INNER JOIN order_statuses st ON st.order_action_index=o.action_index INNER JOIN index_statuses si ON si.id=st.status_id INNER JOIN index_tickers tk ON tk.id=o.give_tick_id WHERE tk.tick=? AND o.give_ownership=1 AND st.action_index=(SELECT MAX(x.action_index) FROM order_statuses x WHERE x.order_action_index=o.action_index) AND si.status IN ('open','cancelling','expiring')
          UNION ALL
          SELECT s.action_index FROM swaps s INNER JOIN swap_statuses st ON st.swap_action_index=s.action_index INNER JOIN index_statuses si ON si.id=st.status_id INNER JOIN index_tickers tk ON tk.id=s.give_tick_id WHERE tk.tick=? AND s.give_ownership=1 AND st.action_index=(SELECT MAX(x.action_index) FROM swap_statuses x WHERE x.swap_action_index=s.action_index) AND si.status IN ('open','cancelling','expiring')
          UNION ALL
-         SELECT d.action_index FROM dispensers d INNER JOIN dispenser_statuses st ON st.dispenser_action_index=d.action_index INNER JOIN index_statuses si ON si.id=st.status_id INNER JOIN index_tickers tk ON tk.id=d.give_tick_id WHERE tk.tick=? AND d.give_ownership=1 AND st.action_index=(SELECT MAX(x.action_index) FROM dispenser_statuses x WHERE x.dispenser_action_index=d.action_index) AND si.status IN ('open','cancelling','expiring')
+         SELECT d.action_index FROM dispensers d INNER JOIN dispenser_statuses st ON st.dispenser_action_index=d.action_index INNER JOIN index_statuses si ON si.id=st.status_id INNER JOIN index_tickers tk ON tk.id=d.give_tick_id WHERE tk.tick=? AND d.give_ownership=1 AND st.action_index=(SELECT MAX(x.action_index) FROM dispenser_statuses x WHERE x.dispenser_action_index=d.action_index) AND si.status IN ('open','cancelling')
          ORDER BY action_index ASC
          LIMIT 1`;
     //</ESCROW-REDERIVE-SQL>
+    const currentEscrowSql =
+        `SELECT t.escrow_action_index FROM tokens t INNER JOIN index_tickers tk ON tk.id=t.tick_id
+         WHERE tk.tick=? LIMIT 1`;
+    const latestEscrowStatusSql =
+        `SELECT status FROM (
+             SELECT st.action_index, si.status FROM order_statuses st INNER JOIN index_statuses si ON si.id=st.status_id WHERE st.order_action_index=?
+             UNION ALL
+             SELECT st.action_index, si.status FROM swap_statuses st INNER JOIN index_statuses si ON si.id=st.status_id WHERE st.swap_action_index=?
+             UNION ALL
+             SELECT st.action_index, si.status FROM dispenser_statuses st INNER JOIN index_statuses si ON si.id=st.status_id WHERE st.dispenser_action_index=?
+         ) escrow_statuses ORDER BY action_index DESC LIMIT 1`;
+    const openStatuses = new Set(['open', 'cancelling', 'expiring']);
     let escrowTickers = await db.doQuery(escrowAffectedTickersSql, []);
     for(let row of escrowTickers){
+        if(floorActionIndex !== null && floorActionIndex !== undefined){
+            let tokenRows = await db.doQuery(currentEscrowSql, [row.tick]);
+            let currentEscrow = tokenRows.length ? tokenRows[0].escrow_action_index : null;
+            if(actionIndexBelowFloor(currentEscrow, floorActionIndex)){
+                let statusRows = await db.doQuery(latestEscrowStatusSql,
+                    [currentEscrow, currentEscrow, currentEscrow]);
+                let locallyClosed = statusRows.length > 0 && !openStatuses.has(statusRows[0].status);
+                if(!locallyClosed) continue;
+            }
+        }
         let offerRows = await db.doQuery(escrowOpenOfferSql, [row.tick, row.tick, row.tick]);
         let newEscrow = (offerRows.length > 0) ? offerRows[0].action_index : null;
         await db.doQuery("UPDATE tokens SET escrow_action_index=? WHERE tick_id=(SELECT id FROM index_tickers WHERE tick=? LIMIT 1)", [newEscrow, row.tick]);

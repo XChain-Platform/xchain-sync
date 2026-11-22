@@ -9,7 +9,9 @@
 // contact legal@dankest.llc.
 
 // Byte-diff conformance/fuzz guard for the follower's independent getNetBalance
-// reimplementation. The indexer (SOURCE) renders each SMT balance leaf
+// reimplementation. The indexer block path reads leaves through getNetBalances,
+// while its single-key getNetBalance is the reference for the same sums. It
+// renders each SMT balance leaf
 // value via mathjs: util.bcstr(util.bcsub(cr, dr, 18)). The sync follower has an
 // independent reimplementation that renders the SAME net inside SQL
 // (balance-helpers.minimalDecimal over the DECIMAL(60,18) credit/debit sums).
@@ -17,8 +19,8 @@
 // the follower's balances_root forks from the source and VERIFY_STATE_COMMITMENT
 // halts every replica. This suite runs the follower's real SQL path against the
 // real MariaDB (fixture tables created from the canonical indexer DDL) and
-// compares it byte-for-byte against the indexer's OWN getNetBalance run on the
-// same rows, over both hand-picked edge vectors and a fast-check fuzz sweep.
+// compares it byte-for-byte against both indexer reads on the same rows, over
+// hand-picked edge vectors, a chunk-boundary batch, and a fast-check fuzz sweep.
 //
 // The live reference is loaded from the sibling xchain-indexer checkout:
 //   src/db/state_commitment/ledger_reads.js  getNetBalance (SQL sums + bcstr(bcsub(cr, dr, 18)))
@@ -65,7 +67,7 @@ function loadSiblingModule(absPath) {
     return m.exports;
 }
 
-// Bind the indexer's getNetBalance and util, or return null to use the extraction.
+// Bind the indexer's balance reads and util, or return null to use the extraction.
 function bindIndexerRender() {
     const verdicts = INDEXER_FILES.map(p => siblingCheckout(__dirname, p));
     const refused = verdicts.find(v => !v.usable);
@@ -80,8 +82,10 @@ function bindIndexerRender() {
     const ownMathjs = require('../../package.json').dependencies.mathjs;
     assert.strictEqual(indexerMathjs, ownMathjs,
         `mathjs pins differ (xchain-indexer ${indexerMathjs}, xchain-sync ${ownMathjs}); the live render would run on the wrong mathjs`);
+    const reads = loadSiblingModule(ledgerReads);
     return {
-        getNetBalance: loadSiblingModule(ledgerReads).getNetBalance,
+        getNetBalance: reads.getNetBalance,
+        getNetBalances: reads.getNetBalances,
         util: Object.assign({}, loadSiblingModule(valueChecks), loadSiblingModule(bcmath)),
     };
 }
@@ -170,6 +174,9 @@ async function assertConformance(creditAmounts, debitAmounts) {
     if (indexerRender) {
         const indexerDb = { doQueryStrict: (q, a) => db.doQuery(q, a), util: indexerRender.util };
         refNet = await indexerRender.getNetBalance(indexerDb, address, tick);
+        const batch = await indexerRender.getNetBalances(indexerDb, [[address, tick]]);
+        assert.strictEqual(batch.get(address + '\t' + tick), sqlNet,
+            `byte-diff: indexer getNetBalances disagrees with follower getNetBalance for ${inputs}`);
         basis = 'live indexer getNetBalance';
     }
     assert.strictEqual(sqlNet, refNet,
@@ -186,6 +193,81 @@ async function assertConformance(creditAmounts, debitAmounts) {
     // (both sides must agree even on impossible inputs), just not this check.
     if (!sqlNet.startsWith('-'))
         assert.doesNotThrow(() => M.canonicalAmount(sqlNet));
+}
+
+async function seedBatchCases(count) {
+    const keys = [], addressRows = [], tickerRows = [], creditRows = [];
+    for (let i = 0; i < count; i++) {
+        const id = nextId++;
+        const address = 'addr_batch_' + id;
+        const tick = 'TICKBATCH' + id;
+        keys.push([address, tick]);
+        addressRows.push([id, address]);
+        tickerRows.push([id, tick]);
+        creditRows.push([nextAction++, id, id, String((i % 97) + 1) + '.' + String(i % 1000).padStart(3, '0')]);
+    }
+    const insert = async (table, columns, rows) => {
+        const values = rows.map(() => '(' + columns.map(() => '?').join(', ') + ')').join(', ');
+        await db.doQuery(`INSERT INTO ${table} (${columns.join(', ')}) VALUES ${values}`, rows.flat());
+    };
+    await insert('index_addresses', ['id', 'address'], addressRows);
+    await insert('index_tickers', ['id', 'tick'], tickerRows);
+    await insert('credits', ['action_index', 'address_id', 'tick_id', 'amount'], creditRows);
+    return keys;
+}
+
+async function assertBatchChunkConformance() {
+    if (!indexerRender) return;
+    const keys = await seedBatchCases(501);
+    const missing = ['addr_batch_missing', 'TICKBATCHMISSING'];
+    const requested = keys.slice().reverse().concat([keys[250], missing]);
+    const indexerDb = { doQueryStrict: (q, a) => db.doQuery(q, a), util: indexerRender.util };
+    const batch = await indexerRender.getNetBalances(indexerDb, requested);
+    for (const [address, tick] of requested) {
+        const single = await getNetBalance(db, address, tick);
+        assert.strictEqual(batch.get(address + '\t' + tick), single,
+            'batched balance differs at the 500-key chunk boundary for ' + address + '/' + tick);
+    }
+    assert.strictEqual(batch.get(missing.join('\t')), '0', 'an unseeded batched key must render as zero');
+}
+
+async function assertCollationVariants() {
+    if (!indexerRender) return;
+    const base = nextId;
+    const addresses = [['addr_ss_' + base, base], ['addr_ß_' + base, base + 1]];
+    const ticks = [['TICKV' + base, base], ['tickv' + base, base + 1]];
+    for (const [value, id] of addresses)
+        await db.doQuery('INSERT INTO index_addresses (id, address) VALUES (?, ?)', [id, value]);
+    for (const [value, id] of ticks)
+        await db.doQuery('INSERT INTO index_tickers (id, tick) VALUES (?, ?)', [id, value]);
+    nextId += 2;
+    for (const row of [[base, base, '11'], [base + 1, base, '13'], [base, base + 1, '17']])
+        await db.doQuery('INSERT INTO credits (action_index, address_id, tick_id, amount) VALUES (?, ?, ?, ?)',
+            [nextAction++, ...row]);
+    const keys = [[addresses[0][0], ticks[0][0]], [addresses[1][0], ticks[0][0]],
+        [addresses[0][0].toUpperCase(), ticks[0][0]], [addresses[0][0] + ' ', ticks[1][0]]];
+    // The block path passes only the stored strings. These distinct rows fold together
+    // under a _ci connection collation, so a cached correlated sum would be shared in
+    // whichever order they arrive; both orders must still give each key its own net.
+    const stored = [[addresses[0][0], ticks[0][0]], [addresses[0][0], ticks[1][0]], [addresses[1][0], ticks[0][0]]];
+    const keySets = [keys, stored, stored.slice().reverse()];
+    const conn = await db.pool.getConnection();
+    try {
+        for (const collation of ['utf8mb4_general_ci', 'utf8mb4_unicode_ci']) {
+            await conn.query('SET NAMES utf8mb4 COLLATE ' + collation);
+            const followerDb = { doQueryStrict: (q, a) => conn.query(q, a) };
+            const indexerDb = { doQueryStrict: (q, a) => conn.query(q, a), util: indexerRender.util };
+            for (const set of keySets) {
+                const batch = await indexerRender.getNetBalances(indexerDb, set);
+                for (const [address, tick] of set)
+                    assert.strictEqual(batch.get(address + '\t' + tick),
+                        await getNetBalance(followerDb, address, tick),
+                        'batched balance collation drift for ' + address + '/' + tick + ' under ' + collation);
+            }
+        }
+    } finally {
+        conn.release();
+    }
 }
 
 // ---- Amount generator ---------------------------------------------------------
@@ -215,6 +297,8 @@ describe('E2E: state-commitment getNetBalance conformance (SQL minimalDecimal vs
         indexerRender = bindIndexerRender();
         db = await testDb.createDatabase(DB_NAME);
         await seedTables(db);
+        const settings = await db.doQuery('SELECT @@character_set_connection AS charset, @@collation_connection AS collation');
+        console.log('      state commitment connection: ' + settings[0].charset + '/' + settings[0].collation);
     });
 
     after(async function() {
@@ -244,6 +328,8 @@ describe('E2E: state-commitment getNetBalance conformance (SQL minimalDecimal vs
         ];
         for (const [credits, debits] of vectors)
             await assertConformance(credits, debits);
+        await assertBatchChunkConformance();
+        await assertCollationVariants();
     });
 
     it(`fuzz: ${NUM_RUNS} random ledgers render byte-identically`, async function() {

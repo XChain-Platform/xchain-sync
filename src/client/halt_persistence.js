@@ -21,8 +21,9 @@
  *   - a copy of the halt goes to sync_state (halt_pending:<dbType>), best
  *     effort; a restart that finds the copy restores the halt before any
  *     bootstrap or catch-up (an empty replica is not re-seeded under it) and
- *     writes sync_halt again. A copy that cannot be read holds the client, as
- *     an unreadable sync_halt does. An operator clear removes the copy;
+ *     writes sync_halt again. A copy that cannot be read holds the client and
+ *     retries with backoff until the read recovers. An operator clear removes
+ *     the copy;
  *   - the sync_halt write is retried on a timer until it lands, the operator
  *     clears the halt, or the client stops.
  * A halt on a block that fails its own hashes, or on a stored-tip state_hash,
@@ -96,21 +97,7 @@ module.exports = {
             this.replicaLabel() + '; the next start restores the cleared halt');
     },
 
-    // At startup, before any bootstrap or catch-up: a sync_state copy of a halt whose
-    // sync_halt write never landed puts the halt back in force and writes sync_halt
-    // again. The read fails closed, as the sync_halt read does: a read error holds the
-    // client as 'halt-state-check-failed' rather than reading as "no copy". True when the
-    // client is now halted.
-    async restorePendingHalt(){
-        if(this._halted || !this.db || typeof this.db.getSyncState !== 'function') return false;
-        let raw;
-        try { raw = await this.db.getSyncState(this.pendingHaltKey(), { rethrow: true }); }
-        catch(e){
-            getLogger().error(util.format('halt copy read failed for ' + this.replicaLabel() +
-                '; staying HALTED (fail-closed) until it can be read:', e));
-            this._halted = { blockIndex: -1, reason: 'halt-state-check-failed', mismatches: [], sources: [], at: null };
-            return true;
-        }
+    async restorePendingHaltValue(raw){
         if(raw === null || raw === '') return false;
         let saved = null;
         try { saved = JSON.parse(raw); } catch(e){ saved = null; }
@@ -132,6 +119,72 @@ module.exports = {
             saved.blockIndex + ' whose sync_halt write never landed. Not resuming until cleared.');
         await this.persistHalt(this._halted);
         return true;
+    },
+
+    // At startup, before any bootstrap or catch-up: a sync_state copy of a halt whose
+    // sync_halt write never landed puts the halt back in force and writes sync_halt
+    // again. A failed read holds replication and retries with bounded backoff, so a
+    // transient database fault cannot become a permanent operator-only stall.
+    async restorePendingHalt(){
+        if(this._halted || !this.db || typeof this.db.getSyncState !== 'function') return false;
+        let raw;
+        try {
+            raw = await this.db.getSyncState(this.pendingHaltKey(), { rethrow: true });
+        } catch(e){
+            getLogger().error(util.format('halt copy read failed for ' + this.replicaLabel() +
+                '; staying HALTED (fail-closed) until it can be read:', e));
+            const synthetic = {
+                blockIndex: -1, reason: 'halt-state-check-failed', mismatches: [], sources: [], at: null
+            };
+            this._halted = synthetic;
+            let delay = FIRST_RETRY_MS;
+            while(this.running && this._halted === synthetic){
+                await this.sleepUntilStop(delay);
+                if(!(this.running && this._halted === synthetic)) break;
+                try {
+                    raw = await this.db.getSyncState(this.pendingHaltKey(), { rethrow: true });
+                    this._halted = null;
+                    getLogger().info('halt copy read recovered for ' + this.replicaLabel() +
+                        '; re-evaluating the pending halt copy');
+                    return this.restorePendingHaltValue(raw);
+                } catch(e2){
+                    getLogger().error(util.format('halt copy read retry failed for ' +
+                        this.replicaLabel() + ':', e2));
+                    delay = Math.min(delay * 2, MAX_RETRY_MS);
+                }
+            }
+            return true;
+        }
+        return this.restorePendingHaltValue(raw);
+    },
+
+    // At startup, before any bootstrap or catch-up: reload the durable guards that
+    // decide how the replica resumes (truncation floor, verified checkpoint block and
+    // seq). Each loader reads strictly, so a fault holds the client in a synthetic halt
+    // and retries with bounded backoff instead of resuming as if no guard existed. An
+    // operator clear drops the flag but never skips the read.
+    async holdForDurableStartupState(){
+        let delay = FIRST_RETRY_MS;
+        while(this.running){
+            try {
+                await this.loadBootstrapBase();
+                await this.loadVerifiedCheckpointBlock();
+                await this.loadVerifiedCheckpointSeq();
+            } catch(e){
+                getLogger().error(util.format('durable startup guard read failed for ' + this.replicaLabel() +
+                    '; staying HALTED (fail-closed) until it can be read:', e));
+                if(!this._halted)
+                    this._halted = {
+                        blockIndex: -1, reason: 'startup-guard-state-unreadable', mismatches: [], sources: [], at: null
+                    };
+                await this.sleepUntilStop(delay);
+                delay = Math.min(delay * 2, MAX_RETRY_MS);
+                continue;
+            }
+            if(this._halted && this._halted.reason === 'startup-guard-state-unreadable') this._halted = null;
+            return 'continue';
+        }
+        return 'stop';
     },
 
     scheduleHaltPersistRetry(halt, delayMs){

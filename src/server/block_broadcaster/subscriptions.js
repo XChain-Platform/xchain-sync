@@ -135,12 +135,37 @@ module.exports = {
         } catch(e){
             return;
         }
-        // Require a non-negative integer, matching the REST validator-heartbeat guard
-        // (api.js). A bare `typeof === 'number'` accepts NaN/Infinity/negatives, letting
-        // a subscriber forge its reported lag on /status (negative lag reads as
-        // "always caught up"; NaN serializes to null and hides the peer from lag alerts).
-        if(msg && msg.type === 'heartbeat' && Number.isInteger(msg.appliedBlock) && msg.appliedBlock >= 0){
+        // Same acceptance rule as the REST validator heartbeat (acceptsAppliedHeight). A
+        // looser check let a subscriber forge its reported lag on /status: NaN serializes
+        // to null and hides the peer from lag alerts, and a height above the tip reads as
+        // negative lag. A rejected heartbeat keeps the prior value.
+        if(msg && msg.type === 'heartbeat' &&
+           this.acceptsAppliedHeight(ws._syncChain, ws._syncNetwork, ws._syncDbType, msg.appliedBlock, ws._syncLastSentBlock)){
             ws._syncAppliedBlock = msg.appliedBlock;
         }
+    },
+
+    // The highest block this server can have handed a replica for a chain/network/dbType:
+    // the poller cursor (block_height), the served database's last block
+    // (source_block_height, which a replica catching up over REST reads directly) and,
+    // for a WebSocket subscriber, the last block pushed to it. Null when none is known.
+    servedTip(chain, network, dbType, lastSent){
+        let status = this.getStatus(chain, network, dbType || 'indexer');
+        let known = [lastSent];
+        if(status) known.push(status.block_height, status.source_block_height);
+        known = known.filter(h => Number.isSafeInteger(h));
+        return known.length ? Math.max(...known) : null;
+    },
+
+    // The one acceptance rule for a replica's self-reported applied height, shared by
+    // the WebSocket heartbeat and POST /validator-heartbeat. A safe non-negative integer
+    // only: Number.isInteger alone admits 1e21 and values past 2^53 that JSON.parse has
+    // already rounded. And never above the served tip once one is known, since no
+    // replica can have applied a block this server has not served; such a claim would
+    // otherwise report negative lag or mask the reporter's own lag as caught up.
+    acceptsAppliedHeight(chain, network, dbType, height, lastSent){
+        if(!Number.isSafeInteger(height) || height < 0) return false;
+        let tip = this.servedTip(chain, network, dbType, lastSent);
+        return tip === null || height <= tip;
     }
 };

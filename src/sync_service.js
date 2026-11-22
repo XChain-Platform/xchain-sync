@@ -32,6 +32,7 @@ const ClientRollback  = require('./client/rollback');
 const HashVerifier    = require('./client/hash_verifier');
 const { assertTransactionsDataWidth } = require('./client/decoder_link');
 const stateCommitment = require('./state_commitment');
+const metricInterval  = require('./state_commitment/metric_interval.js');
 const { assertBootstrapDepthChains } = require('./config');
 const { assertPinnedEnvOverrides }   = require('./client/pinned_validators');
 const { coinTicker, activationDelayBlocks } = require('./consensus-constants');
@@ -347,7 +348,11 @@ class SyncService {
         } else {
             db = new Database(cfg.db_host, cfg.db_port, cfg.db_name, cfg.db_user, cfg.db_pass, this.util, cfg.dbType);
         }
-        await db.verifySyncTables();
+        // The source indexer decides whether its migration ledger is fresh from
+        // which declared tables exist, so the sync server must not create them.
+        await db.verifySyncTables(this.config['REPLICA_DB_HOST']
+            ? undefined
+            : { includeIndexerOwned: false });
         // Leave the indexer's own table to the indexer by excluding follower-derived columns.
         await db.ensureDatetimeColumns({ includeFollowerDerived: false });
         await db.assertStakeWeightOrderingCollation();
@@ -359,11 +364,16 @@ class SyncService {
     // ClientSync starts.
     validateFirstDiscoveryPass(){
         if(this.config['SYNC_MODE'] !== 'server' && !this._bootstrapDepthChecked && this.databases.size > 0){
+            try {
+                assertBootstrapDepthChains(this.config, this.getChains());
+                // An invalid CHECKPOINT_VALIDATORS_*/CHECKPOINT_SEED_* value resolves like an
+                // absent one and would skip the quorum anchor, so refuse it on the same pass.
+                assertPinnedEnvOverrides();
+            } catch(e){
+                e.startupRefusal = true;
+                throw e;
+            }
             this._bootstrapDepthChecked = true;
-            assertBootstrapDepthChains(this.config, this.getChains());
-            // An invalid CHECKPOINT_VALIDATORS_*/CHECKPOINT_SEED_* value resolves like an
-            // absent one and would skip the quorum anchor, so refuse it on the same pass.
-            assertPinnedEnvOverrides();
         }
     }
 
@@ -375,12 +385,14 @@ class SyncService {
                 try {
                     this.startClientSyncForChain(key, db, cfg);
                 } catch(e){
-                    if(cfg.dbType !== 'indexer' || activationDelayBlocks(cfg.coin) !== undefined ||
+                    // Decoder deep-reorg admission also needs a known coin, so unknown
+                    // decoder chains are refused with the same per-chain cleanup.
+                    if(activationDelayBlocks(cfg.coin) !== undefined ||
                         !e || !String(e.message).startsWith('ClientRollback: unrecognized coin "')) throw e;
                     this.databases.delete(key);
                     this.clientSyncs.delete(key);
                     this.unrecognizedCoinKeys.add(key);
-                    getLogger().error('Skipping indexer chain ' + key + ': coin "' + cfg.coin +
+                    getLogger().error('Skipping ' + cfg.dbType + ' chain ' + key + ': coin "' + cfg.coin +
                         '" is not in this client\'s coin bundle (no frozen ACTIVATION_DELAY_BLOCKS); upgrade to sync it');
                     try {
                         const closing = db.close();
@@ -455,6 +467,10 @@ class SyncService {
         // sync is permanently dead while the process still appears healthy.
         // Log the full error and exit so the container restart policy surfaces it.
         sync.start().catch(e => {
+            if(sync._stopping){
+                getLogger().warn(util.format('ClientSync stopped while startup was settling for ' + key + ':', e));
+                return;
+            }
             getLogger().error(util.format('ClientSync crashed for ' + key + '; exiting for restart:', e));
             process.exit(1);
         });
@@ -470,6 +486,11 @@ class SyncService {
                 if(newChains.length > 0)
                     getLogger().info('Discovered ' + newChains.length + ' new chain(s) from hub');
             } catch(e){
+                if(e && e.startupRefusal){
+                    getLogger().error(util.format('Refusing to start on hub re-poll; exiting for restart:', e));
+                    process.exit(1);
+                    return;
+                }
                 getLogger().error(util.format('Hub re-poll error:', e));
             }
         }, this.config['HUB_REPOLL_INTERVAL']);
@@ -485,8 +506,12 @@ class SyncService {
     startStateTreeMetric(){
         if(this._stateTreeMetricTimer) return;
         const raw = envConfig.stateTreeMetricIntervalMsFromEnv();
-        const intervalMs = Number.isFinite(raw) ? raw : (4 * 60 * 60 * 1000);
-        if(intervalMs === 0) return;   // explicitly disabled
+        const resolved = metricInterval.resolveStateTreeMetricIntervalMs(raw);
+        if(resolved.disabled) return;
+        const intervalMs = resolved.intervalMs;
+        if(resolved.adjusted)
+            getLogger().warn('SyncService: invalid STATE_TREE_METRIC_INTERVAL_MS=' + String(raw) +
+                '; using ' + intervalMs + 'ms (0 disables, accepted range 60000..2147483647)');
         this._stateTreeMetricRunning = false;
         this._stateTreeMetricTimer = setInterval(async () => {
             if(this._stateTreeMetricRunning) return;

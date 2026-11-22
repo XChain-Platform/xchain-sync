@@ -28,15 +28,18 @@
  * streamed: a table added to live sync automatically joins the check, and a
  * table removed from it automatically leaves.
  *
- * Decoder coverage is 8 of 10 schema tables, not every table:
- * mempool_transactions and dispenser_extension_undo stay local. Scope note:
+ * Decoder coverage is 8 of 11 schema tables, not every table:
+ * mempool_transactions, dispenser_extension_undo and block_tx_index_end stay
+ * local. Scope note:
  * this is deliberately the *per-block streamed* set. Tables that
  * converge through other channels (a full/incremental snapshot ride-along, or
  * no xchain-sync channel at all) are intentionally excluded, because their
  * counts legitimately diverge between nodes and comparing them would raise
  * false incompleteness alarms instead of catching real ones:
- *   - attest_validator_stats          running aggregate, full-snapshot only
- *   - markets                         derived OHLCV, full-snapshot only
+ *   - attest_validator_stats          running aggregate, never per-block; full-dumped in full
+ *                                     and every incremental snapshot (indexerFullDumpSet)
+ *   - markets                         derived OHLCV, never per-block; full-dumped in full
+ *                                     and every incremental snapshot (indexerFullDumpSet)
  *   - mempool_transactions            non-deterministic across nodes
  *   - dispensers (decoder)            mutated in place by decoder writes that ride no per-block
  *                                     stream: the soft-expire UPDATE of expired_block_index
@@ -56,14 +59,17 @@
  *                                     equality sanity check, never a drift detector: a
  *                                     soft-expire leaves the counts equal and a hard-purge
  *                                     leaves the replica AHEAD, which verifyTableCounts does
- *                                     not report, because it records a mismatch only when
- *                                     the remote count is the larger one. Parity rests
+ *                                     not report for a decoder: it reports replica-ahead only
+ *                                     for indexer exact-parity tables at equal height, and the
+ *                                     decoder dispensers table must stay out of any decoder
+ *                                     exact-parity set while the reconcile holds it. Parity rests
  *                                     entirely on the apply-side reconcile,
  *                                     ClientApplier.applyDispensersReplace via
  *                                     ClientSync.reconcileDispensers, whose cadence is set
  *                                     by DISPENSERS_RECONCILE_EVERY and
- *                                     DISPENSERS_RECONCILE_MAX_INTERVAL_MS, plus one armed by
- *                                     every reorg rollback for the next status tick or catch-up.
+ *                                     DISPENSERS_RECONCILE_MAX_INTERVAL_MS. Every reorg
+ *                                     also arms an immediate attempt, and a failed attempt
+ *                                     retries after DISPENSERS_RECONCILE_REORG_RETRY_MS.
  *   - dispenser_extension_undo       decoder-local reorg journal: the pre-image of each row a
  *                                     format-2 expiration extend touched, written and consumed
  *                                     on the decoder's own block transaction (restored by
@@ -73,6 +79,13 @@
  *                                     reconcile, never through this journal, so it is neither
  *                                     streamed, counted nor content-checked, and it must stay
  *                                     out of every channel like mempool_transactions.
+ *   - block_tx_index_end             decoder-local parse cursor: the tx_index the decoder's
+ *                                     parse loop held at the end of each stored block, so a
+ *                                     restart resumes numbering past a trailing skipped
+ *                                     carrier. Written in the decoder's own block transaction
+ *                                     and deleted with the block on reorg. A replica assigns
+ *                                     no tx_index, so it is neither streamed, counted nor
+ *                                     content-checked, and stays out of every channel.
  *   - cross_chain_calls,              hub-mirrored via hub_db_sync, not produced by block
  *     cross_chain_matches,            processing, and pushed or retracted by the hub out
  *     oracle_prices,                  of band with block apply (its price and dex reorg
@@ -149,7 +162,8 @@ const TOPOLOGY = {
         // which is the ONLY thing keeping it in parity (the header's dispensers entry
         // lists the writes that reconcile must capture). The count is a post-replace
         // equality sanity check, not a backstop: the hard-purge DELETE gap leaves
-        // the replica ahead (ClientSync.verifyTableCounts flags remote > local only)
+        // the replica ahead (ClientSync.verifyTableCounts reports replica-ahead only for
+        // indexer exact-parity tables at equal height, never for a decoder)
         // and a soft-expire UPDATE leaves counts equal, so neither can ever fire, and
         // ClientSync.incrementalCatchUp excludes the table on every non-reconcile cycle.
         special:      ['dispensers']
@@ -183,6 +197,14 @@ function getReplicatedTables(dbType){
     // for forward-compat with older topologies.
     let all = [].concat(t.blockScoped, t.txScoped, t.actionScoped, t.index, t.special || []);
     return [...new Set(all)];
+}
+
+// Infra-only forwarding uses registry-marked roots plus every streamed lookup
+// and actions, which closes the foreign-key surface of those root rows.
+function getInfraTables(dbType){
+    if(dbType === 'decoder') return new Set();
+    const roots = lifecycle.tablesWhere((row) => row.infra === true);
+    return new Set([...roots, ...getTopology('indexer').index, 'actions']);
 }
 
 // Replicated tables whose content cannot converge between source and replica, so
@@ -301,6 +323,6 @@ function lookupCursorColumn(table){
 }
 
 module.exports = {
-    getTopology, getReplicatedTables, missingReplicatedTables, lookupCursorColumn,
+    getTopology, getReplicatedTables, getInfraTables, missingReplicatedTables, lookupCursorColumn,
     contentParityPlan, contentParityExclusions, OPERATIONAL_LOG_TABLES
 };

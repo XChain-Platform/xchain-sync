@@ -22,8 +22,18 @@ function hashRow(blockIndex){
     };
 }
 
-function createPoller(markers){
+// Mirrors findReorgMarkerSinceLastRecord: MIN(id) of REORG rows whose DATETIME stamp
+// is at or after the newest sync_meta logged_at; canonical DATETIME strings sort as text.
+function firstMarkerSince(rows, lastLoggedAt){
+    if(lastLoggedAt === null) return null;
+    const ids = rows.filter(row => row.code === 'REORG' && row.time >= lastLoggedAt)
+        .map(row => Number(row.id));
+    return ids.length === 0 ? null : Math.min(...ids);
+}
+
+function createPoller(markers, storedCursor = null, lastLoggedAt){
     let eventRows;
+    let syncState = storedCursor;
     const setMarkers = rows => {
         eventRows = rows.map(row => ({ code: 'REORG', ...row }));
     };
@@ -34,8 +44,16 @@ function createPoller(markers){
         getMaxRowId: sinon.stub().callsFake(async () => eventRows.length === 0 ? null :
             Math.max(...eventRows.map(row => Number(row.id)))),
         getContentIdWindowRows: sinon.stub().callsFake(async (table, fromId, toId) =>
-            eventRows.filter(row => Number(row.id) > fromId && Number(row.id) <= toId))
+            eventRows.filter(row => Number(row.id) > fromId && Number(row.id) <= toId)),
+        getSyncState: sinon.stub().callsFake(async () => syncState),
+        setSyncState: sinon.stub().callsFake(async (key, value) => {
+            syncState = String(value);
+            return true;
+        })
     };
+    if(lastLoggedAt !== undefined)
+        db.findReorgMarkerSinceLastRecord = sinon.stub().callsFake(async () =>
+            firstMarkerSince(eventRows, lastLoggedAt));
     const broadcaster = {
         broadcast: sinon.stub(),
         updateStatus: sinon.stub(),
@@ -47,7 +65,8 @@ function createPoller(markers){
     poller.lastPolledBlock = 100;
     poller.lastPolledBlockHash = 'ledger|actions|contract';
     poller.reorgMarkerCursorInitialized = true;
-    return { poller, db, broadcaster, transparencyLog, setMarkers };
+    return { poller, db, broadcaster, transparencyLog, setMarkers,
+        getStoredCursor: () => syncState };
 }
 
 async function startWithMarkerAfterFirstPoll(){
@@ -107,6 +126,7 @@ describe('ServerPoller indexer REORG marker rewind @regression', function(){
         })));
         assert.strictEqual(context.poller.lastPolledBlock, 99);
         assert.strictEqual(context.poller.lastEventId, 7);
+        assert.strictEqual(context.getStoredCursor(), '7');
         assert.ok(context.db.getMaxRowId.calledTwice);
         assert.ok(context.db.getContentIdWindowRows.calledOnceWithExactly('events', 0, 7));
     });
@@ -120,6 +140,7 @@ describe('ServerPoller indexer REORG marker rewind @regression', function(){
             type: 'reorg', block_index: 100
         })));
         assert.strictEqual(context.poller.lastEventId, 13);
+        assert.strictEqual(context.getStoredCursor(), '13');
         assert.strictEqual(context.poller.lastPolledBlock, 99);
         assert.strictEqual(context.db.getMaxRowId.callCount, 3);
         assert.ok(context.db.getContentIdWindowRows.calledOnceWithExactly('events', 12, 13));
@@ -187,6 +208,9 @@ describe('ServerPoller indexer REORG marker cursor @regression', function(){
 
         assert.strictEqual(context.poller.lastEventId, 12);
         assert.strictEqual(context.poller.reorgMarkerCursorInitialized, true);
+        assert.strictEqual(context.getStoredCursor(), '12');
+        assert.ok(context.db.getSyncState.calledOnceWithExactly(
+            'server_reorg_marker_cursor:bitcoin:mainnet:indexer', { rethrow: true }));
         assert.ok(context.db.getMaxRowId.calledOnceWithExactly('events'));
         assert.strictEqual(context.broadcaster.broadcast.called, false);
     });
@@ -200,5 +224,120 @@ describe('ServerPoller indexer REORG marker cursor @regression', function(){
         assert.strictEqual(context.poller.lastEventId, 13);
         assert.strictEqual(context.transparencyLog.pruneFrom.called, false);
         assert.strictEqual(context.broadcaster.broadcast.called, false);
+    });
+});
+
+describe('ServerPoller indexer REORG marker durable cursor @regression', function(){
+    afterEach(function(){ sinon.restore(); });
+
+    it('replays a marker written while stopped from the durable cursor', async function(){
+        const context = createPoller([
+            { id: 12, data: JSON.stringify({ block_index: 80 }) },
+            { id: 13, data: JSON.stringify({ block_index: 100 }) }
+        ], '12');
+        context.poller.reorgMarkerCursorInitialized = false;
+
+        await context.poller.initializeReorgMarkerCursor();
+        await context.poller.handleReorgMarkers();
+
+        assert.ok(context.db.getContentIdWindowRows.calledOnceWithExactly('events', 12, 13));
+        assert.ok(context.transparencyLog.pruneFrom.calledOnceWithExactly(100));
+        assert.strictEqual(context.getStoredCursor(), '13');
+        assert.strictEqual(context.poller.lastPolledBlock, 99);
+    });
+
+    it('reseeds a durable cursor when the events table was rebuilt', async function(){
+        const context = createPoller([{ id: 4, data: '{}' }], '20');
+        context.poller.reorgMarkerCursorInitialized = false;
+
+        await context.poller.initializeReorgMarkerCursor();
+
+        assert.strictEqual(context.poller.lastEventId, 4);
+        assert.strictEqual(context.getStoredCursor(), '4');
+    });
+
+    it('keeps the marker cursor in memory on a read-only replica', async function(){
+        const context = createPoller([{ id: 12, data: '{}' }]);
+        context.transparencyLog.readOnly = true;
+        context.db.setSyncState.rejects(new Error('read_only'));
+        context.poller.reorgMarkerCursorInitialized = false;
+
+        await context.poller.initializeReorgMarkerCursor();
+        context.setMarkers([{ id: 12, data: '{}' }, { id: 13, code: 'NOTICE', data: '{}' }]);
+        assert.strictEqual(await context.poller.handleReorgMarkers(), false);
+
+        assert.strictEqual(context.poller.lastEventId, 13);
+        assert.strictEqual(context.db.getSyncState.called, false);
+        assert.strictEqual(context.db.setSyncState.called, false);
+    });
+});
+
+describe('ServerPoller indexer REORG marker first durable start @regression', function(){
+    afterEach(function(){ sinon.restore(); });
+
+    it('replays a marker written while stopped before any durable cursor existed', async function(){
+        const context = createPoller([
+            { id: 12, time: '2026-11-20 10:00:00', data: JSON.stringify({ block_index: 80 }) },
+            { id: 13, time: '2026-11-20 10:05:00', data: JSON.stringify({ block_index: 100 }) }
+        ], null, '2026-11-20 10:02:00');
+        context.poller.reorgMarkerCursorInitialized = false;
+
+        await context.poller.initializeReorgMarkerCursor();
+        assert.strictEqual(context.poller.lastEventId, 12);
+        assert.strictEqual(context.getStoredCursor(), '12');
+        assert.strictEqual(await context.poller.handleReorgMarkers(), true);
+
+        assert.ok(context.transparencyLog.pruneFrom.calledOnceWithExactly(100));
+        assert.ok(context.broadcaster.broadcast.calledOnce);
+        assert.strictEqual(context.poller.lastPolledBlock, 99);
+        assert.strictEqual(context.getStoredCursor(), '13');
+    });
+
+    it('replays a first-start marker stamped in the same second as the last record', async function(){
+        const context = createPoller([
+            { id: 13, time: '2026-11-20 10:05:00', data: JSON.stringify({ block_index: 100 }) }
+        ], null, '2026-11-20 10:05:00');
+        context.poller.reorgMarkerCursorInitialized = false;
+
+        await context.poller.initializeReorgMarkerCursor();
+
+        assert.strictEqual(context.poller.lastEventId, 12);
+        assert.strictEqual(context.getStoredCursor(), '12');
+        assert.strictEqual(await context.poller.handleReorgMarkers(), true);
+        assert.ok(context.transparencyLog.pruneFrom.calledOnceWithExactly(100));
+    });
+
+    it('does not replay a marker consumed before the first durable start', async function(){
+        const context = createPoller([
+            { id: 13, time: '2026-11-20 10:05:00', data: JSON.stringify({ block_index: 100 }) }
+        ], null, '2026-11-20 10:06:00');
+        context.poller.reorgMarkerCursorInitialized = false;
+
+        await context.poller.initializeReorgMarkerCursor();
+
+        assert.strictEqual(context.poller.lastEventId, 13);
+        assert.strictEqual(context.getStoredCursor(), '13');
+        assert.strictEqual(await context.poller.handleReorgMarkers(), false);
+        assert.strictEqual(context.transparencyLog.pruneFrom.called, false);
+        assert.strictEqual(context.broadcaster.broadcast.called, false);
+    });
+});
+
+describe('ServerPoller indexer REORG marker cursor writes @regression', function(){
+    afterEach(function(){ sinon.restore(); });
+
+    it('handles a marker once when the durable cursor write fails', async function(){
+        const context = createPoller([{ id: 13, data: JSON.stringify({ block_index: 100 }) }]);
+        context.poller.lastEventId = 12;
+        context.db.setSyncState.callsFake(async (key, value, opts) => {
+            if(opts && opts.rethrow) throw new Error('write refused');
+            return false;
+        });
+
+        assert.strictEqual(await context.poller.handleReorgMarkers(), true);
+        assert.strictEqual(context.poller.lastEventId, 13);
+        assert.strictEqual(await context.poller.handleReorgMarkers(), false);
+        assert.ok(context.transparencyLog.pruneFrom.calledOnceWithExactly(100));
+        assert.ok(context.broadcaster.broadcast.calledOnce);
     });
 });

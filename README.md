@@ -4,8 +4,8 @@
 # XChain Sync
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.27.1-blue" alt="Version">
-  <img src="https://img.shields.io/badge/tests-3%2C863%2B%20passing-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/version-0.28.0-blue" alt="Version">
+  <img src="https://img.shields.io/badge/tests-4%2C285%2B%20passing-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node">
   <img src="https://img.shields.io/badge/license-AGPL--3.0--or--later-blue" alt="License">
 </p>
@@ -23,7 +23,7 @@ Database replication service for the XChain Platform. Syncs indexer and decoder 
 - **Dual mode**: server mode serves data from authoritative indexer and decoder databases; client mode replicates both into local MariaDB instances
 - **Multi-chain single instance**: discovers all installed chains/networks via the hub and serves them from one process on one port
 - **Hub auto-discovery**: calls xchain-hub `getallconfigs` at startup; re-polls every 5 minutes to detect newly installed chains
-- **Dual DB type support**: syncs both the indexer DB (full ledger) and decoder DB (8 of 10 tables; `mempool_transactions` and `dispenser_extension_undo` excluded by design) behind a `/:dbType/` path segment
+- **Dual DB type support**: syncs both the indexer DB (full ledger) and decoder DB (8 of 11 tables; `mempool_transactions`, `dispenser_extension_undo` and `block_tx_index_end` excluded by design) behind a `/:dbType/` path segment
 - **Schema auto-replication**: client fetches DDL from the server before data, creating tables in the replica with DDL whitelisted to `CREATE TABLE` only
 - **Full snapshot export**: compressed, streamed JSON database dumps for bootstrapping new validators
 - **Incremental snapshots**: delta exports since any block height for catch-up after downtime
@@ -145,20 +145,20 @@ npm run api
 |---|---|
 | `npm run api` | Start the sync service |
 | `bin/run-db-tiers.sh` | Run the DB-backed tiers against a throwaway MariaDB it starts and drops |
-| `npm test` | Run unit tests (3,335 tests) |
+| `npm test` | Run unit tests (3,747 tests) |
 | `npm run ci` | Unit tests plus the security tier, exits on completion |
 | `npm run coverage` | Unit tests under `c8` coverage instrumentation |
 | `npm run test:boundary` | Boundary condition tests (consensus constants, 7 tests) |
-| `npm run test:regression` | Unit tests tagged `@regression` (1,057 tests) |
+| `npm run test:regression` | Unit tests tagged `@regression` (1,265 tests) |
 | `npm run test:smoke` | Smoke tests (server + client startup, config loading, 17 tests) |
-| `npm run test:integration` | Integration tests (requires MariaDB + running indexer, 135 tests) |
+| `npm run test:integration` | Integration tests (requires MariaDB + running indexer, 144 tests) |
 | `npm run test:e2e` | End-to-end tests (full server/client lifecycle, 77 tests) |
 | `npm run test:security` | Security tests (validation, injection, auth, 158 tests) |
-| `npm run test:fuzz` | Fuzz tests (property-based via fast-check, 55 tests) |
+| `npm run test:fuzz` | Fuzz tests (property-based via fast-check, 56 tests) |
 | `npm run test:fuzz:tier1` | Tier 1 fuzz (client applier, hash verifier, 25 tests) |
-| `npm run test:fuzz:tier2` | Tier 2 fuzz (rollback, server poller, hub client, 23 tests) |
+| `npm run test:fuzz:tier2` | Tier 2 fuzz (rollback, server poller, hub client, 24 tests) |
 | `npm run test:fuzz:tier3` | Tier 3 fuzz (config parsing, 7 tests) |
-| `npm run test:fuzz:quick` | Quick fuzz (100 iterations, 55 tests) |
+| `npm run test:fuzz:quick` | Quick fuzz (100 iterations, 56 tests) |
 | `npm run test:chaos` | Chaos engineering tests (DB failures, network partitions, 41 tests) |
 | `npm run test:perf` | Performance tests (throughput, snapshots, scaling, 38 tests) |
 | `npm run test:perf:quick` | Quick perf (50 blocks, 38 tests) |

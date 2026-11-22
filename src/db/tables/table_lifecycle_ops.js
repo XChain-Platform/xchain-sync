@@ -40,6 +40,29 @@ module.exports = {
         return await this.doQuery('DELETE FROM `' + table + '`');
     },
 
+    // Re-establish an AUTO_INCREMENT allocator from the rows a snapshot kept.
+    // Treat missing legacy tables or id columns as benign schema gaps.
+    async resetAutoIncrementToMax(table){
+        assertValidIdentifier(table);
+        try {
+            const rows = await this.doQuery(
+                'SELECT COALESCE(MAX(id), 0) + 1 AS next_id FROM `' + table + '`',
+                [], null, { rethrow: true });
+            if(!rows || rows.length === 0) return false;
+            const raw = rows[0].next_id === undefined ? rows[0].NEXT_ID : rows[0].next_id;
+            const text = String(raw);
+            if(!/^[0-9]+$/.test(text) || BigInt(text) < 1n)
+                throw new Error('Unsafe AUTO_INCREMENT value for ' + table + ': ' + text);
+            await this.runSqlMigrationStatement(
+                '2026-10-19-replica-columns.sql', 'reset-auto-increment',
+                { table, next_id: BigInt(text).toString() }, { rethrow: true });
+            return true;
+        } catch(e){
+            if(e && (e.errno === 1146 || e.errno === 1054)) return false;
+            throw e;
+        }
+    },
+
     /**
      * Empty the decoder's dispensers table ahead of a reconcile re-insert, inside
      * the caller's transaction.

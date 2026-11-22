@@ -44,6 +44,7 @@ describe('Database.ensureReplicatedColumns: nullability relaxation', function(){
         let alters = [];
         sinon.stub(db, 'doQuery').callsFake(async (sql) => {
             if(/information_schema\.tables/i.test(sql)) return [];          // orders/swaps absent
+            if(/COLUMN_TYPE, IS_NULLABLE/i.test(sql))   return [];
             if(/IS_NULLABLE/i.test(sql))               return [{ IS_NULLABLE: 'NO' }];
             if(/ALTER TABLE/i.test(sql)){ alters.push(sql); return []; }
             return [];
@@ -60,6 +61,7 @@ describe('Database.ensureReplicatedColumns: nullability relaxation', function(){
         let altered = false;
         sinon.stub(db, 'doQuery').callsFake(async (sql) => {
             if(/information_schema\.tables/i.test(sql)) return [];
+            if(/COLUMN_TYPE, IS_NULLABLE/i.test(sql))   return [];
             if(/IS_NULLABLE/i.test(sql))               return [{ IS_NULLABLE: 'YES' }];
             if(/ALTER TABLE/i.test(sql))               altered = true;
             return [];
@@ -103,6 +105,7 @@ describe('Database.ensureReplicatedColumns: nullability relaxation', function(){
         let modifies = 0;
         sinon.stub(db, 'doQuery').callsFake(async (sql) => {
             if(/information_schema\.tables/i.test(sql)) return [];
+            if(/COLUMN_TYPE, IS_NULLABLE/i.test(sql))   return [];
             if(/IS_NULLABLE/i.test(sql))               return [{ IS_NULLABLE: 'YES' }];
             if(/MODIFY COLUMN/i.test(sql))             modifies++;
             return [];

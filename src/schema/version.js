@@ -298,10 +298,50 @@
  *  21 - (indexer only) `index_tickers` unique key widens from tick(200) to tick(250)
  *       (2026-10-23-index-tickers-full-tick-prefix). It is stream:index wire-replicated,
  *       and above TICK_NORMALIZE_ACTIVATION two names that share their first 200
- *       characters both stream, so a v20 follower still on tick(200) hits
- *       ER_DUP_ENTRY under ClientApplier and stalls the queue. The migration is
- *       mode=auto, so the forced schema refresh widens the key on followers.
+ *       characters both stream. ClientApplier uses INSERT IGNORE for this table, so a
+ *       v20 follower still on tick(200) silently drops the second row. Sync runs no
+ *       indexer migrations; ensureReplicaTickersTickKey in src/db/index.js widens the
+ *       replica key during schema repair. Widening does not recover a row already dropped.
  *       Decoder is unaffected and stays at 5.
+ *  22 - (indexer only) `index_memos.memo` collation utf8mb4_general_ci to
+ *       utf8mb4_nopad_bin (2026-11-01-index-memos-binary-collation). Memo text that
+ *       differs only in case, by a 4-byte character or by trailing spaces now interns
+ *       as separate rows, so a v21 follower still on general_ci hits ER_DUP_ENTRY on
+ *       the UNIQUE memo key when those rows stream. Memo text enters no block-hash
+ *       preimage. The migration is mode=manual, as the 2026-08-19 memo widening was
+ *       when v10 folded it. Decoder is unaffected and stays at 5.
+ *  23 - (indexer only) multipart FILE persistence: three new replicated tables,
+ *       `file_manifests`, `file_parts` and `file_completions`, shipped by the
+ *       2026-11-15-file-multipart-tables migration. A v22 follower lacks the tables
+ *       and cannot apply streamed multipart metadata, parts or assembly results.
+ *       Decoder is unaffected and stays at 5.
+ * Index-only frontier record (no version bump): two 2026-11-16 migrations add
+ *       non-unique secondary indexes only. 2026-11-16-mappings-actions-address-history-idx
+ *       adds (type_id, id, action_index) to the stream:action `mappings_actions`
+ *       table, and 2026-11-16-price-snapshots-pair-status-ts-index adds
+ *       (coin_pair, status, block_timestamp, price) to the hub-mirrored
+ *       `price_snapshots`, which never rides the wire. Neither changes replicated
+ *       columns nor payload shape, so an older follower can still store every
+ *       streamed row. Both are mode=auto. Indexer stays at 23 and decoder stays at 5.
+ *  24 - (indexer only) multipart FILE uploads are uncapped by the replicated
+ *       schema: `file_manifests.total_bytes` widens to BIGINT UNSIGNED, the
+ *       `filled_at_manifest` and `fill_ordinal` counter columns are added, and
+ *       three secondary indexes support source-hash lookup, fill ordering and
+ *       manifest completion lookup. A v23 follower would refuse a TOTAL_BYTES
+ *       value above 4,294,967,295 and lacks both counters. The
+ *       2026-11-17-file-multipart-uncapped migration is mode=auto, but followers run
+ *       no indexer migrations: schema refresh adds the counters, while
+ *       ensureReplicatedColumns widens total_bytes on existing replicas. Decoder is
+ *       unaffected and stays at 5.
+ *
+ * Index-only frontier record (no version bump): the
+ *       2026-11-19-vote-watermark-action-index-idx migration adds non-unique
+ *       (poll_index, action_index) and (tick_id, action_index) secondary indexes to
+ *       `votes` and `vote_delegations`. It changes neither replicated columns nor
+ *       payload shape, so an older follower can still store every streamed row.
+ *       The same frontier date carries 2026-11-19-pending-hub-pushes-widen-payload,
+ *       which widens the hub-push queue `pending_hub_pushes` that never rides the wire.
+ *       Indexer stays at 24 and decoder stays at 5.
  *
  * MIGRATION_FRONTIER is the machine-readable half of that accounting: `through`
  * is the newest migration DATE whose replicated DDL is folded into the version
@@ -324,11 +364,11 @@
  *
  ********************************************************************/
 
-const SCHEMA_VERSION = { indexer: 21, decoder: 5 };
+const SCHEMA_VERSION = { indexer: 24, decoder: 5 };
 
 const MIGRATION_FRONTIER = {
     indexer: {
-        through: '2026-10-23',
+        through: '2026-11-19',
         before: [
             '2026-05-30-balances-composite-index.sql',
             '2026-06-03-unique-full-column-index-addresses.sql',
@@ -398,15 +438,25 @@ const MIGRATION_FRONTIER = {
             '2026-10-17-ledger-address-tick-amount-index.sql',
             '2026-10-18-anchor-actions-pre-archive-status.sql',
             '2026-10-19-bridge-escrow-anchor-axis-checkpoint-idx.sql',
-            '2026-10-21-rollcall-actions.sql'
+            '2026-10-21-rollcall-actions.sql',
+            '2026-10-23-index-tickers-full-tick-prefix.sql',
+            '2026-11-01-index-memos-binary-collation.sql',
+            '2026-11-15-file-multipart-tables.sql',
+            '2026-11-16-mappings-actions-address-history-idx.sql',
+            '2026-11-16-price-snapshots-pair-status-ts-index.sql',
+            '2026-11-17-file-multipart-uncapped.sql'
         ],
         accounted: [
-            '2026-10-23-index-tickers-full-tick-prefix.sql'
+            '2026-11-19-pending-hub-pushes-widen-payload.sql',
+            '2026-11-19-vote-watermark-action-index-idx.sql'
         ],
         hashes: {
-            '2026-10-23-index-tickers-full-tick-prefix.sql':
-                'c2adf41f4b0074c88bd1953f27a001045f9fd8bcf81ade37c6dea6c17e96ec46'
-        }
+            '2026-11-19-pending-hub-pushes-widen-payload.sql': 'a3fbee1967cf769450c5fffff4188f18fac7287583a96efb505ad4564203b75f',
+            '2026-11-19-vote-watermark-action-index-idx.sql': 'cf86d73e231ffa9b2e4a58f20d70f5f2e820c8f4d0b4bf0d878dfd623f7b626f'
+        },
+        indexOnly: [
+            '2026-11-19-vote-watermark-action-index-idx.sql'
+        ]
     },
     decoder: {
         through: '2026-08-22',

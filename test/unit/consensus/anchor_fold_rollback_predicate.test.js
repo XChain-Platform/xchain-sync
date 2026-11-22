@@ -22,6 +22,7 @@ describe('archive fold rollback predicate', function () {
 
         assert.ok(source.includes(
             '"WHERE " + archiveHeadPickPredicate(\'p\') +\n' +
-            '                        " AND p.action_index < ? AND " + archiveHeadPredicate(\'p\'),'));
+            '                        " AND p.action_index < ? AND " + archiveHeadPredicate(\'p\') +\n' +
+            '                        " AND COALESCE(p.pre_archive_status_id, us.id) IS NOT NULL",'));
     });
 });

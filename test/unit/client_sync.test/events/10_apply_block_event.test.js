@@ -11,11 +11,41 @@
 const {
     assert, sinon, axios, ClientSync, createMockDb, registerClientSyncHooks
 } = require('../support');
+const ClientApplier = require('../../../../src/client/applier');
 
 let sync, db, applier, rollback, hashVerifier, config, util;
 
 function assignState(state){
     ({ sync, db, applier, rollback, hashVerifier, config, util } = state);
+}
+
+async function assertStaleAndHeldBlockHandling(){
+    let compute = sinon.stub(sync.blockHasher, 'computeStateHash').resolves('state-10');
+    applier.applyBlock.resolves(false);
+    sync.lastAppliedBlock = 15;
+    sync.lastHashes = { ledger_hash: 'old-15' };
+    db.getLastBlock.resolves(15);
+    await sync.applyBlockEvent({ block_index: 10, state_hash: 'state-10', ledger_hash: 'new-10' });
+    assert.strictEqual(sync.lastAppliedBlock, 15);
+    assert.strictEqual(sync.lastHashes.ledger_hash, 'old-15');
+    assert.strictEqual(compute.called, false, 'stale blocks must not run tip-only verification');
+
+    sync.lastAppliedBlock = 9;
+    sync.lastHashes = { ledger_hash: 'old-9' };
+    db.getLastBlock.resolves(15);
+    await sync.applyBlockEvent({ block_index: 10, state_hash: 'state-10', ledger_hash: 'new-10' });
+    assert.strictEqual(sync.lastAppliedBlock, 9, 'the cursor may still lag the committed catch-up tip');
+    assert.strictEqual(compute.called, false, 'the DB tip, not the cursor, identifies stale work');
+
+    db.getLastBlock.resolves(10);
+    await sync.applyBlockEvent({ block_index: 10, state_hash: 'state-10', ledger_hash: 'held-10' });
+    assert.strictEqual(compute.calledOnce, true, 'a held tip must still be verified on redelivery');
+    assert.strictEqual(sync.lastAppliedBlock, 10);
+    assert.strictEqual(sync.lastHashes.ledger_hash, 'held-10');
+
+    sync.finishAppliedBlock({ block_index: 5, ledger_hash: 'older-5' });
+    assert.strictEqual(sync.lastAppliedBlock, 10);
+    assert.strictEqual(sync.lastHashes.ledger_hash, 'held-10');
 }
 
 function registerApplyBlockEventTests(){
@@ -31,6 +61,7 @@ function registerApplyBlockEventTests(){
             await sync.applyBlockEvent({ block_index: 10, ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c' });
             assert.strictEqual(sync.lastAppliedBlock, 10);
             assert.strictEqual(sync.lastHashes.ledger_hash, 'l');
+            await assertStaleAndHeldBlockHandling();
         });
 
         it('cleans up old pendingHashes entries', async function(){
@@ -45,6 +76,23 @@ function registerApplyBlockEventTests(){
             applier.applyBlock.rejects(new Error('apply fail'));
             await sync.applyBlockEvent({ block_index: 10, ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c' });
             // Should not throw; error is caught and logged
+            assert.strictEqual(console.error.called, true);
+        });
+
+        it('keeps the cursor and the tip hashes when the real applier refuses a block with no data', async function(){
+            sync.applier = new ClientApplier(db, util);
+            sync.lastAppliedBlock = 9;
+            sync.lastHashes = { ledger_hash: 'old-9' };
+            db.beginTransaction = sinon.stub().resolves();
+            for(let event of [
+                { block_index: 10, ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c' },
+                { block_index: 10, data: [], ledger_hash: 'l', actions_hash: 'a', contract_hash: 'c' }
+            ]){
+                await sync.applyBlockEvent(event);
+                assert.strictEqual(sync.lastAppliedBlock, 9);
+                assert.strictEqual(sync.lastHashes.ledger_hash, 'old-9');
+            }
+            assert.strictEqual(db.beginTransaction.called, false);
             assert.strictEqual(console.error.called, true);
         });
 

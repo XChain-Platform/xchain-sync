@@ -1,3 +1,14 @@
+/*********************************************************************
+ *
+ * Copyright © 2025-2026 Dankest, LLC
+ * Based on XChain Platform by Dankest, LLC - https://dankest.llc
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ *
+ * This file is part of XChain Platform. Licensed under the GNU Affero
+ * General Public License v3.0 or later; see LICENSE.md.
+ *
+ **********************************************************************/
 /*
  * ClientSync: a block whose post-commit verification throws is held, the durable
  * verified-tip marker stays below it, and it is re-verified on redelivery, on the next
@@ -55,6 +66,188 @@ describe('ClientSync: post-commit verification retry @regression', function(){
         assert.strictEqual(sync.haltOnDivergence.firstCall.args[3], 'state-hash-divergence');
         assert.strictEqual(sync.lastAppliedBlock, 199);
         assert.strictEqual(state.get(KEY), '199');
+    });
+});
+
+// Block 200 commits but its state-hash check throws, so the cursor stays at 199.
+function heldAtTip(){
+    const c = buildClient({ tip: 199, config: { VERIFY_STATE_HASH: true } });
+    c.state.set(KEY, '199');
+    c.sync.lastAppliedBlock = 199;
+    c.sync.haltOnDivergence = sinon.stub().resolves();
+    c.sync.blockHasher.computeStateHash = sinon.stub().rejects(new Error('transient'));
+    c.applier.applyBlock = sinon.stub().callsFake(async () => { c.db.tip = 200; });
+    return c;
+}
+
+describe('ClientSync: catch-up reconciles a reverified committed tip @regression', function(){
+    quiet();
+    const held = heldAtTip;
+
+    it('moves the cursor and hashes to the verified tip before a 404 download', async function(){
+        const { sync, state } = held();
+        await sync.applyBlockEvent(ev);
+        sync.blockHasher.computeStateHash = sinon.stub().resolves('SH');
+        sync.downloadIncrementalCatchUp = sinon.stub().rejects(
+            Object.assign(new Error('not found'), { response: { status: 404 } }));
+        sync.scheduleHeartbeat = sinon.stub();
+
+        await sync.runIncrementalCatchUp();
+
+        assert.strictEqual(sync.lastAppliedBlock, 200);
+        assert.deepStrictEqual(sync.lastHashes, Object.assign({ block_index: 200 }, hashesAt(200)));
+        assert.strictEqual(state.get(KEY), '200');
+        assert.ok(sync.downloadIncrementalCatchUp.calledOnceWith('http://a:3006', 201));
+        assert.ok(sync.scheduleHeartbeat.calledOnce);
+        assert.strictEqual(sync.haltOnDivergence.called, false);
+    });
+
+    it('does not move or download when rows change before the apply lock', async function(){
+        const { sync } = held();
+        await sync.applyBlockEvent(ev);
+        sync.blockHasher.computeStateHash = sinon.stub().resolves('SH');
+        sync.downloadIncrementalCatchUp = sinon.stub().resolves({ snapshotData: {}, skipLookups: false });
+        sinon.stub(sync, 'withApplyLock').callsFake(async fn => {
+            sync.bumpRowGeneration();
+            return fn();
+        });
+
+        await sync.runIncrementalCatchUp();
+
+        assert.strictEqual(sync.lastAppliedBlock, 199);
+        assert.strictEqual(sync.downloadIncrementalCatchUp.called, false);
+    });
+});
+
+describe('ClientSync: catch-up cursor resync guards @regression', function(){
+    quiet();
+    const held = heldAtTip;
+
+    it('holds a recompute replica whose marker is below the committed tip', async function(){
+        const { sync, db } = held();
+        db.tip = 200;
+        sync._verifiedTip = 199;
+        sync.scheduleHeartbeat = sinon.stub();
+        const guard = { rowGeneration: sync.rowGeneration(), reorgGeneration: sync._reorgGeneration };
+
+        const result = await sync.syncCursorToCommittedTip(200, guard);
+
+        assert.strictEqual(result, 'held');
+        assert.strictEqual(sync.lastAppliedBlock, 199);
+        assert.strictEqual(sync.scheduleHeartbeat.called, false);
+    });
+
+    it('does not move or download when a row replacement completes during the tail check', async function(){
+        const { sync } = held();
+        await sync.applyBlockEvent(ev);
+        sync.blockHasher.computeStateHash = sinon.stub().resolves('SH');
+        sync.downloadIncrementalCatchUp = sinon.stub().resolves({ snapshotData: {}, skipLookups: false });
+        const verify = sync.verifyUnverifiedTail.bind(sync);
+        sinon.stub(sync, 'verifyUnverifiedTail').callsFake(async () => {
+            const verdict = await verify();
+            await sync.beginRowRemoval();
+            sync.endRowRemoval();
+            return verdict;
+        });
+
+        await sync.runIncrementalCatchUp();
+
+        assert.strictEqual(sync.lastAppliedBlock, 199);
+        assert.strictEqual(sync.downloadIncrementalCatchUp.called, false);
+        assert.strictEqual(sync._catchUpPending, true, 'the pass must be re-queued on fresh reads');
+    });
+
+    it('keeps the cursor but still downloads when the marker trails the tip after the tail check', async function(){
+        const { sync, db } = held();
+        db.tip = 200;
+        sync._verifiedTip = 199;
+        sinon.stub(sync, 'verifyUnverifiedTail').resolves('ok');
+        sync.downloadIncrementalCatchUp = sinon.stub().rejects(
+            Object.assign(new Error('not found'), { response: { status: 404 } }));
+
+        await sync.runIncrementalCatchUp();
+
+        assert.strictEqual(sync.lastAppliedBlock, 199);
+        assert.ok(sync.downloadIncrementalCatchUp.calledOnceWith('http://a:3006', 201));
+    });
+});
+
+describe('ClientSync: catch-up cursor resync without a verified-tip marker @regression', function(){
+    quiet();
+
+    it('keeps the cursor but still downloads when the tip hash row is unresolved', async function(){
+        const { sync, db } = buildClient({ tip: 200, config: { VERIFY_RECOMPUTE: false } });
+        sync.lastAppliedBlock = 199;
+        db.getBlockHashRow = sinon.stub().resolves(null);
+        sync.downloadIncrementalCatchUp = sinon.stub().rejects(
+            Object.assign(new Error('not found'), { response: { status: 404 } }));
+
+        await sync.runIncrementalCatchUp();
+
+        assert.strictEqual(sync.lastAppliedBlock, 199);
+        assert.ok(sync.downloadIncrementalCatchUp.calledOnceWith('http://a:3006', 201));
+    });
+
+    it('resyncs a replica that does not track the verified tip', async function(){
+        const { sync } = buildClient({ tip: 200, config: { VERIFY_RECOMPUTE: false } });
+        sync.lastAppliedBlock = 199;
+        sync.downloadIncrementalCatchUp = sinon.stub().rejects(
+            Object.assign(new Error('not found'), { response: { status: 404 } }));
+        sync.scheduleHeartbeat = sinon.stub();
+
+        await sync.runIncrementalCatchUp();
+
+        assert.strictEqual(sync.lastAppliedBlock, 200);
+        assert.deepStrictEqual(sync.lastHashes, Object.assign({ block_index: 200 }, hashesAt(200)));
+        assert.ok(sync.downloadIncrementalCatchUp.calledOnceWith('http://a:3006', 201));
+    });
+});
+
+// A catch-up pass overlapping a live block whose post-commit check is still awaiting.
+async function raceInFlightCheck(config){
+    const c = buildClient({ tip: 199, config });
+    c.sync.lastAppliedBlock = 199;
+    c.sync.haltOnDivergence = sinon.stub().callsFake(async () => { c.sync._halted = { blockIndex: 200 }; });
+    let release;
+    const verdict = new Promise(r => { release = r; });
+    c.sync.blockHasher.computeStateHash = sinon.stub().callsFake(() => verdict);
+    c.sync.blockHasher.computeStateHashPreimage = sinon.stub().resolves({});
+    c.applier.applyBlock = sinon.stub().callsFake(async () => { c.db.tip = 200; });
+    c.sync.scheduleHeartbeat = sinon.stub();
+    c.sync.downloadIncrementalCatchUp = sinon.stub().rejects(
+        Object.assign(new Error('not found'), { response: { status: 404 } }));
+    const flush = () => new Promise(r => setImmediate(r));
+    const live = c.sync.applyBlockEvent(ev);
+    for(let i = 0; i < 20 && c.db.tip !== 200; i++) await flush();
+    const catchUp = c.sync.runIncrementalCatchUp();
+    for(let i = 0; i < 20; i++) await flush();
+    const before = { cursor: c.sync.lastAppliedBlock, heartbeats: c.sync.scheduleHeartbeat.callCount };
+    release('OTHER');
+    await live;
+    await catchUp;
+    return { before, after: c.sync.lastAppliedBlock, halted: c.sync.haltOnDivergence.called };
+}
+
+describe('ClientSync: catch-up resync waits for an in-flight live check @regression', function(){
+    quiet();
+
+    for(const [label, config] of [
+        ['a replica without the verified-tip marker', { VERIFY_RECOMPUTE: false, VERIFY_STATE_HASH: true }],
+        ['a recompute replica', { VERIFY_RECOMPUTE: true, VERIFY_STATE_HASH: true }]
+    ]){
+        it('does not publish a block whose live check later halts: ' + label, async function(){
+            const r = await raceInFlightCheck(config);
+            assert.strictEqual(r.before.cursor, 199);
+            assert.strictEqual(r.before.heartbeats, 0);
+            assert.strictEqual(r.halted, true);
+            assert.strictEqual(r.after, 199);
+        });
+    }
+
+    it('clears the in-flight mark once the live check settles', async function(){
+        const { sync } = heldAtTip();
+        await sync.applyBlockEvent(ev);
+        assert.strictEqual(sync.liveVerifyPendingAtOrBelow(200), false);
     });
 });
 

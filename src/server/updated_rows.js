@@ -85,13 +85,12 @@
  *     re-derived on the replica: matches settled before the source's forward-only
  *     promotion fix stay 'pending_coinpay' there, and a local promote would differ.
  *
- * tokens.escrow_action_index rides along here (the tokens class selects `t.*`), so the
- * source's own authoritative gate value lands on the replica. The follower ALSO
- * re-derives it from the already-replicated offer/status tables whenever a payload
- * touches an escrow-relevant table (ClientApplier.maybeRederiveEscrow), so the wire
- * value is a convergent carry and the local derive is the corrective pass rather than
- * the sole writer. That derive is triggered only by payload.data tables, never by
- * updated_rows itself.
+ * tokens.escrow_action_index rides along when this channel selects a token because it
+ * was ledger-touched or ISSUE-edited. Ownership-offer transitions alone do not select
+ * the token, so the follower also derives the gate from replicated offer/status rows.
+ * On a truncated replica that derive preserves a gate below the retained action floor
+ * unless a local later status proves the offer closed. The derive is triggered only by
+ * payload.data tables, never by updated_rows itself.
  *
  ********************************************************************/
 

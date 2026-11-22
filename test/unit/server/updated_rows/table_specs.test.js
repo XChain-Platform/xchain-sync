@@ -11,6 +11,8 @@
 // contact legal@dankest.llc.
 
 const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
 const specs = require('../../../../src/server/updated_rows/table_specs.js');
 
 function assertNonEmptyNames(tables){
@@ -20,6 +22,29 @@ function assertNonEmptyNames(tables){
 function assertTableList(tables){
     assertNonEmptyNames(tables);
     assert.strictEqual(new Set(tables).size, tables.length);
+}
+
+// Registers the import-seam checks inside the calling describe block.
+function registerAttestSeamTests(){
+    describe('attest constants import seam', function () {
+        const srcRoot = path.join(__dirname, '../../../../src');
+        const read = (rel) => fs.readFileSync(path.join(srcRoot, rel), 'utf8');
+
+        it('keeps the defining module free of require calls', function () {
+            assert.ok(!/\brequire\s*\(/.test(read('server/updated_rows/table_specs.js')),
+                'client/rollback.js imports the ATTEST constants from this module as a dependency-free leaf');
+        });
+
+        it('has the client rollback import the attest constants from the defining module', function () {
+            const source = read('client/rollback.js');
+            const match = source.match(/const\s*\{([^}]*ATTEST_BATCH_HEAD_VERSION[^}]*)\}\s*=\s*require\(([^)]*)\)/);
+            assert.ok(match, 'rollback.js destructures the ATTEST batch constants from a require');
+            assert.strictEqual(match[2].replace(/['"]/g, ''), '../server/updated_rows/table_specs.js');
+            for(const name of ['ATTEST_BATCH_HEAD_VERSION', 'ATTEST_BATCH_CONTINUATION_VERSION',
+                'ATTEST_BATCH_COMPLETION_STAMP'])
+                assert.ok(match[1].includes(name), `${name} comes from the same require`);
+        });
+    });
 }
 
 describe('updated row table specifications', function () {
@@ -71,4 +96,6 @@ describe('updated row table specifications', function () {
         assert.ok(Number.isInteger(specs.ATTEST_BATCH_CONTINUATION_VERSION));
         assert.strictEqual(specs.ATTEST_BATCH_COMPLETION_STAMP, ' (stamped on batch completion)');
     });
+
+    registerAttestSeamTests();
 });

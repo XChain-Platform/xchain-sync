@@ -72,7 +72,7 @@ function hubConsensusHashFields(syncService){
     };
 }
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
 // Before anything else logs. checkStartupEnv's console.error calls are exactly
 // the lines an operator needs levelled and timestamped, and installObservability
@@ -704,6 +704,14 @@ async function buildStatusRow(syncService, db, dbType, chain, network){
 // running service and the e2e harness mount the same middleware order, limiters
 // and routes. Listening, the WebSocket upgrade path and process lifecycle stay in
 // startApi.
+function parseStrictUint(value, maxDigits = null){
+    if(value === undefined) return null;
+    if(typeof value !== 'string' || !/^\d+$/.test(value)) return NaN;
+    if(maxDigits !== null && value.length > maxDigits) return NaN;
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) ? parsed : NaN;
+}
+
 function createApp(syncService, cfg, app = express()){
 
     // Must precede every limiter: they read req.ip, which express only derives
@@ -714,13 +722,21 @@ function createApp(syncService, cfg, app = express()){
     app.set('trust proxy', trustProxyHops(cfg['TRUST_PROXY']));
     app.use(helmet());
     app.use(cors({ origin: cfg['CORS_ORIGIN'], methods: ['GET', 'POST'] }));
-    app.use(express.json({ limit: '16kb' }));
-    app.use(createApiKeyMiddleware(cfg['SYNC_API_KEY']));
 
     const { backstopLimiter, fullSnapshotLimiter, incrSnapshotLimiter,
             transparencyLimiter, heartbeatLimiter } = createRateLimiters(cfg);
 
+    // The backstop runs ahead of the body parser and the API-key check so
+    // requests they reject (malformed or oversize bodies, wrong keys) still
+    // spend the caller's budget instead of being free to repeat.
     app.use(backstopLimiter);
+    app.use(express.json({ limit: '16kb' }));
+    app.use(createApiKeyMiddleware(cfg['SYNC_API_KEY']));
+
+    // WebSocket upgrades arrive as 'upgrade' events and never enter this
+    // middleware chain, so the upgrade handler reads the same limiter instance
+    // and key from here: one per-IP budget across REST and WS.
+    upgradeGuards.set(app, { backstopLimiter, apiKey: cfg['SYNC_API_KEY'] });
 
     // REST Routes (server mode only, but status works in client mode too)
     //
@@ -890,10 +906,12 @@ function createApp(syncService, cfg, app = express()){
         let dbType = validateDbType(req.params.dbType);
         if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'", code: 'BAD_REQUEST' });
         if(dbType !== 'indexer') return res.status(400).json({ error: 'Checkpoints exist only for indexer DBs', code: 'BAD_REQUEST' });
-        let from = parseInt(req.query.from, 10);
-        let to = parseInt(req.query.to, 10);
-        if(!Number.isFinite(from) || from < 0) return res.status(400).json({ error: 'Invalid from', code: 'BAD_REQUEST' });
-        if(!Number.isFinite(to) || to < from) return res.status(400).json({ error: 'Invalid to (must be >= from)', code: 'BAD_REQUEST' });
+        // Plain unsigned decimal integers only: parseInt would quietly truncate
+        // 1e12, 0x10 or 1.9 and serve a range the caller never asked for.
+        const from = parseStrictUint(req.query.from);
+        const to = parseStrictUint(req.query.to);
+        if(!Number.isSafeInteger(from)) return res.status(400).json({ error: 'Invalid from', code: 'BAD_REQUEST' });
+        if(!Number.isSafeInteger(to) || to < from) return res.status(400).json({ error: 'Invalid to (must be >= from)', code: 'BAD_REQUEST' });
         let { chain, network } = req.params;
         let db = syncService.getDatabase(chain, network, dbType);
         if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found', code: 'NOT_FOUND' });
@@ -910,8 +928,9 @@ function createApp(syncService, cfg, app = express()){
         let dbType = validateDbType(req.params.dbType);
         if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'", code: 'BAD_REQUEST' });
         if(dbType !== 'indexer') return res.status(400).json({ error: 'Checkpoints exist only for indexer DBs', code: 'BAD_REQUEST' });
-        let h = parseInt(req.params.height, 10);
-        if(!Number.isFinite(h) || h < 0) return res.status(400).json({ error: 'Invalid height', code: 'BAD_REQUEST' });
+        // Accept only a complete unsigned decimal height.
+        const h = parseStrictUint(req.params.height);
+        if(!Number.isSafeInteger(h)) return res.status(400).json({ error: 'Invalid height', code: 'BAD_REQUEST' });
         let { chain, network } = req.params;
         let db = syncService.getDatabase(chain, network, dbType);
         if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found', code: 'NOT_FOUND' });
@@ -1031,8 +1050,9 @@ function createApp(syncService, cfg, app = express()){
         if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'", code: 'BAD_REQUEST' });
 
         let { chain, network, blockHeight } = req.params;
-        let sinceBlock = parseInt(blockHeight);
-        if(isNaN(sinceBlock) || sinceBlock < 0)
+        // Accept only a complete unsigned decimal snapshot height.
+        const sinceBlock = parseStrictUint(blockHeight);
+        if(!Number.isSafeInteger(sinceBlock))
             return res.status(400).json({ error: 'Invalid blockHeight', code: 'BAD_REQUEST' });
 
         let db = syncService.getDatabase(chain, network, dbType);
@@ -1072,11 +1092,16 @@ function createApp(syncService, cfg, app = express()){
         if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'", code: 'BAD_REQUEST' });
 
         let { chain, network, table } = req.params;
-        let afterId = parseInt(req.query.after_id);
-        if(isNaN(afterId)) afterId = 0;
-        if(afterId < 0) return res.status(400).json({ error: 'Invalid after_id', code: 'BAD_REQUEST' });
-        let limit = parseInt(req.query.limit);
-        if(isNaN(limit)) limit = undefined; // builder applies its default
+        // Paging params are plain decimal integers or absent; anything else is a 400
+        // before any SQL runs (parseInt would prefix-parse '12abc' and '1e3').
+        let afterId = parseStrictUint(req.query.after_id, 15);
+        if(Number.isNaN(afterId)) return res.status(400).json({ error: 'Invalid after_id', code: 'BAD_REQUEST' });
+        if(afterId === null) afterId = 0;
+        let limit = parseStrictUint(req.query.limit, 15);
+        if(Number.isNaN(limit)) return res.status(400).json({ error: 'Invalid limit', code: 'BAD_REQUEST' });
+        if(limit === null) limit = undefined; // builder applies its default
+        if(req.query.max_block !== undefined && Number.isNaN(parseStrictUint(req.query.max_block, 15)))
+            return res.status(400).json({ error: 'Invalid max_block', code: 'BAD_REQUEST' });
 
         let db = syncService.getDatabase(chain, network, dbType);
         if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found', code: 'NOT_FOUND' });
@@ -1088,6 +1113,34 @@ function createApp(syncService, cfg, app = express()){
             await builder.streamTableRowsById(db, table, afterId, limit, res);
         } catch(e){
             console.error('[API error] /snapshot-rows/:dbType/:chain/:network/:table:', e);
+            if(!res.headersSent)
+                res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
+        }
+    });
+
+    // GET /snapshot-table/:dbType/:chain/:network/:table : one complete table
+    // for registry-approved replace repair. The builder validates the allowlist
+    // before interpolating the table name and streams one consistent read view.
+    app.get('/snapshot-table/:dbType/:chain/:network/:table', incrSnapshotLimiter, async (req, res) => {
+        if(cfg['SYNC_MODE'] !== 'server')
+            return res.status(403).json({ error: 'Snapshots only available in server mode', code: 'FORBIDDEN' });
+
+        let dbType = validateDbType(req.params.dbType);
+        if(!dbType) return res.status(400).json({ error: "Invalid dbType. Must be 'indexer' or 'decoder'", code: 'BAD_REQUEST' });
+        if(dbType !== 'indexer')
+            return res.status(400).json({ error: 'Replace repair is indexer-only', code: 'REPAIR_TABLE_NOT_ALLOWED' });
+
+        let { chain, network, table } = req.params;
+        let db = syncService.getDatabase(chain, network, dbType);
+        if(!db) return res.status(404).json({ error: 'Chain/network/dbType not found', code: 'NOT_FOUND' });
+
+        let builder = syncService.getSnapshotBuilder();
+        if(!builder) return res.status(500).json({ error: 'Snapshot builder not initialized', code: 'INTERNAL_ERROR' });
+
+        try {
+            await builder.streamRepairTable(db, table, res);
+        } catch(e){
+            console.error('[API error] /snapshot-table/:dbType/:chain/:network/:table:', e);
             if(!res.headersSent)
                 res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
         }
@@ -1112,10 +1165,11 @@ function createApp(syncService, cfg, app = express()){
         if(dbType !== 'decoder') return res.status(400).json({ error: 'dispensers reconcile is decoder-only', code: 'BAD_REQUEST' });
 
         let { chain, network } = req.params;
-        let afterTx   = (req.query.after_tx   !== undefined) ? parseInt(req.query.after_tx)   : NaN;
-        let afterAddr = (req.query.after_addr !== undefined) ? parseInt(req.query.after_addr) : NaN;
-        if((req.query.after_tx   !== undefined && (isNaN(afterTx)   || afterTx   < 0)) ||
-           (req.query.after_addr !== undefined && (isNaN(afterAddr) || afterAddr < 0)))
+        // Accept only complete unsigned decimal cursor values.
+        const afterTx = req.query.after_tx === undefined ? NaN : parseStrictUint(req.query.after_tx);
+        const afterAddr = req.query.after_addr === undefined ? NaN : parseStrictUint(req.query.after_addr);
+        if((req.query.after_tx !== undefined && !Number.isSafeInteger(afterTx)) ||
+           (req.query.after_addr !== undefined && !Number.isSafeInteger(afterAddr)))
             return res.status(400).json({ error: 'Invalid cursor', code: 'BAD_REQUEST' });
 
         let db = syncService.getDatabase(chain, network, dbType);
@@ -1154,7 +1208,7 @@ function createApp(syncService, cfg, app = express()){
 
         if(typeof validator_id !== 'string' || !validator_id.trim() || validator_id.length > 256)
             return res.status(400).json({ error: 'validator_id must be a non-empty string (max 256 chars)', code: 'BAD_REQUEST' });
-        if(typeof applied_height !== 'number' || !Number.isInteger(applied_height) || applied_height < 0)
+        if(!Number.isSafeInteger(applied_height) || applied_height < 0)
             return res.status(400).json({ error: 'applied_height must be a non-negative integer', code: 'BAD_REQUEST' });
         if(applied_block_time !== undefined && applied_block_time !== null && typeof applied_block_time !== 'number')
             return res.status(400).json({ error: 'applied_block_time must be a number', code: 'BAD_REQUEST' });
@@ -1162,7 +1216,9 @@ function createApp(syncService, cfg, app = express()){
         let broadcaster = syncService.getBroadcaster();
         if(!broadcaster) return res.status(503).json({ error: 'Broadcaster not initialized', code: 'SERVICE_UNAVAILABLE' });
 
-        broadcaster.recordValidatorHeartbeat(chain, network, dbType, validator_id.trim(), applied_height, applied_block_time || null);
+        // Refused when the height is above the tip this server serves; the prior entry stays.
+        if(!broadcaster.recordValidatorHeartbeat(chain, network, dbType, validator_id.trim(), applied_height, applied_block_time || null))
+            return res.status(400).json({ error: 'applied_height is above the served tip', code: 'BAD_REQUEST' });
         res.json({ ok: true });
     });
 
@@ -1221,12 +1277,18 @@ function createApp(syncService, cfg, app = express()){
         if(req.params.dbType !== 'indexer')
             return res.status(400).json({ error: 'Transparency log is indexer-only. Decoder DB has no synthetic chain-of-state hashes.', code: 'BAD_REQUEST' });
 
+        // Keep absent defaults, but refuse malformed page values.
+        const parsedPage = parseStrictUint(req.query.page);
+        if(Number.isNaN(parsedPage)) return res.status(400).json({ error: 'Invalid page', code: 'BAD_REQUEST' });
+        const page = parsedPage === null ? 0 : parsedPage;
+        // Keep absent defaults, but refuse malformed limit values.
+        const parsedLimit = parseStrictUint(req.query.limit);
+        if(Number.isNaN(parsedLimit)) return res.status(400).json({ error: 'Invalid limit', code: 'BAD_REQUEST' });
+        const limit = parsedLimit === null ? 100 : parsedLimit;
+
         let { chain, network } = req.params;
         let log = syncService.getTransparencyLog(chain, network);
         if(!log) return res.status(404).json({ error: 'Chain/network not found', code: 'NOT_FOUND' });
-
-        let page  = parseInt(req.query.page) || 0;
-        let limit = parseInt(req.query.limit) || 100;
 
         try {
             let result = await log.getPage(page, limit);
@@ -1245,11 +1307,15 @@ function createApp(syncService, cfg, app = express()){
             return res.status(400).json({ error: 'Transparency log is indexer-only', code: 'BAD_REQUEST' });
 
         let { chain, network, block_index } = req.params;
+        // Accept only a complete unsigned decimal proof height.
+        const parsedBlockIndex = parseStrictUint(block_index);
+        if(!Number.isSafeInteger(parsedBlockIndex))
+            return res.status(400).json({ error: 'Invalid block_index', code: 'BAD_REQUEST' });
         let log = syncService.getTransparencyLog(chain, network);
         if(!log) return res.status(404).json({ error: 'Chain/network not found', code: 'NOT_FOUND' });
 
         try {
-            let result = await log.getProof(block_index);
+            let result = await log.getProof(parsedBlockIndex);
             if(!result) return res.status(404).json({ error: 'Block not found', code: 'NOT_FOUND' });
             res.json(result);
         } catch(e){
@@ -1315,13 +1381,88 @@ function createApp(syncService, cfg, app = express()){
         }
     });
 
+    // Last in the chain: without these, express answers malformed paths and
+    // bodies and unrouted methods with its HTML page (a stack trace when
+    // NODE_ENV is unset). Every failure keeps the JSON {error, code} contract.
+    app.use((req, res) => {
+        res.status(404).json({ error: 'Not found', code: 'NOT_FOUND' });
+    });
+
+    // eslint-disable-next-line no-unused-vars
+    app.use((err, req, res, next) => {
+        let status = Number(err && (err.status || err.statusCode));
+        if(!(status >= 400 && status < 500)){
+            console.error('[API error] unhandled:', err);
+            return res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
+        }
+        // Client faults carry no stack: log the type only.
+        console.error('[API error] rejected request:', status, err && err.type ? err.type : '');
+        if(res.headersSent) return res.end();
+        let code = status === 413 ? 'PAYLOAD_TOO_LARGE' : 'BAD_REQUEST';
+        let msg  = status === 413 ? 'Request body too large' : 'Malformed request';
+        res.status(status).json({ error: msg, code });
+    });
+
     return app;
+}
+
+// Per-app guards for the WebSocket upgrade path, filled in by createApp.
+const upgradeGuards = new WeakMap();
+
+// Runs a raw upgrade request through the app's backstop limiter. The request
+// is given express's request prototype first (as express does for every
+// 'request' event), so req.ip resolves through the same trust-proxy setting
+// and lands in the same bucket as the caller's REST traffic. The limiter
+// either calls next() (within budget) or answers through its 429 handler
+// without calling next, so the shim settles on whichever comes first.
+// Resolves to 'pass', or 'refused' after answering 429 and destroying the socket.
+function spendUpgradeBackstop(app, backstopLimiter, request, socket){
+    Object.setPrototypeOf(request, app.request);
+    request.app = app;
+
+    return new Promise((resolve) => {
+        let settled = false;
+        let headers = {};
+        let refuse = (status, reason, body) => {
+            if(settled) return;
+            settled = true;
+            if(!socket.destroyed){
+                let text = body === undefined ? '' : JSON.stringify(body);
+                let lines = ['HTTP/1.1 ' + status + ' ' + reason];
+                for(let name of Object.keys(headers)) lines.push(name + ': ' + headers[name]);
+                lines.push('Content-Type: application/json', 'Content-Length: ' + Buffer.byteLength(text), 'Connection: close');
+                socket.write(lines.join('\r\n') + '\r\n\r\n' + text);
+                socket.destroy();
+            }
+            resolve('refused');
+        };
+        let res = {
+            statusCode:    200,
+            headersSent:   false,
+            writableEnded: false,
+            setHeader(name, value){ headers[name] = value; },
+            getHeader(name){ return headers[name]; },
+            status(code){ this.statusCode = code; return this; },
+            send(body){ this.writableEnded = true; refuse(this.statusCode, 'Too Many Requests', body); },
+            json(body){ this.send(body); }
+        };
+        backstopLimiter(request, res, (err) => {
+            if(settled) return;
+            if(err){
+                // Fail closed: a limiter or store error must not wave the upgrade through.
+                getLogger().error('[API] WebSocket upgrade backstop error: ' + (err && err.message));
+                refuse(503, 'Service Unavailable', undefined);
+                return;
+            }
+            settled = true;
+            resolve('pass');
+        });
+    });
 }
 
 // API key check for WebSocket upgrades, enforced only when a key is configured
 // because managed validators replicate keyless. Returns false after rejecting.
-function authorizeUpgrade(request, socket){
-    let apiKey = cfg['SYNC_API_KEY'];
+function authorizeUpgrade(request, socket, apiKey){
     if(!apiKey) return true;
     let authHeader = request.headers['authorization'];
     if(!authHeader || !safeEqual(authHeader, 'Bearer ' + apiKey)){
@@ -1354,9 +1495,26 @@ function parseSubscribePath(url){
 
 // A manual handleUpgrade does not emit 'connection', so the emit below runs the
 // keepalive wiring that the ping interval depends on.
-function createUpgradeHandler(syncService, wss){
-    return function handleWebSocketUpgrade(request, socket, head){
-        if(!authorizeUpgrade(request, socket)) return;
+// Every upgrade spends the app's backstop budget before anything else runs,
+// mirroring the REST order: wrong keys, malformed paths and valid subscribe
+// churn all count, and an IP already refused on REST is refused here too.
+function createUpgradeHandler(syncService, wss, app){
+    let guard = upgradeGuards.get(app);
+    if(!guard) throw new Error('createUpgradeHandler needs an app built by createApp');
+    let { backstopLimiter, apiKey } = guard;
+
+    return async function handleWebSocketUpgrade(request, socket, head){
+        // Node removes its own socket error listener before 'upgrade'; keep a
+        // reset during the limiter await from becoming an uncaught error. ws
+        // installs its own listener in handleUpgrade.
+        let onEarlyError = () => socket.destroy();
+        socket.on('error', onEarlyError);
+        let verdict = await spendUpgradeBackstop(app, backstopLimiter, request, socket);
+        socket.removeListener('error', onEarlyError);
+        if(verdict !== 'pass') return;
+        if(socket.destroyed) return;
+
+        if(!authorizeUpgrade(request, socket, apiKey)) return;
 
         let sub = parseSubscribePath(request.url);
         if(!sub){
@@ -1457,6 +1615,15 @@ function installCrashHandlers(){
     });
 }
 
+// The only message a subscriber sends is a small heartbeat, so inbound frames
+// are capped far below the ws 100 MiB default; an oversize frame closes the
+// connection with 1009 before it is buffered or parsed.
+const WS_SUBSCRIBER_MAX_PAYLOAD = 64 * 1024;
+
+function createSubscriberWss(){
+    return new WebSocket.Server({ noServer: true, maxPayload: WS_SUBSCRIBER_MAX_PAYLOAD });
+}
+
 async function startApi(){
     // Pin check precedes any port, poller or source-DB handle; a null pin skips,
     // a mismatch on an armed network throws, uncaught.
@@ -1467,9 +1634,9 @@ async function startApi(){
     createApp(syncService, cfg, app);
     const server = http.createServer(app);
 
-    const wss = new WebSocket.Server({ noServer: true });
+    const wss = createSubscriberWss();
 
-    server.on('upgrade', createUpgradeHandler(syncService, wss));
+    server.on('upgrade', createUpgradeHandler(syncService, wss, app));
 
     startPingInterval(wss);
 
@@ -1497,5 +1664,5 @@ if(require.main === module){
     startApi();
 }
 
-module.exports = { trustProxyHops, snapshotKey, createRateLimiters, applyReplicaFreshness, applyProtocolHaltFreshness,
-                   buildHealthEntry, healthEntryDegraded, buildStatusRow, createApp, startApi };
+module.exports = { createSubscriberWss, WS_SUBSCRIBER_MAX_PAYLOAD, trustProxyHops, snapshotKey, createRateLimiters, applyReplicaFreshness, applyProtocolHaltFreshness,
+                   buildHealthEntry, healthEntryDegraded, buildStatusRow, createApp, createUpgradeHandler, startApi };

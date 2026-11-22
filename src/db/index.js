@@ -262,7 +262,7 @@ class Database {
     // durable divergence halt (sync_halt) applies to BOTH db types.
     // ClientSync checks and records halts for decoder replicas too, and
     // without the table every decoder client start logged a 1146 probe error.
-    async verifySyncTables(){
+    async verifySyncTables({ includeIndexerOwned = true } = {}){
         let dir  = sqlDir();
         let files = fs.readdirSync(dir);
         let db    = await this.getConnection();
@@ -275,6 +275,8 @@ class Database {
             if(file.indexOf('.sql') !== -1){
                 let table = file.substring(0, file.indexOf('.sql'));
                 if(this.dbType !== 'indexer' && table !== 'sync_halt') continue;
+                let tableLifecycle = lifecycle.entry(table);
+                if(!includeIndexerOwned && tableLifecycle && tableLifecycle.owner === 'indexer') continue;
                 checked++;
                 try {
                     let results = await db.query("SELECT * FROM information_schema.tables WHERE table_schema = ? AND table_name = ?", [this.dbName, table]);
@@ -454,7 +456,11 @@ class Database {
         if(this.dbType !== 'indexer') return;
         await this.addMissingReplicatedColumns();
         await this.relaxReplicatedColumnNullability();
+        await this.widenReplicatedColumnTypes();
         await this.repairReplicatedAutoIncrement();
+        // Full-snapshot commit and allocator repair are separate because ALTER TABLE
+        // implicitly commits. Repeating this on replica startup closes that crash gap.
+        await this.resetAutoIncrementToMax('validator_rewards');
         await this.widenReplicatedAttestsRequestStatus();
     }
 
@@ -539,26 +545,56 @@ class Database {
         }
     }
 
-    async repairReplicatedAutoIncrement(){
-        // AUTO_INCREMENT repair for hub-mirror id cursors. An origin migration restores
-        // the attribute, but a replica bootstrapped from stripped DDL has no automated path.
-        // Detect and restore it here; the same definition is a no-op and an absent table skips.
-        let autoIncTables = [
-            'price_snapshots',
-            'cross_chain_matches',
-            'capability_snapshots',
-            'state_checkpoints'
+    async widenReplicatedColumnTypes(){
+        // addMissingColumns never retypes an existing column, and followers run no
+        // indexer migrations, so selected upstream MODIFYs need an explicit heal.
+        let widen = [
+            { table: 'file_manifests', column: 'total_bytes',
+              migration: 'file-manifests-total-bytes-bigint-nullable' }
         ];
-        for(let table of autoIncTables){
+        for(let { table, column, migration } of widen){
+            let rows = await this.doQueryStrict(
+                "SELECT COLUMN_TYPE, IS_NULLABLE FROM information_schema.columns " +
+                "WHERE table_schema = ? AND table_name = ? AND COLUMN_NAME = ?",
+                [this.dbName, table, column]
+            );
+            if(rows.length === 0) continue;
+            let type = String(rows[0].COLUMN_TYPE || rows[0].column_type || '').toLowerCase();
+            let nullable = String(rows[0].IS_NULLABLE || rows[0].is_nullable || '').toUpperCase();
+            if(type.startsWith('bigint') && type.includes('unsigned') && nullable === 'YES') continue;
+            logger.info('Schema drift on ' + table + '.' + column + ': ' + type + ' ' + nullable +
+                ' on replica. Widening to BIGINT UNSIGNED NULL.');
+            await this.runSqlMigrationStatement(
+                '2026-10-19-replica-columns.sql', migration, undefined, { strict: true }
+            );
+        }
+    }
+
+    async repairReplicatedAutoIncrement(){
+        // AUTO_INCREMENT and signedness repair for hub-mirror id cursors. The table
+        // definitions in the indexer SQL directory are the authoritative shapes.
+        let autoIncTables = [
+            { table: 'price_snapshots', unsigned: false },
+            { table: 'cross_chain_matches', unsigned: true },
+            { table: 'capability_snapshots', unsigned: true },
+            { table: 'state_checkpoints', unsigned: true }
+        ];
+        for(let { table, unsigned } of autoIncTables){
             let colRows = await this.doQuery(
-                "SELECT EXTRA FROM information_schema.columns WHERE table_schema = ? AND table_name = ? AND COLUMN_NAME = 'id'",
+                "SELECT EXTRA, COLUMN_TYPE FROM information_schema.columns " +
+                "WHERE table_schema = ? AND table_name = ? AND COLUMN_NAME = 'id'",
                 [this.dbName, table]
             );
             if(colRows.length === 0) continue;   // table absent or has no id column; skip
             let extra = colRows[0].EXTRA || colRows[0].extra || '';
-            if(String(extra).toLowerCase().indexOf('auto_increment') !== -1) continue;  // already correct; no-op
+            let type = String(colRows[0].COLUMN_TYPE || colRows[0].column_type || '').toLowerCase();
+            let hasAutoIncrement = String(extra).toLowerCase().indexOf('auto_increment') !== -1;
+            let wrongSign = unsigned && type.indexOf('unsigned') === -1;
+            if(hasAutoIncrement && !wrongSign) continue;
 
-            logger.info('Schema drift on ' + table + '.id: AUTO_INCREMENT missing on replica. Repairing.');
+            let drift = [hasAutoIncrement ? null : 'AUTO_INCREMENT missing', wrongSign ? 'signed but UNSIGNED declared' : null]
+                .filter(Boolean).join(' and ');
+            logger.info('Schema drift on ' + table + '.id: ' + drift + ' on replica. Repairing.');
             // Re-key any id=0 rows before the ALTER rebuilds the index (avoids a
             // collision when the AUTO_INCREMENT attribute is restored). Mirrors the
             // indexer migration. The old scalar-subquery UPDATE assigned EVERY id=0
@@ -580,7 +616,8 @@ class Database {
                 await this.doQuery('SET @n := ?', [base]);
                 await this.doQuery('UPDATE `' + table + '` SET id = (@n := @n + 1) WHERE id = 0 ORDER BY id ASC');
                 await this.runSqlMigrationStatement(
-                    '2026-10-19-replica-columns.sql', 'repair-auto-increment', { table }
+                    '2026-10-19-replica-columns.sql',
+                    unsigned ? 'repair-auto-increment-unsigned' : 'repair-auto-increment', { table }
                 );
                 logger.info('Repaired AUTO_INCREMENT on ' + table + '.id');
             } catch(e){
@@ -672,6 +709,7 @@ class Database {
             await this.ensureReplicaVotesIndex();
             await this.ensureReplicaAnchorActionsPrimaryKey();
             await this.ensureReplicaValidatorRewardsIndex();
+            await this.ensureReplicaTickersTickKey();
         }
     }
 
@@ -879,6 +917,43 @@ class Database {
             // An absent table is harmless; other errors can leave reward identities ambiguous.
             if(e.errno !== 1146)
                 logger.error(util.format('Failed to rebuild the validator_rewards reward_unique key with round_qualifier:', e));
+        }
+    }
+
+    // The source widened this unique prefix so distinct long tickers stay distinct.
+    async ensureReplicaTickersTickKey(){
+        try {
+            let tableRows = await this.doQueryStrict(
+                "SELECT table_name FROM information_schema.tables " +
+                "WHERE table_schema = ? AND table_name = 'index_tickers'",
+                [this.dbName]
+            );
+            if(tableRows.length === 0) return;
+            let rows = await this.doQueryStrict(
+                "SELECT SUB_PART, NON_UNIQUE FROM information_schema.statistics " +
+                "WHERE table_schema = ? AND table_name = 'index_tickers' AND index_name = 'tick' LIMIT 1",
+                [this.dbName]
+            );
+            if(rows.length === 0){
+                logger.warn('index_tickers has no unique tick key; leaving it for operator repair.');
+                return;
+            }
+            let nonUnique = Number(rows[0].NON_UNIQUE ?? rows[0].non_unique);
+            let rawPart = rows[0].SUB_PART ?? rows[0].sub_part;
+            if(nonUnique !== 0){
+                logger.warn('index_tickers.tick is not unique; leaving it for operator repair.');
+                return;
+            }
+            if(rawPart === null || rawPart === undefined || Number(rawPart) >= 250) return;
+            logger.info('Schema drift on index_tickers: UNIQUE tick(' + rawPart +
+                ') detected. Widening to tick(250) to match the source key.');
+            await this.runSqlMigrationStatement(
+                '2026-10-19-replica-keys.sql', 'index-tickers-tick-full-prefix', undefined,
+                { strict: true }
+            );
+        } catch(e){
+            if(e.errno !== 1146)
+                logger.error(util.format('Failed to widen stale index_tickers.tick key to tick(250):', e));
         }
     }
 

@@ -28,12 +28,12 @@
  *   - getNetBalance renders the DECIMAL sum to a minimal-decimal string in SQL
  *     (balance-helpers.minimalDecimal), instead of mathjs bcsub; canonicalAmount
  *     normalises both to the identical leaf value. This module needs no mathjs.
- *   - stakes_root IS recomputed here (BTC-only) from the ported _stakeWeightsSql +
+ *   - stakes_root IS recomputed here (BTC-only) from the ported stakeWeightsSql +
  *     the frozen BTC capability config (consensus-constants.js), mirroring the
  *     indexer's gatherStakeEntries. Non-BTC chains commit the EMPTY_SMT_ROOT.
  *     ClientSync now verifies balances_root + block_merkle_root + state_root (the
  *     last folds stakes_root). The stake-weight query is a consensus surface, so
- *     db._stakeWeightsSql is locked byte-identical to the indexer by the cross-repo
+ *     db.stakeWeightsSql is locked byte-identical to the indexer by the cross-repo
  *     drift guard in test/unit/rollback_coverage.test.js.
  *
  * DbNodeStore, MemoryNodeStore and PersistentSMT.update / buildFull / prove are
@@ -55,11 +55,18 @@
  *     and runs the same SQL text through getNonzeroNetBalances.
  *   - The leaf encoders _nz / _leafOrNull are the indexer's canonicalAmountOf /
  *     leafOrNull (leaf_values.js) under other names.
- *   - getNetBalance subtracts the same two DECIMAL(60,18) credit and debit sums in
- *     SQL and renders the net through minimalDecimal, where the indexer
- *     (db/state_commitment/ledger_reads.js) selects both sums and returns
- *     bcstr(bcsub(cr, dr, 18)). The case pins both sums and both renders; the
- *     e2e state_commitment_conformance suite proves the renders agree.
+ *   - The indexer block path reads leaves through ledger_reads getNetBalances,
+ *     one statement per 500-key chunk against a derived key table, run with
+ *     MariaDB's subquery cache off so keys that fold together under the connection
+ *     collation never share a cached sum. Its single-key
+ *     getNetBalance carries the same two DECIMAL(60,18) sums. The twin case pins
+ *     both reads and the block-path call; the e2e conformance suite proves both
+ *     indexer renders agree with this file's SQL minimalDecimal render.
+ *   - The balances_root full-build gate (activation block, arming block, missing prior
+ *     row) computes armingBlock inline in computeFollowerBalancesRoot where the indexer
+ *     hoists it out of its journal-writing step, and reads the prior root as one row or
+ *     null where the indexer reads a row list (`!prior.length` here is noPriorRoot),
+ *     which agree because balances_root is NOT NULL. The disjunct order is irrelevant.
  *
  * TWO DECLARED DIVERGENCES in the twinned SMT code, and they are the only ones
  * there. Each is root-neutral, each is pinned by its own case in
@@ -89,7 +96,9 @@
  * the changed leaves through PersistentSMT.update; this copy rebuilds with buildFull
  * on any change. It is root-neutral because update and buildFull are the
  * byte-identical root-bearing surface above, a deleted key's path hashes back to the
- * canonical EMPTY[h] chain, and so the tree is a pure function of its leaf set.
+ * canonical EMPTY[h] chain, and so the tree is a pure function of its last-wins
+ * collapsed leaf set. Both twins must digest that same collapsed set before a
+ * memo hit; the cache key is not part of this declared divergence.
  * Porting the patch here is an open decision, NOT an oversight: the full rebuild
  * recomputes the indexer's patched root independently, and a follower cache may
  * only fail toward the slow correct answer.
@@ -403,7 +412,7 @@ async function reportOrphanStats(query, chain, network, opts){
 //
 // `extraSubRoots` is the forward-compatible carrier for ownership_root /
 // tokens_root / contract_state_root and MUST be the output of
-// state_subtree_activation.gateSubRoots(), never a caller's raw candidates: the
+// state_subtree_gate.gateSubRoots(), never a caller's raw candidates: the
 // gate is what keeps an un-armed slot EMPTY. It is null today (every slot inert),
 // and merkle.stateRoot() maps a null/absent/empty-root slot to the identical
 // EMPTY_SMT_ROOT leaf, so this is byte-identical to the old two-argument
@@ -575,7 +584,7 @@ async function buildFullBalancesRoot(db, chain, network, blockIndex, opts){
 // ---- Stakes sub-tree (BTC-only, sec.4.1) ------------------------------------
 // Mirror of the indexer's gatherStakeEntries: one leaf per (pubkey, capability)
 // over the frozen BTC capability set, source-deduped weight via db
-// getStakeWeightsByCapability (the ported _stakeWeightsSql), keyed by canonical
+// getStakeWeightsByCapability (the ported stakeWeightsSql), keyed by canonical
 // pubkey+capability strings. Non-BTC chains commit the empty-SMT root (capability
 // staking is BTC-only). The capability set + per-capability MIN_STAKE floors and
 // the VALIDATOR_QUERY_LIMIT cap come from consensus-constants.js, mirrored from
@@ -618,10 +627,10 @@ async function gatherStakeEntries(db, chain, network, blockIndex){
 // buffer pool, which is what put BTC regtest block parse at 25-66s against LTC's
 // 3-5s for the same code (LTC commits the empty stakes root and never pays it).
 //
-// The memo is sound because buildFull is a PURE function of its entries: the node
-// store is content-addressed, so the same entry set always yields the same root.
-// test/unit/state_commitment.test.js pins both halves of that - equality with the merkle.js
-// reference, and insert-order independence.
+// The memo is sound because buildFull is a PURE function of its entries after
+// repeated keys are collapsed last-wins. The node store is content-addressed, so
+// the same collapsed entry set always yields the same root. Insert-order
+// independence holds for distinct keys only.
 //
 // Every way this can be wrong is a way it rebuilds. It shortcuts ONLY when the
 // entries are identical to those of the block IMMEDIATELY BEFORE it, which this
@@ -634,11 +643,16 @@ async function gatherStakeEntries(db, chain, network, blockIndex){
 // MUTABLE dense id rather than on its own inputs.
 let _stakesMemo = null;
 
+function stakeEntriesMap(entries){
+    const byKey = new Map();
+    for(const [key, leaf] of entries) byKey.set(String(key), String(leaf));
+    return byKey;
+}
+
 function _stakeEntriesDigest(entries){
-    // Sorted, because buildFull is order-independent: an entry set that merely
-    // reordered must still hit. Length-prefixed and separator-joined so no pair
-    // boundary can be forged by a value that happens to contain the separator.
-    const pairs = entries.map(e => String(e[0]) + ':' + String(e[1])).sort();
+    // Callers pass the last-wins map. Sorting keeps distinct-key reorders cacheable
+    // without hiding a changed surviving leaf for a repeated key.
+    const pairs = Array.from(entries, e => String(e[0]) + ':' + String(e[1])).sort();
     return M.toHex(M.sha256(Buffer.from(pairs.length + '|' + pairs.join('|'), 'utf8')));
 }
 
@@ -647,7 +661,8 @@ function _stakeEntriesDigest(entries){
 function resetStakesMemo(){ _stakesMemo = null; }
 
 async function buildStakesRoot(smt, chain, network, blockIndex, entries){
-    const digest = _stakeEntriesDigest(entries);
+    const entriesByKey = stakeEntriesMap(entries);
+    const digest = _stakeEntriesDigest(entriesByKey);
     const memo   = _stakesMemo;
     if(memo && memo.chain === chain && memo.network === network
             && memo.blockIndex === blockIndex - 1 && memo.digest === digest){
@@ -698,8 +713,9 @@ async function computeFollowerBalancesRoot(db, smt, chain, network, blockIndex, 
     // and application end to end, and the two twins' shadow columns are the §7
     // cross-twin comparison.
     const escShadow = SUB.isEscrowLockedLeafShadowActive(blockIndex, network, chain);
-    // The ARMING BLOCK full-builds too, byte-for-byte with the source twin's gate in
-    // xchain-indexer/src/state_commitment/index.js. The incremental branch below
+    // The ARMING BLOCK full-builds too, matching the source twin's gate in
+    // xchain-indexer/src/state_commitment/index.js (pinned by the balances_root
+    // full-build gate cases in 03_state_root_assembly_twin.test.js). The incremental branch below
     // applies escrow leaves from journal rows stamped at THIS height only, while the
     // arming replay deliberately writes no row for a key whose locked total is
     // unchanged. After a §7 shadow window every still-unchanged live lock therefore has

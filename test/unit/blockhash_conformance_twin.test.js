@@ -373,7 +373,7 @@ describe('consensus block-hash conformance twins (static drift-lock) @regression
         let out = indexerFn;
         for(const [find, replace] of [
             ['const entriesByKey = stakeEntriesMap(entries); const digest = stakeEntriesDigest(entriesByKey);',
-             'const digest = _stakeEntriesDigest(entries);'],
+             'const entriesByKey = stakeEntriesMap(entries); const digest = _stakeEntriesDigest(entriesByKey);'],
             ['const memo = stakesMemo;', 'const memo = _stakesMemo;'],
             ['memo.blockIndex === blockIndex - 1){', 'memo.blockIndex === blockIndex - 1 && memo.digest === digest){'],
             [patch, '_stakesMemo = { chain, network, blockIndex, digest, root: memo.root }; return memo.root; }'],

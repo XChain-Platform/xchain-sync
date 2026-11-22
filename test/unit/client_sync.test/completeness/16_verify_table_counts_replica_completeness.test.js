@@ -34,7 +34,8 @@ function registerVerifyTableCountsGroup1Tests(){
 
         it('reports a table missing entirely from the follower as a full shortfall', async function(){
             // getTableCount throws (table absent in this replica's schema) → treated as 0.
-            db.getTableCount = async () => { throw new Error('no such table'); };
+            let missing = new Error('no such table'); missing.errno = 1146;
+            db.getTableCount = async () => { throw missing; };
             let mismatches = await sync.verifyTableCounts({ attests: 3 });
             assert.strictEqual(mismatches.length, 1);
             assert.strictEqual(mismatches[0].table, 'attests');
@@ -58,6 +59,41 @@ function registerVerifyTableCountsGroup1Tests(){
             assert.deepStrictEqual(healed, [1146], 'missing table must trigger the schema heal');
             // Source has 0 rows, so it is correctly NOT a count mismatch.
             assert.strictEqual(mismatches.length, 0);
+        });
+    });
+}
+
+function registerVerifyTableCountsUnreadAndSpecialTests(){
+    describe('verifyTableCounts unread and special rollback coverage', function(){
+        it('leaves transient count failures unread while reporting other shortfalls', async function(){
+            for(let err of [Object.assign(new Error('lock wait'), { errno: 1205 }), new Error('connection lost')]){
+                let unread = new Set();
+                db.getTableCount = async table => {
+                    if(table === 'index_transactions') throw err;
+                    return 3;
+                };
+                let mismatches = await sync.verifyTableCounts(
+                    { index_transactions: 20, contract_stakes: 5 }, undefined, { unread });
+                assert.deepStrictEqual(mismatches,
+                    [{ table: 'contract_stakes', sourceCount: 5, localCount: 3, delta: 2 }]);
+                assert.deepStrictEqual([...unread], ['index_transactions']);
+            }
+        });
+
+        it('reports replica-ahead rows in streamed special-rollback tables at equal height', async function(){
+            db.getTableCount = async table => ({ rollcall_gates: 12, contract_emissions: 7 })[table];
+            let equal = await sync.verifyTableCounts(
+                { rollcall_gates: 10, contract_emissions: 5 }, undefined,
+                { remoteHeight: 900, localHeight: 900 });
+            assert.deepStrictEqual(equal, [
+                { table: 'rollcall_gates', sourceCount: 10, localCount: 12,
+                    delta: -2, reason: 'replica-ahead' },
+                { table: 'contract_emissions', sourceCount: 5, localCount: 7,
+                    delta: -2, reason: 'replica-ahead' }
+            ]);
+            let skewed = await sync.verifyTableCounts({ rollcall_gates: 10 }, undefined,
+                { remoteHeight: 899, localHeight: 900 });
+            assert.deepStrictEqual(skewed, []);
         });
     });
 }
@@ -111,6 +147,19 @@ function registerVerifyTableCountsGroup3Tests(){
             assert.deepStrictEqual(short, [{ table: 'validator_rewards', sourceCount: 5, localCount: 3, delta: 2 }]);
         });
 
+        it('a decoder replica ahead on dispensers at equal height reports nothing, while the same name on an indexer does', async function(){
+            // The decoder dispensers parity rests on the periodic reconcile, so a hard purge
+            // that leaves the replica ahead must not alarm. Only the dbType gate keeps the
+            // decoder out of the replica-ahead set; the indexer table of the same name is in it.
+            db.getTableCount = async () => 5;
+            let opts = { remoteHeight: 900, localHeight: 900 };
+            sync.dbType = 'decoder';
+            assert.deepStrictEqual(await sync.verifyTableCounts({ dispensers: 3 }, undefined, opts), []);
+            sync.dbType = 'indexer';
+            let indexer = await sync.verifyTableCounts({ dispensers: 3 }, undefined, opts);
+            assert.deepStrictEqual(indexer, [{ table: 'dispensers', sourceCount: 3, localCount: 5, delta: -2, reason: 'replica-ahead' }]);
+        });
+
         it('treats absent/invalid table_counts as nothing to check (older source builds)', async function(){
             db.getTableCount = async () => 100;
             assert.deepStrictEqual(await sync.verifyTableCounts(undefined), []);
@@ -140,4 +189,5 @@ describe('ClientSync', function(){
     registerVerifyTableCountsGroup1Tests();
     registerVerifyTableCountsGroup2Tests();
     registerVerifyTableCountsGroup3Tests();
+    registerVerifyTableCountsUnreadAndSpecialTests();
 });

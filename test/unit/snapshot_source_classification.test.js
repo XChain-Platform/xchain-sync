@@ -92,6 +92,23 @@ describe('indexer incremental-snapshot buckets (snapshot-class exhaustiveness) @
     });
 });
 
+describe('indexer incremental-snapshot full-dump aggregates @regression', function(){
+    it('full-dumps the unscoped markets and attest_validator_stats aggregates in every incremental window', async function(){
+        const builder = new SnapshotBuilder(new Utility());
+        for(const table of ['markets', 'attest_validator_stats']){
+            assert.ok(indexerFullDumpSet().has(table),
+                table + ' left indexerFullDumpSet: it has no block or action cursor and no hash, so an ' +
+                'incrementally caught-up follower would freeze it at bootstrap height with nothing to flag it');
+            assert.ok(!INDEXER_INCREMENTAL_SKIP.has(table), table + ' must not be in INDEXER_INCREMENTAL_SKIP');
+            const rows = [{ marker: table }];
+            const db = { findAllRows: sinon.stub().resolves(rows) };
+            assert.strictEqual(await builder.selectIndexerRows(db, table, selectCtx(7)), rows, table);
+            assert.strictEqual(await builder.selectIndexerRows(db, table, selectCtx(null)), rows, table);
+            assert.strictEqual(db.findAllRows.callCount, 2, table);
+        }
+    });
+});
+
 describe('replica-owned migration ledger classification', function(){
     it('classifies schema_migrations as the replica ledger, apart from the other exclusion sets', function(){
         // The src/sql exhaustiveness scan cannot see this table (the migration runner
@@ -156,8 +173,9 @@ describe('source-unstreamed table set', function(){
                 dbType: 'indexer',
                 beginTransaction: sinon.stub().resolves(),
                 commitTransaction: sinon.stub().resolves(),
+                resetAutoIncrementToMax: sinon.stub().resolves(),
                 rollbackTransaction: sinon.stub().resolves(),
-                deleteStateTreeRootsFromBlock: sinon.stub().resolves(),
+                deleteStateTreeRootsForChain: sinon.stub().resolves(),
                 deleteAllRows: sinon.stub().resolves(),
                 findStreamableTableNames: sinon.stub().resolves(localTables.map(table_name => ({ table_name }))),
             };

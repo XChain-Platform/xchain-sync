@@ -177,6 +177,9 @@ describe("SyncService", function(){
             try {
                 await assert.rejects(() => service.discoverChains(), new RegExp(PINKEY));
                 assert.strictEqual(startSync.callCount, 0, 'no ClientSync started on a refused pin override');
+                assert.notStrictEqual(service._bootstrapDepthChecked, true, 'a refusal must not consume the startup check');
+                assert.throws(() => service.validateFirstDiscoveryPass(), new RegExp(PINKEY));
+                assert.notStrictEqual(service._bootstrapDepthChecked, true, 'a repeated refusal must leave the check armed');
             } finally { delete process.env[PINKEY]; }
         });
     });

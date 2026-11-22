@@ -35,7 +35,51 @@ function assertQueriesByKey(filled, from){
     }
 }
 
+// getBlockLeafRows hands its SQL to the helpers as `key: <literal>` pairs, and the key picks the
+// preimage slot a result lands in. Each entry is [key, the table and alias its literal selects
+// FROM, or null for a fragment spliced into the contract_state query].
+const LEAF_QUERY_TABLES = [
+    ['credits', 'credits c'], ['debits', 'debits d'], ['escrows', 'escrows e'],
+    ['contracts', 'contracts c'], ['statePrefix', 'contract_state cs'], ['stateSuffix', null],
+    ['stateOrder', null], ['executions', 'contract_executions ce'], ['emissions', 'contract_emissions em'],
+    ['deposits', 'deposits d'], ['withdrawals', 'withdrawals w']
+];
+
+// Assert every key in getBlockLeafRows' two queries objects holds the literal for its own table.
+function assertLeafQueryKeysHoldTheirTables(dbSrc){
+    const fn = stripComments(extractFunction(dbSrc,
+        /async getBlockLeafRows\(block_index, conn, network, coin\)\{/, 'db/actions.js'));
+    const pairs = [...fn.matchAll(/\b(\w+): `([^`]*)`/g)].map(m => [m[1], m[2]]);
+    assert.deepStrictEqual(pairs.map(p => p[0]), LEAF_QUERY_TABLES.map(e => e[0]),
+        'getBlockLeafRows queries keys changed; update LEAF_QUERY_TABLES with the preimage slot each one fills');
+    pairs.forEach(([key, literal], i) => {
+        const from = literal.match(/\bFROM (\w+) (\w+)/);
+        const want = LEAF_QUERY_TABLES[i][1];
+        assert.strictEqual(from ? from[1] + ' ' + from[2] : null, want,
+            'getBlockLeafRows files the wrong SQL under `' + key + '`: it must select FROM ' + want);
+    });
+}
+
 describe('consensus block-hash conformance twins (static drift-lock) @regression', function(){
+    it('getBlockLeafRows files each SQL literal under the key of its own table', function(){
+        assertLeafQueryKeysHoldTheirTables(fs.readFileSync(syncFile('src/db/actions.js'), 'utf8'));
+    });
+
+    it('the key-to-table check fails on swapped labels that keep the literal order', function(){
+        const dbSrc = fs.readFileSync(syncFile('src/db/actions.js'), 'utf8');
+        const swapped = dbSrc.replace('deposits: `', 'TMPKEY: `').replace('withdrawals: `', 'deposits: `')
+            .replace('TMPKEY: `', 'withdrawals: `');
+        assert.notStrictEqual(swapped, dbSrc, 'the label swap must change the source');
+        assert.throws(() => assertLeafQueryKeysHoldTheirTables(swapped), /queries keys changed/);
+    });
+
+    it('the key-to-table check fails on a literal that selects another key\'s table', function(){
+        const dbSrc = fs.readFileSync(syncFile('src/db/actions.js'), 'utf8');
+        const wrong = dbSrc.replace('FROM deposits d INNER', 'FROM withdrawals w INNER');
+        assert.notStrictEqual(wrong, dbSrc, 'the table swap must change the source');
+        assert.throws(() => assertLeafQueryKeysHoldTheirTables(wrong), /wrong SQL under `deposits`/);
+    });
+
     // Reads this repo's own files, so it never skips when the indexer checkout is absent.
     it('BlockHasher and the leaf-row gatherers build the pinned preimage keys, in order, at the hashed block', function(){
         shape.assertBlockHasherPreimage(fs.readFileSync(syncFile('src/client/block_hasher.js'), 'utf8'));

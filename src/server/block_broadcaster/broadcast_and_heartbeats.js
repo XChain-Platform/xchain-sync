@@ -18,6 +18,12 @@ const util = require('node:util');
 const { getLogger } = require('../../observability');
 const logger = getLogger();
 
+// Assign an own, enumerable property even for caller-supplied names such as
+// '__proto__', where plain assignment would re-parent the object instead.
+function setOwn(obj, key, value){
+    Object.defineProperty(obj, key, { value, writable: true, enumerable: true, configurable: true });
+}
+
 function buildInfraMessage(event, infraTables, subs){
     let infraMessage = null;
 
@@ -154,6 +160,7 @@ module.exports = {
     // caught-up subscriber (lag 0) apart from one that has never reported (lag null
     // because it is unknown, not because it is in sync). Clients that never send a
     // heartbeat (legacy builds, third-party validators) stay heartbeatReceived:false.
+    // A height above the served tip (it fell on a reorg) gives lag null, 'unknown'.
     getSubscribers(chain, network, dbType){
         let subs = this.subscribers.get(this.key(chain, network, dbType));
         if(!subs) return [];
@@ -161,8 +168,10 @@ module.exports = {
         for(let ws of subs){
             let lastSent = (typeof ws._syncLastSentBlock === 'number') ? ws._syncLastSentBlock : null;
             let applied  = (typeof ws._syncAppliedBlock === 'number')  ? ws._syncAppliedBlock  : null;
-            let lag = (lastSent !== null && applied !== null) ? lastSent - applied : null;
-            let heartbeatReceived = ws._syncAppliedBlock !== null;
+            let tip      = this.servedTip(chain, network, dbType, lastSent);
+            let aboveTip = applied !== null && tip !== null && applied > tip;
+            let lag = (lastSent !== null && applied !== null && !aboveTip) ? Math.max(0, lastSent - applied) : null;
+            let heartbeatReceived = ws._syncAppliedBlock !== null && !aboveTip;
             out.push({
                 ip: ws._syncIp || null,
                 lastSentBlock: lastSent,
@@ -243,9 +252,10 @@ module.exports = {
         }
     },
 
-    // Record a named-validator REST heartbeat for a chain/network/dbType.
-    // Called by POST /validator-heartbeat in api.js.
+    // Record a named-validator REST heartbeat (POST /validator-heartbeat in api.js).
+    // Returns false and keeps any prior entry when the height fails acceptsAppliedHeight.
     recordValidatorHeartbeat(chain, network, dbType, validatorId, appliedHeight, appliedBlockTime){
+        if(!this.acceptsAppliedHeight(chain, network, dbType, appliedHeight, null)) return false;
         let key = this.key(chain, network, dbType);
         if(!this.validatorHeartbeats.has(key))
             this.validatorHeartbeats.set(key, new Map());
@@ -254,6 +264,7 @@ module.exports = {
             applied_block_time: appliedBlockTime != null ? appliedBlockTime : null,
             last_seen:          Date.now()
         });
+        return true;
     },
 
     // Return per-validator heartbeat state for a chain/network/dbType.
@@ -301,11 +312,13 @@ module.exports = {
                 // rather than being invisible. The 'stale' entry remains visible in
                 // the validators map but no longer props up the denominator.
                 if(entry.status !== 'stale') total++;
-                let lagBlocks = (sourceHeight !== null && entry.applied_height !== null)
+                // Above the served tip (it fell on a reorg) is unknown, never caught up.
+                let tip = this.servedTip(chain, network, dbType, null);
+                let lagBlocks = (sourceHeight !== null && entry.applied_height !== null && (tip === null || entry.applied_height <= tip))
                     ? Math.max(0, sourceHeight - entry.applied_height)
                     : null;
                 if(lagBlocks === null) unknownCount++;
-                validators[id] = {
+                let out = {
                     applied_height:     entry.applied_height,
                     applied_block_time: entry.applied_block_time,
                     last_seen:          new Date(entry.last_seen).toISOString(),
@@ -318,21 +331,22 @@ module.exports = {
                                           : (lagBlocks === null ? 'unknown' : 'known')
                 };
                 if(entry.status === 'stale' && entry.evicted_at != null)
-                    validators[id].evicted_at = new Date(entry.evicted_at).toISOString();
+                    out.evicted_at = new Date(entry.evicted_at).toISOString();
+                setOwn(validators, id, out);
             }
         }
 
         // Fill in roster members that have never reported for this leaf. A stale roster
         // member is already in the map above, so this only adds the never-seen ones.
         for(let id of expected){
-            if(validators[id]) continue;
-            validators[id] = {
+            if(Object.hasOwn(validators, id)) continue;
+            setOwn(validators, id, {
                 applied_height:     null,
                 applied_block_time: null,
                 last_seen:          null,
                 lag_blocks:         null,
                 status:             'absent'
-            };
+            });
         }
 
         return { validators, total, expected_total: expectedTotal, unknown_count: unknownCount };

@@ -131,8 +131,8 @@ module.exports = {
     // { rethrow: true }. It matters because a swallowed non-transactional error here
     // returns null, and the stake readers below turn a null status id into an EMPTY
     // stake set over a populated stakes table: an M-17 wrong answer, not an error
-    // signal. Operational callers (rollback, cooldown credits, stateHash) keep the
-    // fail-soft default deliberately.
+    // signal. Operational rollback and stateHash callers keep the fail-soft default;
+    // the forward cooldown collector passes { rethrow: true }.
     async getStatusId(status, opts){
         let rows = await this.doQuery("SELECT id FROM index_statuses WHERE status = ? LIMIT 1", [status], undefined, opts);
         return rows.length > 0 ? Number(rows[0].id) : null;
@@ -235,6 +235,18 @@ module.exports = {
             "WHERE a.block_index >= ? " +
             "ORDER BY em.execution_index ASC, em.position ASC",
             [sinceBlock], conn);
+    },
+
+    streamEmissionRowsFromBlock(sinceBlock, conn){
+        return conn.queryStream(
+            "SELECT em.execution_index, em.emitted_action, em.action_index, em.position " +
+            "FROM `contract_emissions` em " +
+            "INNER JOIN contract_executions ce ON (ce.action_index = em.execution_index) " +
+            "INNER JOIN actions a ON (a.action_index = ce.action_index) " +
+            "WHERE a.block_index >= ? " +
+            "ORDER BY em.execution_index ASC, em.position ASC",
+            [sinceBlock]
+        );
     },
 
 };

@@ -140,8 +140,8 @@ module.exports = {
     },
 
     // The highest recorded block, one row carrying `tip`.
-    async getSyncMetaTip(){
-        return await this.doQuery("SELECT MAX(block_index) AS tip FROM sync_meta");
+    async getSyncMetaTip(conn){
+        return await this.doQuery("SELECT MAX(block_index) AS tip FROM sync_meta", null, conn);
     },
 
     // The three hashes recorded for one height, at most one row.
@@ -182,6 +182,17 @@ module.exports = {
             ORDER BY block_index DESC
             LIMIT ? OFFSET ?`;
         return await this.doQuery(query, [limit, offset]);
+    },
+
+    // The lowest indexer REORG marker id stamped at or after the newest recorded
+    // block, or null. Strict, so a failed read is never taken for "no marker". Both
+    // DATETIME stamps are written by UTC-pinned sessions and compare column to column.
+    async findReorgMarkerSinceLastRecord(){
+        let rows = await this.doQueryStrict(
+            `SELECT MIN(e.id) AS id FROM events e
+             WHERE e.code = 'REORG' AND e.time >= (SELECT MAX(m.logged_at) FROM sync_meta m)`, []
+        );
+        return (rows && rows.length && rows[0].id != null) ? Number(rows[0].id) : null;
     },
 
 };

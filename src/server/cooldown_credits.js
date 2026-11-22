@@ -48,8 +48,10 @@
  * follower's escrows table stays short by every release, and the supply its
  * rollback recomputes from credits - debits + escrows comes out too high.
  * collectMaturedCooldownEscrows forwards that row by the same keys. The source's
- * cooldown-maturity rollback removes only the credit, so ClientRollback mirrors it
- * and leaves the release in place too: the replica keeps the rows the source keeps.
+ * cooldown-maturity rollback keeps the release below the cooldown-maturity escrow
+ * reversal activation and deletes it at or above it, keyed on the rollback's target
+ * block. ClientRollback.reverseCooldownMaturities reads the same gate at the same
+ * height, so the replica keeps the rows the source keeps on both sides of the switch.
  *
  * Everything above describes the LEGACY attribution era only. Once the indexer's
  * UNSTAKE_COOLDOWN_COMPLETION_ACTION protocol change is active (genesis on testnet
@@ -92,12 +94,15 @@ function ledgerRowKey(r){
 //             pass fromBlock === toBlock)
 //   conn      optional connection (so a snapshot's REPEATABLE READ view reads
 //             these at the same height as the rest of the payload)
-async function collectMatured(kind, db, fromBlock, toBlock, conn){
+//   beforeActionIndex optional: only rows below it (a snapshot's base stream
+//             already carries every row at or above its first action index)
+async function collectMatured(kind, db, fromBlock, toBlock, conn, beforeActionIndex){
     let from = Number(fromBlock);
     let to   = Number(toBlock);
     let finders = FINDERS[kind];
 
-    let completedStatusId = await db.getStatusId('completed');
+    // A swallowed query error here looks like "nothing matured" and ships a short payload.
+    let completedStatusId = await db.getStatusId('completed', { rethrow: true });
     if(completedStatusId === null || completedStatusId === undefined) return [];
 
     // An unstake created AND matured inside the same incremental window can be
@@ -118,7 +123,7 @@ async function collectMatured(kind, db, fromBlock, toBlock, conn){
     let gasTick = gasTickSymbol();
     if(gasTick){
         try {
-            add(await db[finders.capability](gasTick, completedStatusId, from, to, conn));
+            add(await db[finders.capability](gasTick, completedStatusId, from, to, conn, beforeActionIndex));
         } catch(e){
             // Skip ONLY a schema gap (errno 1146/1054): an error with no numeric errno would
             // otherwise broadcast the block short of its refund rows (poller's isSchemaGapError rule).
@@ -130,7 +135,7 @@ async function collectMatured(kind, db, fromBlock, toBlock, conn){
     // Contract maturity: paid in the unstake's own tick. Forward mirror of
     // ClientRollback's contract reverse delete.
     try {
-        add(await db[finders.contract](completedStatusId, from, to, conn));
+        add(await db[finders.contract](completedStatusId, from, to, conn, beforeActionIndex));
     } catch(e){
         // Same schema-gap-only skip as the capability leg above.
         if(!isSchemaGapError(e)) throw e;
@@ -141,14 +146,14 @@ async function collectMatured(kind, db, fromBlock, toBlock, conn){
 }
 
 // The matured refund credits in the window (see collectMatured).
-async function collectMaturedCooldownCredits(db, fromBlock, toBlock, conn){
-    return await collectMatured('credits', db, fromBlock, toBlock, conn);
+async function collectMaturedCooldownCredits(db, fromBlock, toBlock, conn, beforeActionIndex){
+    return await collectMatured('credits', db, fromBlock, toBlock, conn, beforeActionIndex);
 }
 
 // The matured escrow releases in the window, the negative row paired with each
 // refund credit (see collectMatured).
-async function collectMaturedCooldownEscrows(db, fromBlock, toBlock, conn){
-    return await collectMatured('escrows', db, fromBlock, toBlock, conn);
+async function collectMaturedCooldownEscrows(db, fromBlock, toBlock, conn, beforeActionIndex){
+    return await collectMatured('escrows', db, fromBlock, toBlock, conn, beforeActionIndex);
 }
 
 // Append `matured` rows to a payload's `rows` for the same table, skipping any
@@ -165,4 +170,4 @@ function mergeMaturedRows(rows, matured){
     return out;
 }
 
-module.exports = { collectMaturedCooldownCredits, collectMaturedCooldownEscrows, mergeMaturedRows };
+module.exports = { collectMaturedCooldownCredits, collectMaturedCooldownEscrows, ledgerRowKey, mergeMaturedRows };

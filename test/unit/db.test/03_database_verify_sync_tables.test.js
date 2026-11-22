@@ -26,6 +26,24 @@ describe('Database.verifySyncTables()', function () {
         assert.strictEqual(conn.query.callCount, 3, 'all three sync-owned tables probed');
     });
 
+    it('source indexer mode skips tables owned by the indexer', async function () {
+        sinon.stub(fs, 'readdirSync').returns([
+            'escrow_leaf_journal.sql', 'merkle_epochs.sql', 'state_tree_nodes.sql',
+            'state_tree_roots.sql', 'sync_halt.sql', 'sync_meta.sql'
+        ]);
+        let conn = fakeConn([]);
+        sinon.stub(db, 'getConnection').resolves(conn);
+        let create = sinon.stub(db, 'createTableFromFile').resolves();
+
+        let result = await db.verifySyncTables({ includeIndexerOwned: false });
+
+        assert.strictEqual(result, true);
+        assert.deepStrictEqual(conn.query.getCalls().map(call => call.args[1][1]),
+            ['merkle_epochs', 'sync_halt', 'sync_meta']);
+        assert.deepStrictEqual(create.getCalls().map(call => call.args[0]),
+            ['merkle_epochs.sql', 'sync_halt.sql', 'sync_meta.sql']);
+    });
+
     it('throws (via util.throwError) when query fails', async function () {
         sinon.stub(fs, 'readdirSync').returns(['sync_meta.sql']);
         let conn = {
@@ -137,9 +155,14 @@ describe('Database.ensureReplicatedColumns()', function () {
             // These reads are intentional new behavior added by the #3713 AUTO_INCREMENT
             // self-heal; the real intent of this test is that no ADD COLUMN or MODIFY is
             // issued when all columns are already present.
-            if (/SELECT EXTRA FROM information_schema\.columns/.test(sql)) return [{ EXTRA: 'auto_increment' }];
+            if (/SELECT EXTRA, COLUMN_TYPE FROM information_schema\.columns/.test(sql)){
+                const unsigned = ['cross_chain_matches', 'capability_snapshots', 'state_checkpoints'].includes(args[1]);
+                return [{ EXTRA: 'auto_increment', COLUMN_TYPE: unsigned ? 'bigint unsigned' : 'bigint' }];
+            }
             // ENUM-widen check (5244): return a COLUMN_TYPE that already includes 'rejected'
             // so the heal is correctly skipped when the ENUM is already up to date.
+            if (/SELECT COLUMN_TYPE, IS_NULLABLE FROM information_schema\.columns/.test(sql))
+                return [{ COLUMN_TYPE: 'bigint(20) unsigned', IS_NULLABLE: 'YES' }];
             if (/SELECT COLUMN_TYPE FROM information_schema\.columns/.test(sql))
                 return [{ COLUMN_TYPE: "enum('pending','fulfilled','expired','errored','rejected')" }];
             // Ownership/nullability column-presence checks: column exists on replica

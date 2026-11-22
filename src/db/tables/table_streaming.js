@@ -19,6 +19,8 @@
  *
  ********************************************************************/
 
+const { assertValidIdentifier } = require('../shared.js');
+
 module.exports = {
 
     // The set of BASE TABLEs that actually exist in this database.
@@ -71,6 +73,14 @@ module.exports = {
         return await this.doQuery("SELECT * FROM `" + table + "` WHERE block_index >= ? ORDER BY block_index", [sinceBlock], conn);
     },
 
+    streamRowsFromBlockIndex(table, sinceBlock, conn){
+        assertValidIdentifier(table);
+        return conn.queryStream(
+            "SELECT * FROM `" + table + "` WHERE block_index >= ? ORDER BY block_index",
+            [sinceBlock]
+        );
+    },
+
     /**
      * Every row of a table from a block onward, keyed by the column the table
      * lifecycle registry names for it. Both names are interpolated from the
@@ -86,6 +96,15 @@ module.exports = {
         return await this.doQuery("SELECT * FROM `" + table + "` WHERE " + key + " >= ? ORDER BY " + key, [sinceBlock], conn);
     },
 
+    streamRowsFromBlockKey(table, key, sinceBlock, conn){
+        assertValidIdentifier(table);
+        assertValidIdentifier(key);
+        return conn.queryStream(
+            "SELECT * FROM `" + table + "` WHERE " + key + " >= ? ORDER BY " + key,
+            [sinceBlock]
+        );
+    },
+
     /**
      * Every row of a table from an action index onward. The table is interpolated
      * from the replicated-table topology, never user input.
@@ -97,6 +116,14 @@ module.exports = {
      */
     async findRowsFromActionIndex(table, firstActionIndex, conn){
         return await this.doQuery("SELECT * FROM `" + table + "` WHERE action_index >= ? ORDER BY action_index", [firstActionIndex], conn);
+    },
+
+    streamRowsFromActionIndex(table, firstActionIndex, conn){
+        assertValidIdentifier(table);
+        return conn.queryStream(
+            "SELECT * FROM `" + table + "` WHERE action_index >= ? ORDER BY action_index",
+            [firstActionIndex]
+        );
     },
 
     /**
@@ -111,7 +138,9 @@ module.exports = {
      * @returns {Promise<object[]>} the driver's row array
      */
     async findLookupPageAfter(table, col, after, limit, conn){
-        return await this.doQuery(
+        // A fail-soft empty result is indistinguishable from the end of this
+        // table to a paging follower, so lookup reads must propagate faults.
+        return await this.doQueryStrict(
             "SELECT * FROM `" + table + "` WHERE `" + col + "` > ? ORDER BY `" + col + "` ASC LIMIT ?",
             [after, limit],
             conn

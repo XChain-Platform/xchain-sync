@@ -41,6 +41,15 @@ if (!preg_match('#^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$#', $dir)
     exit("Bad request\n");
 }
 
+// A quarantine directory holds archives an operator set aside on purpose; they
+// are not published, so no latest.tgz resolves inside one at any depth. The
+// browse page and the refresh-status check skip the same directories.
+if (in_array('quarantine', explode('/', $dir), true)) {
+    http_response_code(404);
+    header('Content-Type: text/plain');
+    exit("Not found\n");
+}
+
 $target = realpath($base . '/' . $dir);
 if ($target === false
     || strpos($target, $base . DIRECTORY_SEPARATOR) !== 0
@@ -75,8 +84,29 @@ if ($type === 'sig' && is_file($target . '/latest.tgz')) {
 
 // Take candidates from *.tar.gz only, the producer's extension and the only one
 // publish-bootstraps.sh prunes, so an unpruned .tgz stray can never become latest.
+// A candidate must also BE an archive: a regular file (a directory named
+// *.tar.gz is not one, and the freshness check counts only `-type f`) whose
+// basename stays in the same safe class the directory segments use, so the
+// Location header below never carries a character it cannot hold.
+//
+// Nor is an archive whose name stamp is more than a day ahead of now. A real
+// stamp is taken before the archive exists, so it is always in the past, and a
+// day absorbs producer-to-host clock skew. Ordering is by name, so without this
+// a 2099 stamp outranks every later real publish and pins latest.tgz to itself
+// for good. The browse page and the freshness check skip the same archives, on
+// the same tolerance. A stamp naming no real instant keeps the old behaviour.
+function future_stamped($name, $now) {
+    if (!preg_match('/(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/', $name, $m)) return false;
+    $y = (int)$m[1]; $mo = (int)$m[2]; $d = (int)$m[3];
+    $h = (int)$m[4]; $mi = (int)$m[5]; $s = (int)$m[6];
+    if (!checkdate($mo, $d, $y) || $h > 23 || $mi > 59 || $s > 59) return false;
+    return gmmktime($h, $mi, $s, $mo, $d, $y) > $now + 86400;
+}
 $files = array_values(array_filter(glob($target . '/*.tar.gz') ?: [], function ($f) {
-    return basename($f) !== 'latest.tar.gz';
+    return is_file($f)
+        && preg_match('#^[A-Za-z0-9._-]+$#', basename($f))
+        && basename($f) !== 'latest.tar.gz'
+        && !future_stamped(basename($f), time());
 }));
 
 if (empty($files)) {
@@ -129,7 +159,8 @@ if ($type === 'sig') {
     exit;
 }
 
-// 302 to the real archive (absolute path; filename chars are already safe).
+// 302 to the real archive (absolute path; the candidate filter above admits
+// only safe filename chars).
 header('Location: /bootstraps/' . $dir . '/' . $name, true, 302);
 header('Cache-Control: no-cache, must-revalidate');
 exit;

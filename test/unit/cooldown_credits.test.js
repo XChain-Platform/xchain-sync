@@ -1,3 +1,14 @@
+/*********************************************************************
+ *
+ * Copyright © 2025-2026 Dankest, LLC
+ * Based on XChain Platform by Dankest, LLC - https://dankest.llc
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ *
+ * This file is part of XChain Platform. Licensed under the GNU Affero
+ * General Public License v3.0 or later; see LICENSE.md.
+ *
+ **********************************************************************/
 //  doctrine test-coverage program: unit coverage for src/server/cooldown_credits.js.
 // A follower that misses matured cooldown-refund credits drifts into hash-blind
 // balance divergence, so the collector's early-return, dedup, and
@@ -6,6 +17,7 @@
 // doQuery.
 
 const assert = require('assert');
+const { makeTestDatabase } = require('./support/fake_db');
 const { collectMaturedCooldownCredits: collectFromRealFake } = require('../../src/server/cooldown_credits.js');
 // The collector reads through a named Database method, and these fakes stand in
 // for the database with nothing but doQuery. Mixing the REAL mixin onto whatever
@@ -13,6 +25,17 @@ const { collectMaturedCooldownCredits: collectFromRealFake } = require('../../sr
 // real method still hands its SQL, args and connection to the fake's doQuery.
 const CREDITS_MIXIN = require('../../src/db/credits.js');
 const collectMaturedCooldownCredits = (db, ...rest) => collectFromRealFake(Object.assign(db, CREDITS_MIXIN), ...rest);
+
+function dbWithFailingQueries(err) {
+    const db = makeTestDatabase('idx', 'u', 'p',
+        { isNull: (x) => x == null, logError: () => {} }, 'indexer');
+    db.transactionConnection = null;
+    db.getConnection = async () => ({
+        query: async () => { throw err; },
+        release: async () => {}
+    });
+    return db;
+}
 
 function mockDb({ statusId = 1, queries = [] } = {}) {
     let call = 0;
@@ -63,6 +86,10 @@ describe('collectMaturedCooldownCredits', function () {
             () => collectMaturedCooldownCredits(mockDb({ queries: [fatal] }), 1, 999),
             /deadlock/,
         );
+        await assert.rejects(
+            () => collectMaturedCooldownCredits(dbWithFailingQueries(fatal), 1, 999),
+            (e) => e === fatal,
+        );
     });
 });
 
@@ -110,6 +137,10 @@ describe('collectMaturedCooldownEscrows', function () {
         assert.deepStrictEqual(rows, []);
         const fatal = Object.assign(new Error('deadlock'), { errno: 1213 });
         await assert.rejects(() => collectMaturedCooldownEscrows(mockDb({ queries: [fatal] }), 1, 999), /deadlock/);
+        await assert.rejects(
+            () => collectMaturedCooldownEscrows(dbWithFailingQueries(fatal), 1, 999),
+            (e) => e === fatal,
+        );
     });
 });
 

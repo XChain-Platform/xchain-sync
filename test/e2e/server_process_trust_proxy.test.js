@@ -48,6 +48,11 @@ async function requestContext(trustProxy) {
     server.app.get('/request-context', (req, res) => {
         res.json({ ip: req.ip, protocol: req.protocol });
     });
+    // createApp ends with a JSON not-found handler, so a route added after
+    // start sits behind it. Express 5 resolves req.ip and req.protocol in
+    // app.handle before the router runs, so the probe can go first.
+    let stack = server.app.router.stack;
+    stack.unshift(stack.pop());
 
     let response = await fetch(server.getUrl() + '/request-context', {
         headers: {

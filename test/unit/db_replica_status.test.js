@@ -131,6 +131,16 @@ describe('getReplicaStatus on a multi-source replica @regression @tier1', functi
         assert.strictEqual(r.secondsBehind, null);
     });
 
+    it('a configured connection with zero server connections FAILS CLOSED', async function () {
+        process.env.SYNC_REPLICA_CONNECTION = 'xchain';
+        const db = dbWith({ 'SHOW ALL SLAVES STATUS': [] });
+        const r = await db.getReplicaStatus();
+        assert.strictEqual(r.isReplica, null, 'a removed configured channel is unknown, never a fresh primary');
+        assert.strictEqual(r.running, null);
+        assert.strictEqual(r.secondsBehind, null);
+        assert.ok(db.util.logError.calledOnce, 'the missing configured connection must be logged');
+    });
+
     it('falls back to SHOW REPLICA STATUS on a server without ALL SLAVES', async function () {
         const db = dbWith({
             'SHOW ALL SLAVES STATUS': new Error('ER_PARSE_ERROR'),

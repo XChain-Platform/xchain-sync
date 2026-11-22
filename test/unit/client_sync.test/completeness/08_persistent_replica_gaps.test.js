@@ -207,6 +207,37 @@ function registerPersistentReplicaGapsGroup7Tests(){
     });
 }
 
+function registerPersistentReplicaGapsUnreadTests(){
+    describe('persistent replica gaps unread counts', function(){
+        registerPersistentReplicaGapHooks();
+
+        it('freezes an unread table instead of closing its tracked gap', async function(){
+            sync._replicaGaps.set('index_transactions', {
+                table: 'index_transactions', firstSeenAt: 1, firstDelta: 4, worstDelta: 4,
+                sweeps: 3, alerts: 1, lastAlertAt: 2, repairAttempts: 1,
+                lastDelta: 4, sourceCount: 20, localCount: 16
+            });
+            await sync.trackReplicaGaps([], { unread: new Set(['index_transactions']), now: 10 });
+            assert.strictEqual(sync._replicaGaps.get('index_transactions').sweeps, 3);
+            assert.ok(!warn.getCalls().some(c => /REPLICA_GAP_CLOSED/.test(String(c.args[0]))));
+
+            await sync.trackReplicaGaps([], { unread: new Set(), now: 11 });
+            assert.strictEqual(sync._replicaGaps.has('index_transactions'), false);
+            assert.ok(warn.getCalls().some(c => /REPLICA_GAP_CLOSED/.test(String(c.args[0]))));
+        });
+
+        it('does not re-page or pass a lookup whose count is unread', async function(){
+            let err = new Error('lock wait'); err.errno = 1205;
+            db.getTableCount = sinon.stub().rejects(err);
+            let pager = sinon.stub(sync, 'syncLookupTablesPaged').resolves();
+            await sweep({ index_transactions: 20 });
+            assert.strictEqual(pager.called, false);
+            assert.ok(!warn.getCalls().some(c => /TABLE_COUNT_MISMATCH/.test(String(c.args[0]))));
+            assert.ok(!console.log.getCalls().some(c => /Table-count verification passed/.test(String(c.args[0]))));
+        });
+    });
+}
+
 describe('ClientSync', function(){
     registerClientSyncHooks(assignState);
     registerPersistentReplicaGapsGroup1Tests();
@@ -216,4 +247,5 @@ describe('ClientSync', function(){
     registerPersistentReplicaGapsGroup5Tests();
     registerPersistentReplicaGapsGroup6Tests();
     registerPersistentReplicaGapsGroup7Tests();
+    registerPersistentReplicaGapsUnreadTests();
 });
