@@ -34,6 +34,35 @@ function makeSync(){
     return s;
 }
 
+async function advancesAtTrustedFrontier(){
+    const sync = makeSync();
+    sinon.stub(sync, 'checkpointBindingMismatches').returns(null);
+    sinon.stub(checkpointVerifier, 'commitmentActive').returns(true);
+    sinon.stub(checkpointVerifier, 'tryCanonicalCheckpoint').returns({});
+    const lookup = sinon.stub(sync, 'oraclePublishSetAt').resolves(Object.assign([], { truncated: false }));
+    sinon.stub(sync, 'verifyServedCheckpoint').returns({ valid: true });
+    sinon.stub(sync, 'checkpointRootsMatchLocal').resolves({ status: 'match' });
+
+    const verdict = await sync.attestRotationStep(
+        { block_index: 110, snapshot_block: 106, state_root: 'b1'.repeat(32) }, { block_index: 100 });
+
+    assert.strictEqual(verdict, null);
+    assert.ok(lookup.calledOnceWithExactly(100));
+}
+
+async function waitsPastTrustedFrontier(){
+    const sync = makeSync();
+    sinon.stub(sync, 'checkpointBindingMismatches').returns(null);
+    sinon.stub(checkpointVerifier, 'commitmentActive').returns(true);
+    const lookup = sinon.stub(sync, 'oraclePublishSetAt').resolves([]);
+
+    const verdict = await sync.attestRotationStep(
+        { block_index: 110, snapshot_block: 107, state_root: 'b1'.repeat(32) }, { block_index: 100 });
+
+    assert.strictEqual(verdict.verdict, 'wait');
+    assert.strictEqual(lookup.called, false);
+}
+
 describe('ClientSync.attestRotationStep: signer-set lookup is buried @regression', function(){
     afterEach(function(){ sinon.restore(); });
 
@@ -75,32 +104,7 @@ describe('ClientSync.attestRotationStep: signer-set lookup is buried @regression
         assert.strictEqual(lookup.called, false);
     });
 
-    it('advances when the buried height equals the trusted frontier', async function(){
-        const sync = makeSync();
-        sinon.stub(sync, 'checkpointBindingMismatches').returns(null);
-        sinon.stub(checkpointVerifier, 'commitmentActive').returns(true);
-        sinon.stub(checkpointVerifier, 'tryCanonicalCheckpoint').returns({});
-        const lookup = sinon.stub(sync, 'oraclePublishSetAt').resolves(Object.assign([], { truncated: false }));
-        sinon.stub(sync, 'verifyServedCheckpoint').returns({ valid: true });
-        sinon.stub(sync, 'checkpointRootsMatchLocal').resolves({ status: 'match' });
+    it('advances when the buried height equals the trusted frontier', advancesAtTrustedFrontier);
 
-        const verdict = await sync.attestRotationStep(
-            { block_index: 110, snapshot_block: 106, state_root: 'b1'.repeat(32) }, { block_index: 100 });
-
-        assert.strictEqual(verdict, null);
-        assert.ok(lookup.calledOnceWithExactly(100));
-    });
-
-    it('waits without lookup when the buried height is beyond the frontier', async function(){
-        const sync = makeSync();
-        sinon.stub(sync, 'checkpointBindingMismatches').returns(null);
-        sinon.stub(checkpointVerifier, 'commitmentActive').returns(true);
-        const lookup = sinon.stub(sync, 'oraclePublishSetAt').resolves([]);
-
-        const verdict = await sync.attestRotationStep(
-            { block_index: 110, snapshot_block: 107, state_root: 'b1'.repeat(32) }, { block_index: 100 });
-
-        assert.strictEqual(verdict.verdict, 'wait');
-        assert.strictEqual(lookup.called, false);
-    });
+    it('waits without lookup when the buried height is beyond the frontier', waitsPastTrustedFrontier);
 });

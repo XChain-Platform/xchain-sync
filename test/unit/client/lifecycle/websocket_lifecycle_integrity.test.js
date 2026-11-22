@@ -41,37 +41,39 @@ function socket(){
     return ws;
 }
 
+async function recoversFromCommittedTip(){
+    const sync = makeSync();
+    const ws = socket();
+    sync.running = true;
+    sync.lastAppliedBlock = 10;
+    sync['_verifiedTip'] = 7;
+    sync.wsConns[0] = ws;
+    sync['_sourcesNeedingRecovery'].add(0);
+    sinon.stub(sync, 'armStreamWatchdog');
+    sinon.stub(sync, 'incrementalCatchUp').resolves();
+    sinon.stub(sync, 'handleEvent').resolves();
+
+    sync.handleWebSocketOpen('http://a:3006', 0, ws);
+    sync.handleWebSocketMessage(
+        Buffer.from(JSON.stringify({ type: 'status', block_height: 10, source_block_height: 10 })),
+        'http://a:3006', 0, ws,
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    assert.ok(sync.incrementalCatchUp.calledOnceWithExactly(11));
+    assert.strictEqual(sync['_sourcesNeedingRecovery'].has(0), false);
+    const messages = console.log.getCalls().map(call => String(call.args[0]));
+    assert.strictEqual(messages.some(message => message.includes('last verified block')), false);
+}
+
 describe('ClientSync WebSocket lifecycle integrity @regression', function(){
     beforeEach(function(){
         sinon.stub(console, 'log'); sinon.stub(console, 'error'); sinon.stub(console, 'warn');
     });
     afterEach(function(){ sinon.restore(); });
 
-    it('reconnect recovery uses the committed tip rather than the verified marker', async function(){
-        const sync = makeSync();
-        const ws = socket();
-        sync.running = true;
-        sync.lastAppliedBlock = 10;
-        sync['_verifiedTip'] = 7;
-        sync.wsConns[0] = ws;
-        sync['_sourcesNeedingRecovery'].add(0);
-        sinon.stub(sync, 'armStreamWatchdog');
-        sinon.stub(sync, 'incrementalCatchUp').resolves();
-        sinon.stub(sync, 'handleEvent').resolves();
-
-        sync.handleWebSocketOpen('http://a:3006', 0, ws);
-        sync.handleWebSocketMessage(
-            Buffer.from(JSON.stringify({ type: 'status', block_height: 10, source_block_height: 10 })),
-            'http://a:3006', 0, ws,
-        );
-        await Promise.resolve();
-        await Promise.resolve();
-
-        assert.ok(sync.incrementalCatchUp.calledOnceWithExactly(11));
-        assert.strictEqual(sync['_sourcesNeedingRecovery'].has(0), false);
-        const messages = console.log.getCalls().map(call => String(call.args[0]));
-        assert.strictEqual(messages.some(message => message.includes('last verified block')), false);
-    });
+    it('reconnect recovery uses the committed tip rather than the verified marker', recoversFromCommittedTip);
 
     it('does not re-add an evicted source when its own close event arrives', function(){
         const sync = makeSync('http://a:3006,http://b:3006,http://c:3006,http://d:3006');
