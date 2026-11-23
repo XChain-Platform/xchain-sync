@@ -98,6 +98,7 @@ function bootstrapDepthKey(chain, network){
 // change together (source_reorg_ceiling_parity.test.js fails on drift either way).
 const SOURCE_SAFE_REORG_DEPTH = 126
 const LTC_TESTNET_SOURCE_SAFE_REORG_DEPTH = 5006
+const BTC_TESTNET_SOURCE_SAFE_REORG_DEPTH = 5006
 
 // Source reorg recovery window per <TICK>_<NET>: the default replica depth never falls below it.
 // Mirrors xchain-utxo-tracker/src/chain/undo_blocks.js DEFAULT_UNDO_BLOCKS; replica_freshness.test.js pins the copy.
@@ -109,9 +110,11 @@ const SOURCE_UNDO_WINDOW = Object.freeze({
 
 // Return the source reorg ceiling for a chain, in ticker or full-name form.
 function rollbackDepthSafeCeiling(chain, network){
-    return coinTicker(String(chain)) === 'LTC' && String(network).toLowerCase() === 'testnet'
-        ? LTC_TESTNET_SOURCE_SAFE_REORG_DEPTH
-        : SOURCE_SAFE_REORG_DEPTH
+    if(String(network).toLowerCase() !== 'testnet') return SOURCE_SAFE_REORG_DEPTH
+    const tick = coinTicker(String(chain))
+    if(tick === 'LTC') return LTC_TESTNET_SOURCE_SAFE_REORG_DEPTH
+    if(tick === 'BTC') return BTC_TESTNET_SOURCE_SAFE_REORG_DEPTH
+    return SOURCE_SAFE_REORG_DEPTH
 }
 
 // The server poller's reorg walk-back reach: at least 256 heights, raised to the source

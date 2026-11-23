@@ -155,7 +155,10 @@ describe('per-chain rollback depth overrides and ceiling', function(){
         assert.strictEqual(config.rollbackDepthSafeCeiling('litecoin', 'testnet'), 5006);
         assert.strictEqual(config.rollbackDepthSafeCeiling('LTC', 'testnet'), 5006);
         assert.strictEqual(config.rollbackDepthSafeCeiling('LTC', 'mainnet'), 126);
-        assert.strictEqual(config.rollbackDepthSafeCeiling('bitcoin', 'testnet'), 126);
+        assert.strictEqual(config.rollbackDepthSafeCeiling('bitcoin', 'testnet'), 5006);
+        assert.strictEqual(config.rollbackDepthSafeCeiling('BTC', 'testnet'), 5006);
+        assert.strictEqual(config.rollbackDepthSafeCeiling('bitcoin', 'mainnet'), 126);
+        assert.strictEqual(config.rollbackDepthSafeCeiling('dogecoin', 'testnet'), 126);
         assert.strictEqual(config.rollbackDepthSafeCeiling('dogecoin', 'regtest'), 126);
     });
 
