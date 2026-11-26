@@ -92,6 +92,10 @@ const SCHEMA_TRANSIENT_BASE_MS = 2000;
 // unrecoverable case (handleWsChainError) and escalate it to the same exit.
 class BootstrapExhaustedError extends Error {}
 
+// How many recent heights keep their applying block quorum on record, so a forked
+// re-delivery that arrives a few blocks late is still weighed against it.
+const APPLIED_QUORUM_MEMORY = 64;
+
 // Is the decoder `dispensers` table due a wall-clock reconcile? The one term of the
 // reconcile decision that carries no cycle-counter side effect, so the recurring status
 // tick can sample it without corrupting the every-Nth catch-up cadence. Measured from the
@@ -591,6 +595,13 @@ class ClientSync {
         this._evictedSources = new Set();   // sourceIndex
         this._sourceEvictThreshold = Math.max(1, Number(this.config['SOURCE_EVICT_THRESHOLD'] || 3));
         this._sourceStrikeWindow   = Math.max(1, Number(this.config['SOURCE_STRIKE_WINDOW'] || 200));
+
+        // The block quorums that applied recent heights: per height, the agreed row and the
+        // agreeing sources. acceptBlockQuorum drops the tally, so without this a forked
+        // re-delivery that arrives after the apply reads as an uncontested lone report
+        // (see refuteLateDissent). An entry counts only while that height's committed row
+        // still equals the agreed one; heights older than APPLIED_QUORUM_MEMORY are dropped.
+        this._appliedQuorums = new Map();   // blockIndex -> { members: [sourceIndex...], row }
 
         // Count of sources that agreed on the most recently applied block (for /status).
         this._lastSourcesAgreeing = null;
@@ -4391,6 +4402,18 @@ class ClientSync {
             if(key !== currentKey && !tally.abstain.has(key)) this.strikeSource(idx, blockIndex);
         }
         this._lastSourcesAgreeing = currentGroup.length;
+        let applied = this.checkableGroupEvent(pending, currentGroup, pending[currentGroup[0]].event);
+        this._appliedQuorums.set(blockIndex, {
+            members: currentGroup.slice(),
+            row: {
+                ledger_hash: applied.ledger_hash, actions_hash: applied.actions_hash,
+                contract_hash: applied.contract_hash, state_hash: applied.state_hash,
+                block_time: applied.block_time
+            }
+        });
+        for(let height of this._appliedQuorums.keys()){
+            if(height <= blockIndex - APPLIED_QUORUM_MEMORY) this._appliedQuorums.delete(height);
+        }
         this.pendingHashes.delete(blockIndex);
         this._strictConfirmPending.delete(blockIndex);
         let timer = this._applyTimers.get(blockIndex);
@@ -6264,6 +6287,37 @@ class ClientSync {
         else await this.handleReorg(entry.event, this.activeRetroactiveReports(entry));
     }
 
+    // A reorg report at a committed height is not uncontested when the block quorum that
+    // applied that height still stands behind it: a quorum of active sources, none of
+    // which joined the report, already vouched for the stored row. The report is then a
+    // dissent from the applied majority, so its sources are struck (and evicted at the
+    // threshold) exactly as the block tally strikes them, and nothing is unwound. The
+    // check runs at the timeout, not on arrival, so a genuine reorg keeps the whole
+    // window to gather a quorum of its own. A height no live quorum applied (bootstrap,
+    // catch-up, a lone-report timeout, or one past APPLIED_QUORUM_MEMORY) keeps the
+    // designed liveness fallback, as does any height whose stored row cannot be read.
+    async refuteLateDissent(height, entry){
+        let record = this._appliedQuorums.get(height);
+        if(!record || this.lastAppliedBlock === null || height > this.lastAppliedBlock) return false;
+        let standing = record.members.filter(idx => !this._evictedSources.has(idx) && !entry.votes.has(idx));
+        if(standing.length < this.effectiveQuorum()) return false;
+        let stored = this.lastHashes;
+        if(height !== this.lastAppliedBlock){
+            try { stored = await this.db.getBlockHashRow(height, null, { rethrow: true }); }
+            catch(e){ return false; }
+        }
+        if(!stored || this.indexerBlockRowMismatch(record.row, stored)) return false;
+        // The read above yields, so the entry may have been resolved meanwhile.
+        if(this._pendingReorgs.get(height) !== entry) return true;
+        let dissenters = [...entry.votes].filter(idx => !this._evictedSources.has(idx));
+        this.clearPendingReorg(height);
+        getLogger().warn('Cross-source quorum timeout for reorg at block ' + height + ': the report from ' +
+            dissenters.map(idx => this.sources[idx] || ('#' + idx)).join(', ') + ' contradicts the ' +
+            standing.length + ' source(s) whose quorum applied it; not unwinding, striking the dissent');
+        for(let idx of dissenters) this.strikeSource(idx, height);
+        return true;
+    }
+
     armReorgQuorumTimer(height){
         if(this._stopping) return;
         let entry = this._pendingReorgs.get(height);
@@ -6275,6 +6329,9 @@ class ClientSync {
             if(this._stopping) return;
             entry.timer = null;
             if(this._pendingReorgs.get(height) !== entry) return;
+            // Before the strict branch: a refuted report must not hold catch-up either.
+            if(await this.refuteLateDissent(height, entry)) return;
+            if(this._stopping || this._pendingReorgs.get(height) !== entry) return;
             if(this.config['HASH_CONFIRM_STRICT']){
                 getLogger().error('STRICT: Cross-source quorum timeout for reorg at block ' + height +
                     ', refusing to unwind on ' + this.activeReorgVotes(entry) + ' source(s) (HASH_CONFIRM_STRICT=true)');
