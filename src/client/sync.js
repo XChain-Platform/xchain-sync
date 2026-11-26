@@ -1396,37 +1396,44 @@ class ClientSync {
         this.clearAllPendingReorgs();
     }
 
-    // Table and key of an upsert full-dump duplicate-key failure (errno 1062), or null
-    // for any other error. An upsert absorbs its own row's key collision, so a 1062 means
-    // the UPDATE leg moved a key (markets.id) onto a value another replica row holds.
+    // Table and key of an apply duplicate-key failure (errno 1062) the applier named, or
+    // null for any other error. An upsert absorbs its own row's key collision, so a 1062
+    // means the UPDATE leg moved a key (markets.id) onto a value another replica row
+    // holds. A plain insert (applyTable) that collides holds a row the source does not
+    // hold at that key, such as a transaction kept from an orphaned fork whose tx_index
+    // the source's chain reuses; the catch-up window can never land over it.
     upsertDuplicateKeyTarget(e){
-        if(!e || e.errno !== 1062 || typeof e.upsertTable !== 'string') return null;
+        if(!e || e.errno !== 1062) return null;
+        let table = typeof e.upsertTable === 'string' ? e.upsertTable
+            : typeof e.applyTable === 'string' ? e.applyTable : null;
+        if(table === null) return null;
         let m = /Duplicate entry '(.*?)' for key '([^']*)'/.exec(String(e.sqlMessage || e.message || ''));
-        return { table: e.upsertTable, entry: m ? m[1] : null, key: m ? m[2] : null };
+        return { table, entry: m ? m[1] : null, key: m ? m[2] : null };
     }
 
-    // Halt when an upsert full-dump fails on the same table and key twice with no
-    // successful apply between (id-space skew no retry can clear); a first hit retries.
+    // Halt when an apply fails on the same table and key twice with no successful apply
+    // between (a collision no retry can clear); a first hit retries.
     async noteUpsertDuplicateKey(source, e){
         let target = this.upsertDuplicateKeyTarget(e);
         if(!target) return false;
+        let kind = typeof e.upsertTable === 'string' ? 'Upsert full-dump' : 'Incremental apply';
         let id = target.table + '|' + target.key + '|' + target.entry;
         let repeat = (this._upsertDupKeyTarget === id);
         this._upsertDupKeyTarget = id;
         if(!repeat){
-            getLogger().warn('Upsert full-dump of ' + target.table + ' hit a duplicate key (' +
+            getLogger().warn(kind + ' of ' + target.table + ' hit a duplicate key (' +
                 target.entry + ' on ' + target.key + '); retrying once before halting');
             return false;
         }
         // Reset so a replica resumed after an operator clear gets its one retry again.
         this._upsertDupKeyTarget = null;
-        await this.haltOnUpsertDuplicateKey(source, target);
+        await this.haltOnUpsertDuplicateKey(source, target, kind);
         return true;
     }
 
     // Durable halt for a repeating upsert duplicate key: same recordHalt/isHalted
     // persistence and /status surface as the schema-apply halt, its own reason.
-    async haltOnUpsertDuplicateKey(source, target){
+    async haltOnUpsertDuplicateKey(source, target, kind){
         if(this._halted) return;
         let blockIndex = (this.lastAppliedBlock != null) ? this.lastAppliedBlock : 0;
         let detail = [target];
@@ -5178,7 +5185,25 @@ class ClientSync {
         this._halted = null;
         getLogger().info('Divergence halt CLEARED for ' + this.chain + '/' + this.network + '/' + this.dbType +
             (was ? ' (was halted at block ' + was.blockIndex + ')' : ''));
+        if(was && was.reason === 'max-rollback-depth-exceeded')
+            await this.rewindRefusedReorgAfterClear(was.blockIndex);
         return was;
+    }
+
+    // A max-depth halt refused a source-reported reorg and left the orphaned blocks
+    // committed. Clearing it accepts that reorg, so the refused rewind runs now, under
+    // the reset guard and the configured depth. Without it the replica resumes on the
+    // orphaned tip: those blocks re-verify against their own stored hashes, and the
+    // catch-up window from the source's chain is stitched onto the fork (or collides on
+    // the fork's rows forever) while the replica reports healthy. A rewind the depth
+    // limit still refuses halts again with the same reason.
+    async rewindRefusedReorgAfterClear(blockIndex){
+        if(!Number.isSafeInteger(blockIndex) || blockIndex < 0) return;
+        getLogger().warn('Re-running the reorg to block ' + blockIndex + ' that the cleared ' +
+            'max-rollback-depth-exceeded halt refused for ' + this.replicaLabel());
+        try { await this.handleReorg({ block_index: blockIndex }); } catch(e){
+            getLogger().error(util.format('Rewind after the max-rollback-depth-exceeded clear failed:', e));
+        }
     }
 
     carryUnverifiedRoots(event){

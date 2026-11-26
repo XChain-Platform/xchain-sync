@@ -824,8 +824,13 @@ class ClientApplier {
                     prepared.useIgnore, prepared.useUpsert);
             } catch(e){
                 // Name the upsert table on the error so ClientSync can tell a repeating
-                // full-dump duplicate key apart from any other apply failure.
-                if(prepared.useUpsert && e && typeof e === 'object' && e.upsertTable === undefined) e.upsertTable = table;
+                // full-dump duplicate key apart from any other apply failure. A plain
+                // insert carries its table as applyTable, so a duplicate key that repeats
+                // on an incremental apply (a row kept from an orphaned fork) is named too.
+                if(e && typeof e === 'object'){
+                    if(prepared.useUpsert && e.upsertTable === undefined) e.upsertTable = table;
+                    else if(!prepared.useUpsert && e.applyTable === undefined) e.applyTable = table;
+                }
                 throw e;
             }
 
